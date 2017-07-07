@@ -54,75 +54,75 @@ worker = None
 workerevent = None
 
 def web_socket_do_extra_handshake(request):
-	pass
+    pass
 
 def web_socket_transfer_data(request):
-	global worker,workerevent
-	while True:
-		instruction = request.ws_stream.receive_message()
-		if instruction is None:
-			return
-		if instruction[:5] == "STRT:":
+    global worker,workerevent
+    while True:
+        instruction = request.ws_stream.receive_message()
+        if instruction is None:
+            return
+        if instruction[:5] == "STRT:":
 ##TODO: check whether there is already a thread running and end it
-			while (not dataQueue.empty()):
-				dataQueue.get(False)
-			workerevent = Event()
-			fileName = instruction[5:]
-			if fileName == "":
-				fileName = "CurrentRecording" + strftime("%Y%m%d-%H%M%S")
-			worker = process_sample(fileName, sample_period, dataQueue,workerevent)
-			worker.start()
-		elif instruction[:5] == "STOP:":
-			if worker is not None:
-				workerevent.set()
-				sleep(1) # allow existing server threads to stop but must dump any further LDATS: recieved (done in JS)
-				request.ws_stream.send_message("STPD:quite a few", binary=False)
-				while (not dataQueue.empty()):
-					dataQueue.get(False)
-			else:
-				request.ws_stream.send_message("ESTP:", binary=False)
-				while (not dataQueue.empty()):
-					dataQueue.get(False)
+            while (not dataQueue.empty()):
+                dataQueue.get(False)
+            workerevent = Event()
+            fileName = instruction[5:]
+            if fileName == "":
+                fileName = "CurrentRecording" + strftime("%Y%m%d-%H%M%S")
+            worker = process_sample(fileName, sample_period, dataQueue,workerevent)
+            worker.start()
+        elif instruction[:5] == "STOP:":
+            if worker is not None:
+                workerevent.set()
+                sleep(1) # allow existing server threads to stop but must dump any further LDATS: recieved (done in JS)
+                request.ws_stream.send_message("STPD:quite a few", binary=False)
+                while (not dataQueue.empty()):
+                    dataQueue.get(False)
+            else:
+                request.ws_stream.send_message("ESTP:", binary=False)
+                while (not dataQueue.empty()):
+                    dataQueue.get(False)
 
-		elif instruction[:5] == "LDAT:":
-			if not dataQueue.empty():
-				data_out=[]
-				while (not dataQueue.empty()):
-					temp=dataQueue.get()
-					if temp[:1] == "E": # error flagged
-						workerevent.set() # doesn't appear to need a sleep here
-						data_out=[]
-						data_out.append(temp)
-						while (not dataQueue.empty()):
-							temp = dataQueue.get(False)
-					else:
-						data_out.append("LIVE:" + temp)
-				request.ws_stream.send_message(''.join(data_out), binary=False)
-			else:
-				request.ws_stream.send_message("NDAT:", binary=False)
+        elif instruction[:5] == "LDAT:":
+            if not dataQueue.empty():
+                data_out=[]
+                while (not dataQueue.empty()):
+                    temp=dataQueue.get()
+                    if temp[:1] == "E": # error flagged
+                        workerevent.set() # doesn't appear to need a sleep here
+                        data_out=[]
+                        data_out.append(temp)
+                        while (not dataQueue.empty()):
+                            temp = dataQueue.get(False)
+                    else:
+                        data_out.append("LIVE:" + temp)
+                request.ws_stream.send_message(''.join(data_out), binary=False)
+            else:
+                request.ws_stream.send_message("NDAT:", binary=False)
 
-		elif instruction[:5] == "FILE:":
-			for line in [f for f in listdir("/data/samples/") if isfile(join("/data/samples/", f))]:
-				request.ws_stream.send_message("FILE:" + line, binary=False)
-		elif instruction[:5] == "LOAD:":
-			with open('/data/samples/' + instruction[5:]) as f:
-				chunk = 0
-				data_out = []
-				for line in f:
-					chunk += 1
-					if (line == "" or len(line.split(",")) < 3): #ignore bad line
-						chunk -= 1
-						continue
-					data_out.append("DATA:" + line)
-					if (chunk % 60) == 0:
-						request.ws_stream.send_message(''.join(data_out), binary=False)
-						data_out = []
-				if (chunk % 60) != 0:
-					request.ws_stream.send_message(''.join(data_out), binary=False)
-				request.ws_stream.send_message("LFIN: " + str(chunk), binary=False)
-		elif instruction[:5] == "SHDN:":
-			system("/usr/bin/sync && /usr/bin/shutdown -P now")
-			#pass
+        elif instruction[:5] == "FILE:":
+            for line in [f for f in listdir("/data/samples/") if isfile(join("/data/samples/", f))]:
+                request.ws_stream.send_message("FILE:" + line, binary=False)
+        elif instruction[:5] == "LOAD:":
+            with open('/data/samples/' + instruction[5:]) as f:
+                chunk = 0
+                data_out = []
+                for line in f:
+                    chunk += 1
+                    if (line == "" or len(line.split(",")) < 3): #ignore bad line
+                        chunk -= 1
+                        continue
+                    data_out.append("DATA:" + line)
+                    if (chunk % 60) == 0:
+                        request.ws_stream.send_message(''.join(data_out), binary=False)
+                        data_out = []
+                if (chunk % 60) != 0:
+                    request.ws_stream.send_message(''.join(data_out), binary=False)
+                request.ws_stream.send_message("LFIN: " + str(chunk), binary=False)
+        elif instruction[:5] == "SHDN:":
+            system("/usr/bin/sync && /usr/bin/shutdown -P now")
+            #pass
 
             
 # Using multiprocessing class here.  At some point the Pi 3A will become available
@@ -192,7 +192,7 @@ class process_sample(Process):
                 accGravY = (data1[1] + data2[1])/2.0 # for the Y axis gravity is pulling in the same direction on the sensor, centripetal acceleration in opposite direction so add to get gravity
                 accGravZ = (data1[2] + data2[2])/2.0 # for the Z axis gravity is pulling in the same direction on the sensor, tangential acceleration in opposite direction so add two readings to get gravity only.
                 accTang = (data1[2] - data2[2])/2.0 # this is the tangental acceleration signal we want to measure
-                avgGyro = (data1[4] + data2[4])/2.0 # may as well average the two X gyro readings
+                avgGyro = (data1[3] + data2[3])/2.0 # may as well average the two X gyro readings
                 self.kalfilter.calculate(accGravY,accGravZ, avgGyro) 
                 self.timestamp += (sample_period * 1000000) # 50 samples/sec in microseconds
 
@@ -227,7 +227,7 @@ class process_sample(Process):
                     accn = -1.0*accel
                 entry = "A:{0:.3f},R:{1:.3f},C:{2:.3f}".format(angle,rate,accel)
                 self.q.put(entry + "\n")
-#				self.datastore.append("A:{0:.3f},R:{1:.3f},C:{2:.3f}, X:{3:.3f}, Z:{4:.3f}, TS:{5:d}, GY:{6:.3f}, GZ:{7:.3f}".format(angle,rate,accn,accel[0],accel[2],tstamp,gyro[1],gyro[2]))
+#                self.datastore.append("A:{0:.3f},R:{1:.3f},C:{2:.3f}, X:{3:.3f}, Z:{4:.3f}, TS:{5:d}, GY:{6:.3f}, GZ:{7:.3f}".format(angle,rate,accn,accel[0],accel[2],tstamp,gyro[1],gyro[2]))
                 self.datastore.append("A:{0:.3f},R:{1:.3f},C:{2:.3f},TS :{3:1f},AX1:{4:.3f},AY1:{5:.3f},AZ1:{6:.3f},AX2:{7:.3f},AY2:{8:.3f},AZ2:{9:.3f},GX1:{10:.3f},GY1:{11:.3f},GZ1:{12:.3f},GX2:{13:.3f},GY2:{14:.3f},GZ2:{15:.3f}".format(angle,rate,accel,int(self.timestamp),data1[0],data1[1],data1[2],data2[0],data2[1],data2[2],data1[3],data1[4],data1[5],data2[3],data2[4],data2[5]))
                 if self.q.qsize() > 500: # if nowt being pulled for 10 secs assume broken link and save off what we have
                     self.filename += "(aborted)"
@@ -327,8 +327,8 @@ class MPU6050:
 
     # set full scale gyro range
         self.write_bits(C.MPU6050_RA_GYRO_CONFIG,C.MPU6050_GCONFIG_FS_SEL_BIT,
-            C.MPU6050_GCONFIG_FS_SEL_LENGTH,C.MPU6050_GYRO_FS_500)
-        self.gyro_scale = C.MPU6050_GYRO_SCALE_MODIFIER_500DEG
+            C.MPU6050_GCONFIG_FS_SEL_LENGTH,C.MPU6050_GYRO_FS_2000)
+        self.gyro_scale = C.MPU6050_GYRO_SCALE_MODIFIER_2000DEG
         
     #wakeup
         self.write_bit(C.MPU6050_RA_PWR_MGMT_1, C.MPU6050_PWR1_SLEEP_BIT, 0)
@@ -478,8 +478,8 @@ class MPU6050:
         # enable fifo, select accel and gyro to go in
         i2c.write_byte_data(self.dev_addr, C.MPU6050_RA_FIFO_EN, 0x78) # enable temp = 0xF8
 
-        self.write_bit(C.MPU6050_RA_USER_CTRL,C.MPU6050_USERCTRL_FIFO_EN_BIT, 1)			
-			
+        self.write_bit(C.MPU6050_RA_USER_CTRL,C.MPU6050_USERCTRL_FIFO_EN_BIT, 1)            
+            
        
-	
+    
 
