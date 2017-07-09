@@ -305,6 +305,10 @@ class MPU6050:
     # reset device
         self.write_bit(C.MPU6050_RA_PWR_MGMT_1,C.MPU6050_PWR1_DEVICE_RESET_BIT, 1)
         sleep(1)
+    #wakeup
+    #possibly some undocumented behaviour here - gyro config register does
+    #not accept write of FS factor unless device woken up first
+        self.write_bit(C.MPU6050_RA_PWR_MGMT_1, C.MPU6050_PWR1_SLEEP_BIT, 0)
         
     #set clock source
     #because we have two accelerometers with slightly different clocks (and no way of syncing
@@ -326,13 +330,10 @@ class MPU6050:
 #        self.gyro_scale = C.MPU6050_GYRO_SCALE_MODIFIER_250DEG
 
     # set full scale gyro range
-        self.write_bits(C.MPU6050_RA_GYRO_CONFIG,C.MPU6050_GCONFIG_FS_SEL_BIT,
-            C.MPU6050_GCONFIG_FS_SEL_LENGTH,C.MPU6050_GYRO_FS_2000)
-        self.gyro_scale = C.MPU6050_GYRO_SCALE_MODIFIER_2000DEG
-        
-    #wakeup
-        self.write_bit(C.MPU6050_RA_PWR_MGMT_1, C.MPU6050_PWR1_SLEEP_BIT, 0)
-        
+        i2c.write_byte_data(self.dev_addr,C.MPU6050_RA_GYRO_CONFIG,
+            C.MPU6050_GYRO_FS_500 << 3)
+        self.gyro_scale = C.MPU6050_GYRO_SCALE_MODIFIER_500DEG
+                
     def who_am_i(self):
         return i2c.read_byte_data(self.dev_addr, C.MPU6050_RA_WHO_AM_I) & 0xFF
  
