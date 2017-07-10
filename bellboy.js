@@ -801,6 +801,7 @@ recordIcon.onclick=function(){
 		document.getElementById('recordFileName').value = "";
 		document.getElementById('nameInvalid').style.visibility = "hidden";
 		recordModal.style.display = "block";
+		document.getElementById('recordFileName').focus();
 	}
 }
 
