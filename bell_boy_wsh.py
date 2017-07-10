@@ -304,7 +304,7 @@ class MPU6050:
 
     # reset device
         self.write_bit(C.MPU6050_RA_PWR_MGMT_1,C.MPU6050_PWR1_DEVICE_RESET_BIT, 1)
-        sleep(1)
+        sleep(0.5)
     #wakeup
     #possibly some undocumented behaviour here - gyro config register does
     #not accept write of FS factor unless device woken up first
@@ -316,22 +316,15 @@ class MPU6050:
     #sync on a case by case basis.  Should only be a one time calibration.  The FIFO read code
     #above takes account of a lack of sync by ditching fifo packets from the faster running device
     #but wise to keep things as far in sync as we can.
-        self.write_bits(C.MPU6050_RA_PWR_MGMT_1, C.MPU6050_PWR1_CLKSEL_BIT,
-            C.MPU6050_PWR1_CLKSEL_LENGTH, C.MPU6050_CLOCK_PLL_ZGYRO)
+        t1 = i2c.read_byte_data(self.dev_addr, C.MPU6050_RA_PWR_MGMT_1) & 0xFF
+        i2c.write_byte_data(self.dev_addr, C.MPU6050_RA_PWR_MGMT_1, (t1 & 0xF8) | C.MPU6050_CLOCK_PLL_ZGYRO)
 
     # set full scale acceleration range
-        self.write_bits(C.MPU6050_RA_ACCEL_CONFIG,C.MPU6050_ACONFIG_AFS_SEL_BIT,
-            C.MPU6050_ACONFIG_AFS_SEL_LENGTH, C.MPU6050_ACCEL_FS_2)
+        i2c.write_byte_data(self.dev_addr, C.MPU6050_RA_ACCEL_CONFIG, C.MPU6050_ACCEL_FS_2 << 3)
         self.accn_scale = C.MPU6050_ACCEL_SCALE_MODIFIER_2G
 
-    # set full scale gyro range - for calibration
-#        write_bits(C.MPU6050_RA_GYRO_CONFIG,C.MPU6050_GCONFIG_FS_SEL_BIT,
-#            C.MPU6050_GCONFIG_FS_SEL_LENGTH,C.MPU6050_GYRO_FS_250)
-#        self.gyro_scale = C.MPU6050_GYRO_SCALE_MODIFIER_250DEG
-
     # set full scale gyro range
-        i2c.write_byte_data(self.dev_addr,C.MPU6050_RA_GYRO_CONFIG,
-            C.MPU6050_GYRO_FS_500 << 3)
+        i2c.write_byte_data(self.dev_addr,C.MPU6050_RA_GYRO_CONFIG, C.MPU6050_GYRO_FS_500 << 3)
         self.gyro_scale = C.MPU6050_GYRO_SCALE_MODIFIER_500DEG
                 
     def who_am_i(self):
@@ -343,18 +336,6 @@ class MPU6050:
             byte |= 1 << a_bit_num
         else:
             byte &= ~(1 << a_bit_num)
-        i2c.write_byte_data(self.dev_addr, a_reg_add, byte)
-
-    def write_bits(self, a_reg_add, a_bit_start, a_length, a_data):
-        byte = i2c.read_byte_data(self.dev_addr, a_reg_add)
-        mask = ((1 << a_length) - 1) << (a_bit_start - a_length + 1)
-        # Get data in position and zero all non-important bits in data
-        a_data <<= a_bit_start - a_length + 1
-        a_data &= mask
-        # Clear all important bits in read byte and combine with data
-        byte &= ~mask
-        byte = byte | a_data
-        # Write the data to the I2C device
         i2c.write_byte_data(self.dev_addr, a_reg_add, byte)
 
     def set_x_accel_offset(self,a_offset):
