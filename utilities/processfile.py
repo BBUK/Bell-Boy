@@ -1,3 +1,5 @@
+#!/usr/bin/python2
+
 # Copyright (c) 2017 Peter Budd. All rights reserved
 # Permission is hereby granted, free of charge, to any person obtaining a copy of this software and 
 # associated documentation files (the "Software"), to deal in the Software without restriction, 
@@ -30,6 +32,8 @@ import time
 import math
 import csv
 
+shim_factor=0.83
+
 sample_period = 1/50.0 # this is the current sample period (50 samples/sec].
 
 def main():
@@ -55,15 +59,16 @@ def main():
         gy2 = float(row[14][4:])
         gz2 = float(row[15][4:])
         
-        accGravY = (ay1 + ay2*0.83)/2.0 # for the Y axis gravity is pulling in the same direction on the sensor, centripetal acceleration in opposite direction so add to get gravity
-        accGravZ = (az1 + az2*0.83)/2.0 # for the Z axis gravity is pulling in the same direction on the sensor, tangential acceleration in opposite direction so add two readings to get gravity only.
-        accTang = (az1 - az2)/2.0 # this is the tangental acceleration signal we want to measure
+        accGravY = (ay1 + ay2*shim_factor)/2.0 # for the Y axis gravity is pulling in the same direction on the sensor, centripetal acceleration in opposite direction so add to get gravity
+        accGravZ = (az1 + az2*shim_factor)/2.0 # for the Z axis gravity is pulling in the same direction on the sensor, tangential acceleration in opposite direction so add two readings to get gravity only.
+        accTang = (az1*shim_factor - az2*shim_factor)/2.0 # this is the tangental acceleration signal we want to measure
         avgGyro = (gx1 + gx2)/2.0 # may as well average the two X gyro readings
         kalfilter.calculate(accGravY,accGravZ, avgGyro) 
-        output.append("A:{0:.3f},R:{1:.3f},C:{2:.3f},TS :{3:1f},AX1:{4:.3f},AY1:{5:.3f},AZ1:{6:.3f},AX2:{7:.3f},AY2:{8:.3f},AZ2:{9:.3f},GX1:{10:.3f},GY1:{11:.3f},GZ1:{12:.3f},GX2:{13:.3f},GY2:{14:.3f},GZ2:{15:.3f}".format(kalfilter.KalAngle,avgGyro,accTang,0,data1[0],data1[1],data1[2],data2[0],data2[1],data2[2],data1[3],data1[4],data1[5],data2[3],data2[4],data2[5]))
+        output.append("A:{0:.3f},R:{1:.3f},C:{2:.3f},TS :{3:1f},AX1:{4:.3f},AY1:{5:.3f},AZ1:{6:.3f},AX2:{7:.3f},AY2:{8:.3f},AZ2:{9:.3f},GX1:{10:.3f},GY1:{11:.3f},GZ1:{12:.3f},GX2:{13:.3f},GY2:{14:.3f},GZ2:{15:.3f}".format(kalfilter.KalAngle,avgGyro,accTang*8192.0,0,ax1,ay1,az1,ax2,ay2,az2,gx1,gy1,gz1,gx2,gy2,gz2))
     with open('output.csv', 'wb') as f:
         writer = csv.writer(f)
-        writer.writerows(output)
+        for row in output:
+            writer.writerow(row.split(','))
         
 # Thanks to TKJ Electronics https://github.com/TKJElectronics/KalmanFilter
 # and to Berry IMU https://github.com/mwilliams03/BerryIMU
