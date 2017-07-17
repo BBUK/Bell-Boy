@@ -191,7 +191,7 @@ class process_sample(Process):
                 fifo2 -= 12
                 accGravY = (data1[1] + data2[1])/2.0 # for the Y axis gravity is pulling in the same direction on the sensor, centripetal acceleration in opposite direction so add to get gravity
                 accGravZ = (data1[2] + data2[2])/2.0 # for the Z axis gravity is pulling in the same direction on the sensor, tangential acceleration in opposite direction so add two readings to get gravity only.
-                accTang = (data2[2] - data1[2])/2.0 # this is the tangental acceleration signal we want to measure
+                accTang = (data2[2] - data1[2])/2.0 # this is the tangential acceleration signal we want to measure
                 avgGyro = (data1[3] + data2[3])/2.0 # may as well average the two X gyro readings
                 self.kalfilter.calculate(accGravY,accGravZ, avgGyro) 
                 self.timestamp += (sample_period * 1000000) # 50 samples/sec in microseconds
