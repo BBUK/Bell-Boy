@@ -35,7 +35,6 @@ import time
 import math
 import csv
 
-#shim_factor=0.83
 radius_factor=None
 
 sample_period = 1/50.0 # this is the current sample period (50 samples/sec].
@@ -46,8 +45,9 @@ def main():
     with open('input.csv', 'rb') as f:
         reader = csv.reader(f)
         raw_data = list(reader)
-	count = 0
-	sum_adj_factor = 0
+    count = 0
+    sum_adj_factor = 0
+    sum_radius = 0
     for i in xrange(len(raw_data)-1):
         ay1 = float(raw_data[i][5][4:])
         ay1p1 = float(raw_data[i+1][5][4:])
@@ -78,13 +78,16 @@ def main():
                 print "i={0:d} polate={1:.3f} rad1={2:.3f} rad2={3:.3f} fact={4:.3f}".format(i,interpolate,radius1,radius2,adj_factor)
                 count += 1
                 sum_adj_factor += adj_factor
+                sum_radius += radius1
     if count != 0:
         radius_factor = sum_adj_factor/count
+        radius = sum_radius/count
     else:
         radius_factor = 1.0
+        radius = 0
         print "error"
         return
-        
+    count = 0
     for row in raw_data:
         ax1 = float(row[4][4:])
         ay1 = float(row[5][4:])
@@ -99,13 +102,28 @@ def main():
         gx2 = float(row[13][4:])
         gy2 = float(row[14][4:])
         gz2 = float(row[15][4:])
-        
-        accGravY = (ay1 + ay2*radius_factor)/2.0 # for the Y axis gravity is pulling in the same direction on the sensor, centripetal acceleration in opposite direction so add to get gravity
-        accGravZ = (az1 + az2*radius_factor)/2.0 # for the Z axis gravity is pulling in the same direction on the sensor, tangential acceleration in opposite direction so add two readings to get gravity only.
-        accTang = (az1 - az2*radius_factor)/2.0 # this is the tangental acceleration signal we want to measure
-        avgGyro = (gx1 + gx2)/2.0 # may as well average the two X gyro readings
-        kalfilter.calculate(accGravY,accGravZ, avgGyro) 
-        output.append("A:{0:.3f},R:{1:.3f},C:{2:.3f},TS :{3:1f},AX1:{4:.3f},AY1:{5:.3f},AZ1:{6:.3f},AX2:{7:.3f},AY2:{8:.3f},AZ2:{9:.3f},GX1:{10:.3f},GY1:{11:.3f},GZ1:{12:.3f},GX2:{13:.3f},GY2:{14:.3f},GZ2:{15:.3f}".format(kalfilter.KalAngle,avgGyro,accTang*8192.0,0,ax1,ay1,az1,ax2,ay2,az2,gx1,gy1,gz1,gx2,gy2,gz2))
+       
+        if count < 50: # get a rough angle estimate for the first 50 samples (bell should be stationary)
+            kalfilter.calculate(ay1,az1,gx1)
+            count += 1
+            continue
+            
+        accGravY = ay1 - radius*((gx1*3.142/180)**2)/9.81 # subtract centripetal acceleration from sensor, what's left should be gravity (ahem!)
+        accGravZ = 1.0 - (accGravY ** 2) # assume that rest of gravity is along y sensor (only valid if x axis is properly aligned)
+        # now to determine sign of accGravZ, use calculated angle for that
+        tempAngle = kalfilter.KalAngle += kalfilter.timeDelta * (gx1 - kalfilter.bias)
+        if (tempAngle < 0.0 or tempAngle > 180.0) and tempAngle < 360.0:
+            accGravZ = -accGravZ
+        kalfilter.calculate(accGravY,accGravZ, gx1)
+        accTang = az1 - accGravZ
+        output.append("A:{0:.3f},R:{1:.3f},C:{2:.3f},TS :{3:1f},AX1:{4:.3f},AY1:{5:.3f},AZ1:{6:.3f},AX2:{7:.3f},AY2:{8:.3f},AZ2:{9:.3f},GX1:{10:.3f},GY1:{11:.3f},GZ1:{12:.3f},GX2:{13:.3f},GY2:{14:.3f},GZ2:{15:.3f}".format(kalfilter.KalAngle,gx1,accTang*8192.0,0,ax1,ay1,az1,ax2,ay2,az2,gx1,gy1,gz1,gx2,gy2,gz2))
+
+#        accGravY = (ay1 + ay2*radius_factor)/2.0 # for the Y axis gravity is pulling in the same direction on the sensor, centripetal acceleration in opposite direction so add to get gravity
+#        accGravZ = (az1 + az2*radius_factor)/2.0 # for the Z axis gravity is pulling in the same direction on the sensor, tangential acceleration in opposite direction so add two readings to get gravity only.
+#        accTang = (az1 - az2*radius_factor)/2.0 # this is the tangental acceleration signal we want to measure
+#        avgGyro = (gx1 + gx2)/2.0 # may as well average the two X gyro readings
+#        kalfilter.calculate(accGravY,accGravZ, avgGyro) 
+#        output.append("A:{0:.3f},R:{1:.3f},C:{2:.3f},TS :{3:1f},AX1:{4:.3f},AY1:{5:.3f},AZ1:{6:.3f},AX2:{7:.3f},AY2:{8:.3f},AZ2:{9:.3f},GX1:{10:.3f},GY1:{11:.3f},GZ1:{12:.3f},GX2:{13:.3f},GY2:{14:.3f},GZ2:{15:.3f}".format(kalfilter.KalAngle,avgGyro,accTang*8192.0,0,ax1,ay1,az1,ax2,ay2,az2,gx1,gy1,gz1,gx2,gy2,gz2))
     with open('output.csv', 'wb') as f:
         writer = csv.writer(f)
         for row in output:
