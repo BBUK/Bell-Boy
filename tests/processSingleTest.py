@@ -111,7 +111,7 @@ def main():
         accGravY = ay1 - radius*((gx1*3.142/180)**2)/9.81 # subtract centripetal acceleration from sensor, what's left should be gravity (ahem!)
         accGravZ = 1.0 - (accGravY ** 2) # assume that rest of gravity is along y sensor (only valid if x axis is properly aligned)
         # now to determine sign of accGravZ, use calculated angle for that
-        tempAngle = kalfilter.KalAngle += kalfilter.timeDelta * (gx1 - kalfilter.bias)
+        tempAngle = kalfilter.KalAngle + kalfilter.timeDelta * (gx1 - kalfilter.bias)
         if (tempAngle < 0.0 or tempAngle > 180.0) and tempAngle < 360.0:
             accGravZ = -accGravZ
         kalfilter.calculate(accGravY,accGravZ, gx1)
