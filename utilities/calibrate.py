@@ -175,7 +175,7 @@ class MPU6050:
 
     # reset device
         self.write_bit(C.MPU6050_RA_PWR_MGMT_1,C.MPU6050_PWR1_DEVICE_RESET_BIT, 1)
-        sleep(0.5)
+        time.sleep(0.5)
     #wakeup
     #possibly some undocumented behaviour here - gyro config register does
     #not accept write of FS factor unless device woken up first
