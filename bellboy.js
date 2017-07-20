@@ -806,7 +806,7 @@ recordIcon.onclick=function(){
 
 recordButton.onclick = function() {
     var fileName = document.getElementById("recordFileName").value;
-    patt = new RegExp("/^[a-z0-9_. ()-]+$/i");
+    var patt = /^[a-z0-9_. ()-]+$/i;
     if (patt.test(fileName)) {
         recordModal.style.display = "none";
         currentStatus |= RECORDINGSESSION;
