@@ -35,8 +35,6 @@ import time
 import math
 import csv
 
-radius_factor=None
-
 sample_period = 1/50.0 # this is the current sample period (50 samples/sec].
 
 def main():
@@ -45,98 +43,34 @@ def main():
     with open('input.csv', 'rb') as f:
         reader = csv.reader(f)
         raw_data = list(reader)
-    count = 0
-    sum_adj_factor = 0
-    sum_radius = 0
-    for i in xrange(len(raw_data)-1):
-        ay1 = float(raw_data[i][5][4:])
-        ay1p1 = float(raw_data[i+1][5][4:])
-
-        az1 = float(raw_data[i][6][4:])
-        az1p1 = float(raw_data[i+1][6][4:])
-
-        ay2 = float(raw_data[i][8][4:])
-        ay2p1 = float(raw_data[i+1][8][4:])
-        
-        az2 = float(raw_data[i][9][4:])
-        az2p1 = float(raw_data[i+1][9][4:])
-
-        gx1 = float(raw_data[i][10][4:])
-        gx2 = float(raw_data[i][13][4:])
-        
-        tang1 = (az1-az2)/2.0
-        tang2 = (az1p1-az2p1)/2.0
-        if abs(gx1) > 200.0: # so moving pretty fast
-#            print "got here %d %f %f"%(i,tang1*8192,tang2*8192)
-            if (tang1 >= 0.0 and tang2 < 0.0) or (tang2 >= 0.0 and tang1 < 0.0): # a sign change
-                interpolate = abs(tang1/(tang2-tang1))
-                ay1i = ay1 + interpolate*(ay1p1-ay1)
-                ay2i = ay2 + interpolate*(ay2p1-ay2)
-                radius1 = (ay1i*9.81)/((gx1 * 3.1416/180)**2)
-                radius2 = (ay2i*9.81)/((gx2 * 3.1416/180)**2)
-                adj_factor = 1-((radius2-abs(radius1))/radius2)
-                print "i={0:d} polate={1:.3f} rad1={2:.3f} rad2={3:.3f} fact={4:.3f}".format(i,interpolate,radius1,radius2,adj_factor)
-                count += 1
-                sum_adj_factor += adj_factor
-                sum_radius += radius2
-    if count != 0:
-        radius_factor = sum_adj_factor/count
-        radius = abs(sum_radius/count)
-    else:
-        radius_factor = 1.0
-        radius = 0
-        print "error"
-        return
-    count = 0
-    print radius
+        count = 0
     for row in raw_data:
+        oa = float(row[0][2:])
         ax1 = float(row[4][4:])
         ay1 = float(row[5][4:])
         az1 = float(row[6][4:])
-        ax2 = float(row[7][4:])
-        ay2 = float(row[8][4:])
-        az2 = float(row[9][4:])
 
         gx1 = float(row[10][4:])
         gy1 = float(row[11][4:])
         gz1 = float(row[12][4:])
-        gx2 = float(row[13][4:])
-        gy2 = float(row[14][4:])
-        gz2 = float(row[15][4:])
        
         if count < 50: # get a rough angle estimate for the first 50 samples (bell should be stationary)
-            kalfilter.calculate(ay2,az2,gx2)
+            kalfilter.calculate(ay1,az1,gx1)
             count += 1
+            lastgx1 = gx1
             continue
-        if count == 50:
-             print kalfilter.KalAngle
-             count += 1
-        accGravY = ay2 - radius*((gx2*3.142/180)**2)/9.81 # subtract centripetal acceleration from sensor, what's left should be gravity (ahem!)
-        temp = 1.0 - (accGravY ** 2)
-        if temp < 0.0:
-            print "error < 0"
-            temp = 0.0
-#            return
-        accGravZ = temp  # assume that rest of gravity is along z sensor (only valid if x axis is properly aligned)
-        # now to determine sign of accGravZ, use calculated angle for that
-        tempAngle = kalfilter.KalAngle + kalfilter.timeDelta * (gx2 - kalfilter.bias)
-        if tempAngle < 90.0 or tempAngle > 270.0:
-            pass
-        else:
-            accGravZ = -accGravZ
-        kalfilter.calculate(accGravY,accGravZ, gx2)
-        accTang = az2 - accGravZ
-        if count < 160:
-           count += 1
-           print "KA=%f AY=%f AZ=%f AGY=%f AGZ=%f"%(kalfilter.KalAngle,ay1,az1,accGravY,accGravZ)
-        output.append("A:{0:.3f},R:{1:.3f},C:{2:.3f},TS :{3:1f},AX1:{4:.3f},AY1:{5:.3f},AZ1:{6:.3f},AX2:{7:.3f},AY2:{8:.3f},AZ2:{9:.3f},GX1:{10:.3f},GY1:{11:.3f},GZ1:{12:.3f},GX2:{13:.3f},GY2:{14:.3f},GZ2:{15:.3f}".format(kalfilter.KalAngle,gx1,accTang*8192.0,0,ax1,ay1,az1,ax2,ay2,az2,gx1,gy1,gz1,gx2,gy2,gz2))
+            
+        kalfilter.calculate(ay1,az1, gx1)
+        accTang = gx1 - lastgx1
+        lastgx1 = gx1
+        output.append("A:{0:.3f},R:{1:.3f},C:{2:.3f},TS :{3:1f},AX1:{4:.3f},AY1:{5:.3f},AZ1:{6:.3f},AX2:{7:.3f},AY2:{8:.3f},AZ2:{9:.3f},GX1:{10:.3f},GY1:{11:.3f},GZ1:{12:.3f},GX2:{13:.3f},GY2:{14:.3f},GZ2:{15:.3f}".format(kalfilter.KalAngle,gx1,accTang*8192.0,oa,ax1,ay1,az1,ax2,ay2,az2,gx1,gy1,gz1,gx2,gy2,gz2))
 
 #        accGravY = (ay1 + ay2*radius_factor)/2.0 # for the Y axis gravity is pulling in the same direction on the sensor, centripetal acceleration in opposite direction so add to get gravity
 #        accGravZ = (az1 + az2*radius_factor)/2.0 # for the Z axis gravity is pulling in the same direction on the sensor, tangential acceleration in opposite direction so add two readings to get gravity only.
 #        accTang = (az1 - az2*radius_factor)/2.0 # this is the tangental acceleration signal we want to measure
 #        avgGyro = (gx1 + gx2)/2.0 # may as well average the two X gyro readings
 #        kalfilter.calculate(accGravY,accGravZ, avgGyro) 
-#        output.append("A:{0:.3f},R:{1:.3f},C:{2:.3f},TS :{3:1f},AX1:{4:.3f},AY1:{5:.3f},AZ1:{6:.3f},AX2:{7:.3f},AY2:{8:.3f},AZ2:{9:.3f},GX1:{10:.3f},GY1:{11:.3f},GZ1:{12:.3f},GX2:{13:.3f},GY2:{14:.3f},GZ2:{15:.3f}".format(kalfilter.KalAngle,avgGyro,accTang*8192.0,0,ax1,ay1,az1,ax2,ay2,az2,gx1,gy1,gz1,gx2,gy2,gz2))
+#        output.append("A:{0:.3f},R:{1:.3f},C:{2:.3f},OA :{3:1f},AX1:{4:.3f},AY1:{5:.3f},AZ1:{6:.3f},AX2:{7:.3f},AY2:{8:.3f},AZ2:{9:.3f},GX1:{10:.3f},GY1:{11:.3f},GZ1:{12:.3f},GX2:{13:.3f},GY2:{14:.3f},GZ2:{15:.3f}".format(kalfilter.KalAngle,avgGyro,accTang*8192.0,0,ax1,ay1,az1,0,0,0,gx1,gy1,gz1,0,0,0))
     with open('output.csv', 'wb') as f:
         writer = csv.writer(f)
         for row in output:
@@ -184,6 +118,18 @@ class Kalman:
         self.P_10 +=  - self.timeDelta * self.P_11
         self.P_11 +=  self.Q_gyro * self.timeDelta
 
+# this is an attempt to make the KF more responsive to accelerometer readings when the bell is moving more
+# slowly.  The idea being that gyro readings should be relied upon instead.
+        if abs(gyroRate) > 200.0:
+            self.R_angle = 1
+        elif abs(gyroRate) > 100.0:
+            self.R_angle = 0.5
+        elif abs(gyroRate) > 50.0:
+            self.R_angle = 0.1
+        else:
+            self.R_angle = 0.01
+        
+        
         y = accAngle - self.KalAngle
         S = self.P_00 + self.R_angle
         K_0 = self.P_00 / S
@@ -201,4 +147,3 @@ class Kalman:
 
 if __name__ == '__main__':
     main()        
-            
