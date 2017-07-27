@@ -167,7 +167,7 @@ class process_sample(threading.Thread):
 				self.lastAngle = angle
 				entry = "A:{0:.3f},R:{1:.3f},C:{2:.3f}".format(angle,rate,accn)
 				self.q.put(entry + "\n")
-                self.datastore.append("A:{0:.3f},R:{1:.3f},C:{2:.3f},AX1:{3:.3f},AY1:{4:.3f},AZ1:{5:.3f},GX1:{6:.3f},GY1:{7:.3f},GZ1:{8:.3f}".format(angle,rate,accn,accel[0],accel[1],accel[2],gyro[0],gyro[1],gyro[2]))
+				self.datastore.append("A:{0:.3f},R:{1:.3f},C:{2:.3f},AX1:{3:.3f},AY1:{4:.3f},AZ1:{5:.3f},GX1:{6:.3f},GY1:{7:.3f},GZ1:{8:.3f}".format(angle,rate,accn,accel[0],accel[1],accel[2],gyro[0],gyro[1],gyro[2]))
 #				self.datastore.append("A:{0:.3f},R:{1:.3f},C:{2:.3f}, X:{3:.3f}, Z:{4:.3f}".format(angle,rate,accn,accel[0],accel[2]))
 #				self.datastore.append(entry)
 				if self.q.qsize() > 500: # if nowt being pulled for 10 secs assume broken link and save off what we have
