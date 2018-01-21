@@ -81,7 +81,11 @@
 <body>
 <div style="display: none; margin-top: 3px; border-radius: 25px 25px 0px 0px; background: #686888;" id="helpScreen"><iframe id="helpIframe" style="margin: 20px 20px 20px 20px; border: 0px; background-color: white;" scrolling="yes" src="help.html"></iframe></div>
 <div style="overflow: hidden; position: relative; margin-top: 3px; border-radius: 25px 25px 0px 0px; background: #686888; text-align:center;" id="bellGraphics">
-<canvas id="canvasBD" class="bellc"></canvas><canvas id="canvasBDt" class="bellc"></canvas>
+<canvas id="canvasHS1" class="bellc"></canvas><canvas id="canvasHS1t" class="bellc"></canvas>
+<canvas id="canvasHS2" class="bellc"></canvas><canvas id="canvasHS2t" class="bellc"></canvas>
+<canvas id="canvasbell" class="bellc" style="vertical-align: top"></canvas>
+<canvas id="canvasBS1" class="bellc"></canvas><canvas id="canvasBS1t" class="bellc"></canvas>
+<canvas id="canvasBS2" class="bellc"></canvas><canvas id="canvasBS2t" class="bellc"></canvas>
 <canvas id="canvasAT" class="bellc"></canvas><canvas id="canvasATt" class="bellc"></canvas>
 <script type="text/javascript" src="bellboy.js" async defer></script>
 </div>
@@ -93,9 +97,8 @@
 	<br>Backstroke:&nbsp;<select class="selectfile" id="targetSelectBack"></select></TH></TR>
 	<TR><TH>Select the range of a swing you would like the display to show (numbers are degrees from TDC)</TH><TH class="right">Angles:&nbsp;<select class="selectfile" id="zoomSelect"></select></TH></TR>
 	<TR><TH>Change the playback speed of a loaded file or a finished live recording</TH><TH class="right">Play speed:&nbsp;<select class="selectfile" id="speedSelect"></select></TH></TR>
+	<TR><TH>You can choose whether or not the (red) gridlines are visible.  It will give an indication of the actual bell angles displayed</TH><TH class="right">Show gridlines:&nbsp;<select class="selectfile" id="gridSelect"></select></TH></TR>
     <TR><TH>Some bells will show a smaller "pull strength" measurement on the display.  This setting allows you to change the scale of the signals displayed (units are arbitary)</TH><TH class="right">Scale:&nbsp;<select class="selectfile" id="scaleSelect"></TH></TR>
-    <TR><TH>Click the button to the right to autocalibrate the readings (you will need to have a loaded session first)</TH><TH class="right">AutoCal:&nbsp;<button class="selectfile" id="calibrateButton">Calibrate</button></TH></TR>
-
 </TR></TABLE>
 </div></div>
 <div style="margin-top: 0px; padding-bottom: 5px; padding-top: 5px; background: #686888; text-align:center; min-width: 800px;">

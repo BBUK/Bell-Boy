@@ -1,0 +1,123 @@
+Quick start guide
+
+The Bell-Boy runs using a Raspberry Pi   Inside the case:
+
+(a)	Raspberry Pi, a small very well-known general computing device that has sold in large numbers (over 11 million by the end of 2016)
+
+(b)	an SD card containing a Linux distribution (called Arch Linux).  The SD card is accessible from the outside of the box but you should not need to access it in normal usage.  The SD card also contains some free software and some custom code developed 
+
+(c)	an MPU6050 accelerometer/gyro chip.  This chip is what detects the movement of the bell and is the same or very similar to the devices that detect which way round your 'phone or tablet is
+
+(d)	a 2000mAh Lithium Polymer battery.  Lipo batteries are very widely used but have to be handled with care.  If your Bell-Boy is damaged or crushed then the Lipo battery could be damaged and may cause a fire.  The battery life is 3-4 hours between recharges.
+
+(e)	some power circuitry enabling the LiPo battery to be charged, to enable the Raspberry Pi to be powered by the battery and to enable switch-on and switch-off functionality.  The circuitry comprises an Adafruit 500C device and a small custom board with a few resistors and diodes.  The Bell-Boy will also automatically power off if the battery's charge levels are too low.
+
+(f)	outside the case but plugged into it is a USB wifi adaptor (the white plastic device). This creates the wifi network that your laptop or tablet connects to.
+
+Charging your Bell-Boy.
+
+This is much like charging your phone or tablet.  On one side of the Bell-Boy you will see a micro USB port.  Plug one end of a USB charge cable into this port and the other into a USB power supply.  The power supply should be capable of providing a current of 1000mA.  A power supply for a Raspberry Pi (any model) will work well.  Some laptops and computers have USB ports that are capable of supplying this level of current but the USB standard provides for a maximum of 500mA so be warned.
+
+You can also charge the Bell-Boy by connecting it to a USB power bank used to provide emergency charge to phone and tablets.  The capacity will need to be more than 2000mAh in order to fully charge the Bell-Boy.
+
+When you have plugged the Bell-Boy to charge, you will see a yellow light incidating that the device is charging.  This light turns to green when the Bell-Boy is fully charged.
+
+If you have just received your Bell-Boy, fully charge it now.  A full charge from empty should take 4-5 hours.
+
+First usage
+
+Don't attach your Bell-Boy to a bell just yet as it will be instructive to play with the device with it beside you.
+
+All you will need is a computer or tablet that is wifi capable (i.e. can connect to the internet wirelessly) and which has a mainstream browser that is less than 5 years old.  The latest versions of Safari, Opera, Chrome, Firefox, Microsoft Edge and Internet Explorer work well.  In technical terms, the browser needs to support HTML5 and CSS3.
+
+Press and hold the red power button on the side of the Bell-Boy.  The little red light by the side of the Bell-Boy should light up dimly.  You will have to keep the red button pressed for 5-6 seconds until the red light lights brightly.  You can then release the button.
+
+Your Bell-Boy will then take about 20 seconds to boot up and start its wifi network.
+
+To connect to the Bell-Boy's wifi network, search for a network called "Bell-Boy" and connect to it.  No password is required.  A security warning may come up stating that the connection is "open" or "not secure".  It is OK to dismiss this warning as the only information that is passed between your computer/tablet and the Bell-Boy is data about movement of the bell.
+
+Once the wifi is connected go to your browser and in the address bar type "http://10.0.0.1/" (without quotation marks.  You should be presented with the main Bell-Boy screen which should look like this:
+
+[insert picture]
+
+If the main 4 "wheels" don't appear then it is likely that your browser does not support HTML5.  Try another browser, update your device or try a newer device.
+
+A First Look at the Bell-Boy Screen
+
+The most obvious things you will see are the four wheels and two rows of coloured icons.
+
+The four wheels are the main display and is what you will be looking at most.  They are a plot of angle against pull.  There is no time information in these displays but we have found that they contain the information that will be most useful to learners.  
+There are 4 wheels because there are four elements of a stroke to analyse, the pull on handstroke, the check at end of handstroke, the pull at the start of the backstroke and the check at the end of backstroke.  We are very aware that the check and the pull feel like one and the same thing but they are shown separately for easier analysis.
+
+The Bell-Boy's software defines a check as the time when megnitude the angular velocity of the bell is reducing and a pull when it is increasing.
+
+The four wheels do not display the full circle that the bell describes when rung but only the start and the end of handstroke and backstroke.  This is becuase when the bell is moving through the rest of its motion, there is little instructive to be gained from information about that portion of the stroke (the bell is being pulled by gravity rather than by the ringer).
+
+Look at the wheels more closely.  You will see some red lines radiating from the centre.  These lines show the angle the bell is at when it is experiencing a certain pull.  They are labelled.  TDC is short for top dead centre which is the angle the bell is at when it is at the balance point at handstroke and backstroke.  The other red lines show the angle of the bell from TDC.  NOTE the angles on screen are not necessarily representative of actual angles.  They can be scaled to show a wider or narrower part of the stroke.  Let's try that next.
+
+On the bottom row of icons you will see a [pink] cog.  Click on that.  A window will appear with various settings on it.  There is only one setting of interest for the moment [angle to display].  Try
+one of the settings there and then dismiss the window by clicking on the cross or anywhere outside the window.  You will see that the red lines have changed to represent different angles.
+
+Next, let's see what a real ringing session looks like.
+
+Click on the cyan cloud with a down arrow.  A window will pop up inviting you to select a file to download.  When you first receive your device there will only be one file called InitialSample.  Click download.  The window will disappear and (if you have sharp eyes) you will see some text at the bottom of the browser indicating download progress and ending with something like "8000 Samples downloaded.  18 Strokes found".  This text line shows the status of device and is a useful point of reference to see what the Bell-Boy is doing at any particular time.
+
+Once the sample has finish downloading, the colours of some of the icons will have changed because there are now more options available - an icon is grey when it can not be selected and coloured when it can.
+
+Press the play icon on the top row.  You will see a mini-bell appear between the two sets of wheels.  This represents the position of the bell.  after a few second the mini-bell will start moving and the wheels will start filling with pull data.  Let the sample session play to the end - you will know this when the stop icon becomes a play icon again.
+
+A little explanation of what you have just seen.  It was a playback of a previously recorded session on a bell.  
+
+The Bell-Boy knows where the bell is whilst rotating and also knows how quickly the bell should be moving or accelerating if it was acting under gravity alone.  It will assume that if it is moving or accelerating more quickly than gravity would cause it to do then that must be as a result of the actions of the ringer.  This assumption is not quite correct because of the weight of the rope, the frictional effects as the bell moves and because of the effect of the clapper - these effects, however, will be constant for a particular bell so they do not need to be calibrated out if all we are doing is comparing one bell pull against another (which is what's important for training purposes).
+
+You will learn to make your own recordings soon.  As the bell was 
+
+If you 
+The wheels can be configured to show
+
+Your Bell-Boy should have been calibrated before it was sent to you.  If you made your own Bell-Boy, the calibration instructions will be in the design guide.
+
+
+Affixing Your Bell-Boy to a Bell
+
+The customary word of caution.  You should not enter the belfry when any of the bells are up.  When entering the belfry ensure that everyone in the ringing chamber knows you are there.
+
+The Bell-Boy should be affixed to the headstock of the bell so that it's top is pointing directly up.  This "directly up" requirement is very important otherwise the Bell-Boy will not know where it is.  (A later version of the Bell-Boy software could auto calibrate in this respect.) 
+
+It is also quite important that the shaft of the bell is roughly in line with the axis of the Bell-Boy.  The axis is the line running through the centre of the Bell-Boy's box from the side with the white wifi dongle to the opposite side.  A difference of 5 or so degrees will not matter too much, however, so roughly in-line by sight or by feel will be sufficient.
+
+We have found that the best way to affix the Bell-Boy to the bell is with duct tape (sometimes branded as "Duck Tape").  Wrap the duct tape the full way around the Bell-Boy and the headstock and make sure it is stuck down.  Only one layer of tape is required.
+
+Once the Bell-Boy is attached, switch it on (if it is not already switched on).
+
+Leave the belfry (ensuring it is safely locked) and descend to the ringing chamber.
+
+You may now proceed to ring up the bell on which the Bell-Boy is installed.
+
+For this quick start two people are required.  One will ring the bell whilst the second can monitor the Bell-Boy display on a computer or tablet.
+
+Click the live icon (the light bulb).  Wait a few seconds and look at the status line.  If its throws an error like "Bell moving - aborting" or "Bell not at stand - aborting" then go to the #errors section.  Once you see the status line counting up samples received then you can instruct the ringer to start ringing.
+
+You will see the wheels and the time plot changing as the ringer rings the bell.  Ask the ringer to stand the bell and then press stop (you can actually press stop at any time but the recorded ringing session will end abruptly when you play it back).
+
+some free software and some custom code.
+
+
+Starting your Bell-Boy.
+
+Press the r
+
+
+
+Hello!  If you have got this far then you have sucessfully started your Bell-Boy.  Well done!
+
+
+If you have constructed your Bell-Boy from scratch then you will know what operates under the hood so you can safely skip to the next section.
+
+
+The Raspberry Pi in your Bell-Boy runs a version of the Linux operating system (called Arch linux) and some custom code to make it work   The Raspberry Pi uses an SD card similar to the ones that are used by Cameras to store photographs
+
+
+
+You don't need to know this for the operation of the Bell-Boy but bell ringers are naturally inquisitive and may wish to customise their devices.
+Your Bell-Boy device runs

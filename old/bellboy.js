@@ -16,7 +16,11 @@
 
 // This script forms part of the Bell-Boy project to measure the force applied by a bell ringer to a tower
 // bell rope.  The Bell-Boy uses tangential acceleration of the bell as a proxy for force applied.  The
-// hardware is currently a Pi Zero running Arch Linux.
+// hardware is currently a Pi Zero running Arch Linux, two MPU6050 breakout boards and the official Pi Wifi dongle
+// The MPU6050 breakout boards are mounted on opposite sides of the bell axle such that gravity pulls
+// on MPU6050s in the same direction but so that the tangential acceleration applied by the ringer
+// works in opposite directions on each sensor.  This makes it easy to separate out tangential acceleration
+// due to gravity and tangential acceleration due to force applied.
 
 // I pulled anippets of code from loads of places so if any of you recognise anything you wrote - thanks!
 
@@ -29,31 +33,40 @@ var BGCOLOUR="#686888";
 var nonLive=false;
 var wsHost="10.0.0.1"
 
-var sampleInterval = 0.0;  // milliseconds for each sample
+var sampleInterval = 20;  // milliseconds for each sample
 var collectChunk = 5; // samples to collect at any one time
 
-var canvasBD = document.getElementById("canvasBD");
-var ctxBD = canvasBD.getContext("2d");
+var canvasHS1 = document.getElementById("canvasHS1");
+var canvasHS2 = document.getElementById("canvasHS2");
+var canvasbell = document.getElementById("canvasbell");
+var canvasBS1 = document.getElementById("canvasBS1");
+var canvasBS2 = document.getElementById("canvasBS2");
+var ctxHS1 = canvasHS1.getContext("2d");
+var ctxHS2 = canvasHS2.getContext("2d");
+var ctxCB = canvasbell.getContext("2d");
+var ctxBS1 = canvasBS1.getContext("2d");
+var ctxBS2 = canvasBS2.getContext("2d");
 
-var canvasBDt= document.getElementById("canvasBDt");
-var ctxBDt = canvasBDt.getContext("2d");
-
-var posBS2 = 0; // position on canvas of BS2
-var posHS1 = 0;
-var posHS2 = 0;
-var posBS1 = 0;
-var posCB = 0;  // position on canvas of bell (and timers)
-var CBwidth = 64; // width of bell on canvas
-var BDwidth = 0; // width of individual stroke sections on canvas
-var radius = 0;
+var canvasHS1t= document.getElementById("canvasHS1t");
+var ctxHS1t = canvasHS1t.getContext("2d");
+var canvasHS2t= document.getElementById("canvasHS2t");
+var ctxHS2t = canvasHS2t.getContext("2d");
+var canvasBS1t= document.getElementById("canvasBS1t");
+var ctxBS1t = canvasBS1t.getContext("2d");
+var canvasBS2t= document.getElementById("canvasBS2t");
+var ctxBS2t = canvasBS2t.getContext("2d");
 
 var strokeTimer=0; // used for time displays under animated bell
 
 var canvasAT=document.getElementById("canvasAT");
 var ctxAT=canvasAT.getContext("2d");
+//var canvasATBS=document.getElementById("canvasATBS");
+//var ctxATBS=canvasATBS.getContext("2d");
+
 var canvasATt=document.getElementById("canvasATt");
 var ctxATt=canvasATt.getContext("2d");
-
+//var canvasATBSt=document.getElementById("canvasATBSt");
+//var ctxATBSt=canvasATBSt.getContext("2d");
 var currentATmargin = 0;
 var currentATpixels = 2;
 var ATbottomMargin=20; // pixels at bottom of AT canvas for indexes
@@ -63,7 +76,7 @@ var wsOpened = false;
 
 var scaleValue = 0.0;
 
-var ROIRanges = [[-20,90],[-20,70],[-10,60],[-10,50],[-10,40],[-10,30]];
+var ROIRanges = [[-30,90],[-20,70],[-10,60],[-10,50],[-10,40],[-10,30]];
 var currentROI=3;
 var ROIU = ROIRanges[currentROI][0];
 var ROIL = ROIRanges[currentROI][1];
@@ -73,8 +86,8 @@ var ROIL = ROIRanges[currentROI][1];
 var playbackRanges = [[200,200,5],[150,150,5],[100,100,5],[80,80,5],[50,62.5,4],[30,75,2],[10,50,1]]; // percent to report, slowdown percentage, number of iterations per cycle
 
 var currentPlaybackSpeed = 2;
-var targets = [ "none", "-10", "-7", "-5", "-2" , "0", "2", "5", "7" , "10" ]; // these are target balance angles
-var scales = [ 2000, 1000, 700, 500, 300, 200 ];
+var targets = [ "none", "-10", "-5", "-7", "-2" , "0", "2", "5", "7" , "10" ];
+var scales = [ 10000, 8000, 5000, 3000, 2000, 1000, 700, 500 ];
 
 var currentPlaybackPosition = 1;
 var playintervalID = null;
@@ -93,14 +106,12 @@ var LASTBS1=128;
 var LASTBS2=256;
 var HELPDISPLAYED=512;
 var PAUSED=1024;
-// var GRIDLINESDISPLAYED=2048;
+var GRIDLINESDISPLAYED=2048;
 var LIVEVIEW=4096;
 var ABORTFLAG = 8192;
 
 var targetAngleHand=null;
 var targetAngleBack=null;
-
-var calibrationValue=null;
 
 var currentSwingDisplayed=null;
 var sample = [];
@@ -141,6 +152,15 @@ for (var i=0; i < playbackRanges.length; i++) {
 }
 document.getElementById("speedSelect").selectedIndex = currentPlaybackSpeed;
 
+document.getElementById("gridSelect").options.length = 0;
+var option = document.createElement("option");
+option.text="yes"
+document.getElementById("gridSelect").add(option);
+option = document.createElement("option");
+option.text="no"
+document.getElementById("gridSelect").add(option);
+document.getElementById("gridSelect").selectedIndex = 0;
+
 document.getElementById("scaleSelect").options.length = 0;
 for (var i=0; i < scales.length; i++) {
     var option = document.createElement("option");
@@ -151,7 +171,7 @@ document.getElementById("scaleSelect").selectedIndex = 2;  // start at 2000
 scaleValue=parseFloat(scales[document.getElementById("scaleSelect").selectedIndex])
 
 ////////////////////////////////////////////////////////////////
-//                 WEBSOCKET HANDLER FUNCTIONS                //
+//                 WEBSOCKET HANDLER FUNCTIONS                   //
 ////////////////////////////////////////////////////////////////
 
 ws.onopen = function(){
@@ -159,9 +179,6 @@ ws.onopen = function(){
     setStatus("Link open");
     document.getElementById("openSelect").options.length = 0;
     ws.send("FILE:");
-    var d = new Date();
-    ws.send("DATE:" + parseInt(d.getTime()/1000));
-    ws.send("SAMP:");
 };
 
 ws.onmessage = function (event) {
@@ -285,21 +302,9 @@ ws.onmessage = function (event) {
         return;
     }
     if (dataBack.slice(0,5) == "EIMU:"){
-        setStatus("IMU not active.  Is one connected to device? Aborting");
-        if ((currentStatus & RECORDINGSESSION) != 0) {
-            document.getElementById("recordIcon").onclick()
-        } else if ((currentStatus & LIVEVIEW) != 0) {
-             document.getElementById("liveIcon").onclick()
-        }
-        currentStatus |= ABORTFLAG;
+        setStatus("IMU not active.  Is one connected to device???");
         return;
     }
-    if (dataBack.slice(0,5) == "SAMP:"){
-        sampleInterval = parseFloat(dataBack.slice(5))*1000;
-        setStatus("Received sample period of " + sampleInterval.toString() + "ms");
-        return;
-    }
-
     if (dataBack.slice(0,5) == "ESTD:"){
         setStatus("Bell not at stand.  Aborting");
         if ((currentStatus & RECORDINGSESSION) != 0) {
@@ -340,18 +345,14 @@ ws.onclose = function(event){
 };
 
 ////////////////////////////////////////////////////////////////
-//                       DATA FUNCTIONS                       //
+//                       DATA FUNCTIONS                          //
 ////////////////////////////////////////////////////////////////
 
 function extractData(datastring){
     var entries = datastring.split(",");
 //    return [parseFloat(entries[0].slice(2)), parseFloat(entries[1].slice(2)), parseFloat(entries[2].slice(2)) * 4000.0];
-    if(calibrationValue == null) {
-        return [parseFloat(entries[0].slice(2)), parseFloat(entries[1].slice(2)), parseFloat(entries[2].slice(2))];
-    } else {
-        return [parseFloat(entries[0].slice(2)), parseFloat(entries[1].slice(2)), parseFloat(entries[2].slice(2))-calibrationValue*Math.sin(parseFloat(entries[0].slice(2))*3.142/180)];  
-    }
-//    
+    return [parseFloat(entries[0].slice(2)), parseFloat(entries[1].slice(2)), parseFloat(entries[2].slice(2))];
+//    return [parseFloat(entries[0].slice(2)), parseFloat(entries[1].slice(2)), parseFloat(entries[2].slice(2))+10000*Math.sin(parseFloat(entries[0].slice(2))*3.142/180)];
 
 }
 
@@ -372,28 +373,6 @@ function playbackSample(){
     }
 }
 
-function getWeighting(){
-    var result = 0, guessLog;
-    if ((currentStatus & SESSIONLOADED) == 0) return;
-    for(guessLog = 14; guessLog > 0; --guessLog){
-        if(calculateError(result + Math.pow(2,guessLog)) < 0) result += Math.pow(2,guessLog);
-    }
-    return result;
-}
-
-function calculateError(guess){
-    var count = 0, error = 0;
-    for(var i = 0; i < samples.length; i++){
-        if(sample[i][0] > 70 && sample[i][0] < 110 && sample[i] > 0){
-            count += 1;
-            error += guess*Math.sin(sample[i][0]*3.1416/180) - sample[i][2];
-        }
-        if(count > 2000) break; // should be enough
-    }
-    error /= count;
-    return error;
-}
-
 function showLive(){
     ws.send("LDAT:");
     var iterations = (sample.length-1) - currentPlaybackPosition;
@@ -406,28 +385,26 @@ function showLive(){
 function drawTimer(position, templated){
     var timeElapsed = ((position-strokeTimer)*sampleInterval)/1000.0;
     if (timeElapsed < 0.2) return; // assume a glitch
-    ctxBD.font = "12px sans serif";
-    ctxBD.fillStyle = "white";
+    ctxCB.font = "12px sans serif";
+    ctxCB.fillStyle = "white";
     if ((currentStatus & LASTBS2) != 0 ) {  // i.e. timing backstroke
-        ctxBD.clearRect(posCB+1, ctxBD.canvas.height-20, CBwidth-2, 10);
+        ctxCB.clearRect(0, ctxCB.canvas.height-20, ctxCB.canvas.width, 10);
         if (timeElapsed > 0.5) {
-            ctxBD.textAlign = "center";
-            ctxBD.fillText("B " +timeElapsed.toFixed(2)+"s", posCB + CBwidth/2, ctxBD.canvas.height-10);
+            ctxCB.textAlign = "right";
+            ctxCB.fillText(timeElapsed.toFixed(2)+"s >", ctxCB.canvas.width, ctxCB.canvas.height-10);
         }
     } else {
-        ctxBD.clearRect(posCB+1, ctxBD.canvas.height-50, CBwidth-2, 10);
+        ctxCB.clearRect(0, ctxCB.canvas.height-50, ctxCB.canvas.width, 10);
         if (timeElapsed > 0.5) {
-            ctxBD.textAlign = "center";
-            ctxBD.fillText("H " + timeElapsed.toFixed(2)+"s", posCB + CBwidth/2, ctxBD.canvas.height-40);
+            ctxCB.textAlign = "left";
+            ctxCB.fillText("< " + timeElapsed.toFixed(2)+"s", 0, ctxCB.canvas.height-40);
         }
     }
     strokeTimer=position;
 }
 
 function drawSamples(position,iterations){
-    var stepSize = (BDwidth * 1.0)/(ROIL-ROIU);
-//    var zero = (0-ROIU) * stepSize;
-    
+    var maxlength = 0.75*radius;
     for (var i = 0; i < iterations; i++){
         var dataEntryOld = sample[position + i -1].slice();
         var dataEntryCurrent = sample[position + i].slice();
@@ -445,10 +422,8 @@ function drawSamples(position,iterations){
                 continue; // for moment don't swap, just do nothing
             }
             if ((currentStatus & LASTHS1) == 0 ) { // clear highest part of this and previous ROI if this is the first time
-                var pixelsFromROIL = (ROIL - startAngle) * stepSize;
-                ctxBD.clearRect(posBS2 + pixelsFromROIL, 14, 2 * (BDwidth - pixelsFromROIL), ctxBD.canvas.height - 14 - 25);
-//      drawAccel(posBS2,dataEntryOld[0],ROIU,maxlength,true);
-//      drawAccel(posHS1,ROIU,startAngle,maxlength,true);
+                drawAccel(ctxBS2,dataEntryOld[0],ROIU,maxlength,true);
+                drawAccel(ctxHS1,ROIU,startAngle,maxlength,true);
                 if ((currentStatus & LASTBS2) != 0 ) {
                     drawTimer(position + i, false);
                 } else {
@@ -457,69 +432,38 @@ function drawSamples(position,iterations){
                 currentStatus &= ~(LASTBS2 | LASTBS1 | LASTHS2);
                 currentStatus |= LASTHS1;
             }
-            var pixelsFromROIU = (startAngle - ROIU) * stepSize;
-            var pixelWidth = (endAngle - startAngle) * stepSize;
-            var pixelHeight = (ctxBD.canvas.height - 14 - 25) * Math.min(dataEntryCurrent[2]/scaleValue,1);
-            if (pixelHeight < 0) pixelHeight = 0;
-
-
-            ctxBD.clearRect(posHS1 + pixelsFromROIU, 14, pixelWidth + 1, ctxBD.canvas.height - 14 - 25);
-            ctxBD.fillStyle="white";
-            ctxBD.fillRect(posHS1 + pixelsFromROIU, ctxBD.canvas.height - 25, pixelWidth, (0-pixelHeight));
-//            drawAccel(posHS1,startAngle,endAngle,maxlength*(Math.min(Math.abs(dataEntryCurrent[2])/scaleValue,1)),false);
+            drawAccel(ctxHS1,startAngle,endAngle,maxlength*(Math.min(Math.abs(dataEntryCurrent[2])/scaleValue,1)),false);
         } else if (dataEntryCurrent[0] > (360 - ROIL) && dataEntryCurrent[0] < (360 - ROIU) && dataEntryCurrent[1] >= 0) { // within ROI for HS2
-            var endAngle = Math.max(ROIU, 360-dataEntryCurrent[0]);
-            var startAngle = Math.min(360-dataEntryOld[0], ROIL);
-            if (endAngle >= startAngle) {
+            var endAngle = Math.min((360-ROIU),dataEntryCurrent[0]);
+            var startAngle = Math.max(dataEntryOld[0], (360-ROIL));
+            if (startAngle >= endAngle) {
                 continue; // for moment don't swap, just do nothing
             }
             if ((currentStatus & LASTHS2) == 0 ) { // set flags if we have not been before this swing
                 currentStatus &= ~(LASTHS1 | LASTBS1 | LASTBS2);
                 currentStatus |= LASTHS2;
             }
-            var pixelsFromROIL = (ROIL - startAngle) * stepSize;
-            var pixelWidth = (startAngle - endAngle) * stepSize;
-
-            var pixelHeight = (ctxBD.canvas.height - 14 - 25) * Math.min(-(dataEntryCurrent[2])/scaleValue,1);
-            if (pixelHeight < 0) pixelHeight = 0;
-
-            ctxBD.clearRect(posHS2 + pixelsFromROIL, 14, pixelWidth + 1, ctxBD.canvas.height - 14 - 25);
-            ctxBD.fillStyle="white";
-            ctxBD.fillRect(posHS2 + pixelsFromROIL, ctxBD.canvas.height - 25, pixelWidth, (0-pixelHeight));
-          
-//            drawAccel(posHS2,startAngle,endAngle,maxlength*(Math.min(Math.abs(dataEntryCurrent[2])/scaleValue,1)),false);
+            drawAccel(ctxHS2,startAngle,endAngle,maxlength*(Math.min(Math.abs(dataEntryCurrent[2])/scaleValue,1)),false);
         } else if (dataEntryCurrent[0] > (360 - ROIL) && dataEntryCurrent[0] < (360 - ROIU) && dataEntryCurrent[1] < 0) { // within ROI for BS1
 
             if (dataEntryNext[0] <= (360 - ROIL)) {
                 dataEntryCurrent[0] = (360 - ROIL); // tidy up at end of ROI
             }
-            var startAngle = Math.max(ROIU,360-dataEntryOld[0]);
-            var endAngle = Math.min(ROIL,360-dataEntryCurrent[0]);
-            if (startAngle >= endAngle) {
+            var startAngle = Math.min((360-ROIU),dataEntryOld[0]);
+            var endAngle = dataEntryCurrent[0];
+            if (endAngle >= startAngle) {
                 continue; // for moment don't swap, just do nothing
             }
             if ((currentStatus & LASTBS1) == 0 ) { // clear highest part of this and previous ROI if this is the first time
-                var pixelsFromROIL = (ROIL - startAngle) * stepSize;
-                ctxBD.clearRect(posHS2 + pixelsFromROIL, 14, 2 * (BDwidth - pixelsFromROIL), ctxBD.canvas.height - 14 - 25);
-//                drawAccel(posHS2,dataEntryOld[0],(360-ROIU),maxlength,true);
-//                drawAccel(posBS1,(360-ROIU),startAngle,maxlength,true);
+                drawAccel(ctxHS2,dataEntryOld[0],(360-ROIU),maxlength,true);
+                drawAccel(ctxBS1,(360-ROIU),startAngle,maxlength,true);
                 if ((currentStatus & LASTHS2) != 0 ) {
                     drawTimer(position + i, false);
                 }
                 currentStatus &= ~(LASTBS2 | LASTHS1 | LASTHS2);
                 currentStatus |= LASTBS1;
             }
-            var pixelsFromROIU = (startAngle - ROIU) * stepSize;
-            var pixelWidth = (endAngle - startAngle) * stepSize;
-
-            var pixelHeight = (ctxBD.canvas.height - 14 - 25) * Math.min(-(dataEntryCurrent[2])/scaleValue,1)
-            if (pixelHeight < 0) pixelHeight = 0;
-
-            ctxBD.clearRect(posBS1 + pixelsFromROIU, 14, pixelWidth + 1, ctxBD.canvas.height - 14 - 25);
-            ctxBD.fillStyle="white";
-            ctxBD.fillRect(posBS1 + pixelsFromROIU, ctxBD.canvas.height - 25, pixelWidth, (0-pixelHeight));
-            
-//            drawAccel(posBS1,startAngle,endAngle,maxlength*(Math.min(Math.abs(dataEntryCurrent[2])/scaleValue,1)),false);
+            drawAccel(ctxBS1,startAngle,endAngle,maxlength*(Math.min(Math.abs(dataEntryCurrent[2])/scaleValue,1)),false);
 
         } else if (dataEntryCurrent[0] > ROIU && dataEntryCurrent[0] < ROIL && dataEntryCurrent[1] < 0) { // within ROI for BS2
             var endAngle = Math.max(ROIU,dataEntryCurrent[0]);
@@ -531,17 +475,7 @@ function drawSamples(position,iterations){
                 currentStatus &= ~(LASTHS1 | LASTBS1 | LASTHS2);
                 currentStatus |= LASTBS2;
             }
-            var pixelsFromROIL = (ROIL - startAngle) * stepSize;
-            var pixelWidth = (startAngle - endAngle) * stepSize;
-
-            var pixelHeight = (ctxBD.canvas.height - 14 - 25) * Math.min((dataEntryCurrent[2])/scaleValue,1);
-            if (pixelHeight < 0) pixelHeight = 0;
-
-            ctxBD.clearRect(posBS2 + pixelsFromROIL, 14, pixelWidth + 1, ctxBD.canvas.height - 14 - 25);
-            ctxBD.fillStyle="white";
-            ctxBD.fillRect(posBS2 + pixelsFromROIL, ctxBD.canvas.height - 25, pixelWidth, (0-pixelHeight));
-
-//            drawAccel(posBS2,startAngle,endAngle,maxlength*(Math.min(Math.abs(dataEntryCurrent[2])/scaleValue,1)),false);
+            drawAccel(ctxBS2,startAngle,endAngle,maxlength*(Math.min(Math.abs(dataEntryCurrent[2])/scaleValue,1)),false);
         }
     }
 }
@@ -572,12 +506,31 @@ function drawAT(accn){
 }
 
 function clearTemplates(){
-    ctxBDt.clearRect(0, 0, ctxBDt.canvas.width, ctxBDt.canvas.height);
+    ctxHS1t.save();
+    ctxHS1t.setTransform(1, 0, 0, 1, 0, 0);
+    ctxHS1t.clearRect(0, 0, ctxHS1t.canvas.width, ctxHS1t.canvas.height);
+    ctxHS1t.restore();
+
+    ctxHS2t.save();
+    ctxHS2t.setTransform(1, 0, 0, 1, 0, 0);
+    ctxHS2t.clearRect(0, 0, ctxHS2t.canvas.width, ctxHS2t.canvas.height);
+    ctxHS2t.restore();
+
+    ctxBS1t.save();
+    ctxBS1t.setTransform(1, 0, 0, 1, 0, 0);
+    ctxBS1t.clearRect(0, 0, ctxBS1t.canvas.width, ctxBS1t.canvas.height);
+    ctxBS1t.restore();
+
+    ctxBS2t.save();
+    ctxBS2t.setTransform(1, 0, 0, 1, 0, 0);
+    ctxBS2t.clearRect(0, 0, ctxBS2t.canvas.width, ctxBS2t.canvas.height);
+    ctxBS2t.restore();
+
 }
 
 function drawSamplesOnTemplate(){
     clearTemplates();
-    var stepSize = (BDwidth * 1.0)/(ROIL-ROIU);
+    var maxlength = 0.75*radius;
     for (var i = 1; i < template.length-1; i++){
         var dataEntryOld = template[i -1].slice();
         var dataEntryCurrent = template[i].slice();
@@ -592,34 +545,14 @@ function drawSamplesOnTemplate(){
             if (endAngle <= startAngle) {
                 continue; // for moment don't swap, just do nothing
             }
-            var pixelsFromROIU = (startAngle - ROIU) * stepSize;
-            var pixelWidth = (endAngle - startAngle) * stepSize;
-
-            var pixelHeight = (ctxBDt.canvas.height - 14 - 25) * Math.min(dataEntryCurrent[2]/scaleValue,1);
-            if (pixelHeight < 0) pixelHeight = 0;
-
-//            ctxBDt.clearRect(posHS1 + pixelsFromROIU, 14, pixelWidth + 1, ctxBDt.canvas.height - 14 - 25);
-            ctxBDt.fillStyle="rgba(240,240,0,0.6)";
-            ctxBDt.fillRect(posHS1 + pixelsFromROIU, ctxBDt.canvas.height - 25, pixelWidth, (0-pixelHeight));
-
-//            drawAccelT(posHS1,startAngle,endAngle,maxlength*(Math.min(Math.abs(dataEntryCurrent[2])/scaleValue,1)));
+            drawAccelT(ctxHS1t,startAngle,endAngle,maxlength*(Math.min(Math.abs(dataEntryCurrent[2])/scaleValue,1)));
         } else if (dataEntryCurrent[0] > (360 - ROIL) && dataEntryCurrent[0] < (360 - ROIU) && dataEntryCurrent[1] >= 0) { // within ROI for HS2
             var endAngle = Math.min((360-ROIU),dataEntryCurrent[0]);
             var startAngle = Math.max(dataEntryOld[0], (360-ROIL));
             if (startAngle >= endAngle) {
                 continue; // for moment don't swap, just do nothing
             }
-            var pixelsFromROIL = (ROIL - startAngle) * stepSize;
-            var pixelWidth = (startAngle - endAngle) * stepSize;
-
-            var pixelHeight = (ctxBDt.canvas.height - 14 - 25) * Math.min(-(dataEntryCurrent[2])/scaleValue,1);
-            if (pixelHeight < 0) pixelHeight = 0;
-
-//            ctxBDt.clearRect(posHS2 + pixelsFromROIL, 14, pixelWidth + 1, ctxBDt.canvas.height - 14 - 25);
-            ctxBDt.fillStyle="rgba(240,240,0,0.6)";
-            ctxBDt.fillRect(posHS2 + pixelsFromROIL, ctxBDt.canvas.height - 25, pixelWidth, (0-pixelHeight));
-            
-//            drawAccelT(posHS2,startAngle,endAngle,maxlength*(Math.min(Math.abs(dataEntryCurrent[2])/scaleValue,1)));
+            drawAccelT(ctxHS2t,startAngle,endAngle,maxlength*(Math.min(Math.abs(dataEntryCurrent[2])/scaleValue,1)));
         } else if (dataEntryCurrent[0] > (360 - ROIL) && dataEntryCurrent[0] < (360 - ROIU) && dataEntryCurrent[1] < 0) { // within ROI for BS1
 
             if (dataEntryNext[0] <= (360 - ROIL)) {
@@ -630,16 +563,7 @@ function drawSamplesOnTemplate(){
             if (endAngle >= startAngle) {
                 continue; // for moment don't swap, just do nothing
             }
-            var pixelsFromROIU = (startAngle - ROIU) * stepSize;
-            var pixelWidth = (endAngle - startAngle) * stepSize;
-
-            var pixelHeight = (ctxBDt.canvas.height - 14 - 25) * Math.min(-(dataEntryCurrent[2])/scaleValue,1)
-            if (pixelHeight < 0) pixelHeight = 0;
-//            ctxBDt.clearRect(posBS1 + pixelsFromROIU, 14, pixelWidth + 1, ctxBDt.canvas.height - 14 - 25);
-            ctxBDt.fillStyle="rgba(240,240,0,0.6)";
-            ctxBDt.fillRect(posBS1 + pixelsFromROIU, ctxBDt.canvas.height - 25, pixelWidth, (0-pixelHeight));
-       
-//            drawAccelT(posBS1,startAngle,endAngle,maxlength*(Math.min(Math.abs(dataEntryCurrent[2])/scaleValue,1)));
+            drawAccelT(ctxBS1t,startAngle,endAngle,maxlength*(Math.min(Math.abs(dataEntryCurrent[2])/scaleValue,1)));
 
         } else if (dataEntryCurrent[0] > ROIU && dataEntryCurrent[0] < ROIL && dataEntryCurrent[1] < 0) { // within ROI for BS2
             var endAngle = Math.max(ROIU,dataEntryCurrent[0]);
@@ -647,17 +571,7 @@ function drawSamplesOnTemplate(){
             if (endAngle >= startAngle) {
                 continue; // for moment don't swap, just do nothing
             }
-            var pixelsFromROIL = (ROIL - startAngle) * stepSize;
-            var pixelWidth = (startAngle - endAngle) * stepSize;
-
-            var pixelHeight = (ctxBDt.canvas.height - 14 - 25) * Math.min((dataEntryCurrent[2])/scaleValue,1);
-            if (pixelHeight < 0) pixelHeight = 0;
-
-//            ctxBDt.clearRect(posBS2 + pixelsFromROIL, 14, pixelWidth + 1, ctxBDt.canvas.height - 14 - 25);
-            ctxBDt.fillStyle="rgba(240,240,0,0.6)";
-            ctxBDt.fillRect(posBS2 + pixelsFromROIL, ctxBDt.canvas.height - 25, pixelWidth, (0-pixelHeight));
-
-//            drawAccelT(posBS2,startAngle,endAngle,maxlength*(Math.min(Math.abs(dataEntryCurrent[2])/scaleValue,1)));
+            drawAccelT(ctxBS2t,startAngle,endAngle,maxlength*(Math.min(Math.abs(dataEntryCurrent[2])/scaleValue,1)));
         }
     }
     drawTDCs();  // function checks what needs to be drawn on template like gridlines and target angles
@@ -676,7 +590,7 @@ function clearStatus() {
 }
 
 ////////////////////////////////////////////////////////////////
-//                    ICON CLICK FUNCTIONS                    //
+//                    ICON CLICK FUNCTIONS                       //
 ////////////////////////////////////////////////////////////////
 
 fileOpenButton.onclick = function() {
@@ -691,7 +605,6 @@ fileOpenButton.onclick = function() {
     currentStatus |= DOWNLOADINGFILE;
     currentStatus &= ~SESSIONLOADED;
     currentSwingDisplayed = null;
-    calibrationValue = null;
     updateIcons();
 }
 
@@ -732,7 +645,10 @@ zoomSelect.onchange = function(){
     currentROI = document.getElementById("zoomSelect").selectedIndex;
     ROIU = ROIRanges[currentROI][0];
     ROIL = ROIRanges[currentROI][1];
-    drawFrame();
+    drawFrame(ctxHS1);
+    drawFrame(ctxHS2);
+    drawFrame(ctxBS1);
+    drawFrame(ctxBS2);
     if ((currentStatus & FAVOURITEDISPLAYED) != 0) {
         drawSamplesOnTemplate();
     } else {
@@ -790,6 +706,27 @@ minusIcon.onclick=function(){
 }
 */
 
+
+gridSelect.onchange = function() {
+    if (document.getElementById("gridSelect").selectedIndex == 0){ //yes
+        currentStatus |= GRIDLINESDISPLAYED;
+        if ((currentStatus & FAVOURITEDISPLAYED) != 0){
+            drawSamplesOnTemplate();
+        } else {
+            drawTDCs();
+        }
+
+    } else { // no
+        currentStatus &= ~GRIDLINESDISPLAYED;
+        if ((currentStatus & FAVOURITEDISPLAYED) != 0){
+            drawSamplesOnTemplate();
+        } else {
+            clearTemplates();
+            drawTDCs(); // draw target if necessary
+        }
+    }
+}
+
 /*
 gridlinesIcon.onclick=function(){
     if ((currentStatus & DOWNLOADINGFILE) != 0) return;
@@ -817,7 +754,10 @@ gridlinesIcon.onclick=function(){
 
 scaleSelect.onchange = function() {
     scaleValue=parseFloat(scales[document.getElementById("scaleSelect").selectedIndex])
-    drawFrame();
+    drawFrame(ctxHS1);
+    drawFrame(ctxHS2);
+    drawFrame(ctxBS1);
+    drawFrame(ctxBS2);
     clearAT();
     if ((currentStatus & FAVOURITEDISPLAYED) != 0) {
         drawSamplesOnTemplate();
@@ -841,10 +781,6 @@ scaleSelect.onchange = function() {
 recordIcon.onclick=function(){
     if (nonLive){
         alert("Not implemented for this demo");
-        return;
-    }
-    if (sampleInterval = 0.0){
-        setStatus("No communication with IMU device.  Aborted.");
         return;
     }
     if ((currentStatus & DOWNLOADINGFILE) != 0) return;
@@ -876,7 +812,10 @@ recordButton.onclick = function() {
         currentStatus |= RECORDINGSESSION;
         currentStatus &= ~SESSIONLOADED;
         updateIcons();
-        drawFrame();
+        drawFrame(ctxHS1);
+        drawFrame(ctxHS2);
+        drawFrame(ctxBS1);
+        drawFrame(ctxBS2);
         sample = [];
         clearAT();
         currentPlaybackPosition = 1; // needs to be one as we are doing comparison with previous entry removed so that playback starts from last swing displayed
@@ -889,33 +828,11 @@ recordButton.onclick = function() {
     }
 };
 
-calibrateButton.onclick = function() {
-    if ((currentStatus & SESSIONLOADED) == 0) return;
-    if ((currentStatus & DOWNLOADINGFILE) != 0) return;
-    if ((currentStatus & PLAYBACK) != 0) return;
-    if ((currentStatus & HELPDISPLAYED) != 0) return;
-    if ((currentStatus & LIVEVIEW) != 0) return;
-    if ((currentStatus & RECORDINGSESSION) != 0) return
-
-//  if(calibrationValue != null) return;
-    calibrationValue = getWeighting();
-    setStatus("Calibration value = : " + calibrationValue);
-    for(var i = 0; i < samples.length; i++) {
-        sample[i][2] -= calibrationValue*Math.sin(sample[i][0]*3.142/180);
-    }
-};
-
-
 liveIcon.onclick = function() {
     if (nonLive){
         alert("Not implemented for this demo");
         return;
     }
-    if (sampleInterval = 0.0){
-        setStatus("No communication with IMU device.  Aborted.");
-        return;
-    }
-
     if ((currentStatus & DOWNLOADINGFILE) != 0) return;
     if ((currentStatus & PLAYBACK) != 0) return;
     if ((currentStatus & HELPDISPLAYED) != 0) return;
@@ -933,7 +850,10 @@ liveIcon.onclick = function() {
         currentStatus |= LIVEVIEW;
         currentStatus &= ~SESSIONLOADED;
         updateIcons();
-        drawFrame();
+        drawFrame(ctxHS1);
+        drawFrame(ctxHS2);
+        drawFrame(ctxBS1);
+        drawFrame(ctxBS2);
         clearAT();
         sample = [];
         currentPlaybackPosition = 1; // needs to be one as we are doing comparison with previous entry removed so that playback starts from last swing displayed
@@ -973,7 +893,10 @@ playIcon.onclick=function(){
         currentStatus |= PLAYBACK;
         currentStatus &= ~PAUSED;
         updateIcons();
-        drawFrame();
+        drawFrame(ctxHS1);
+        drawFrame(ctxHS2);
+        drawFrame(ctxBS1);
+        drawFrame(ctxBS2);
         clearAT();
 //        currentPlaybackPosition =1; // needs to be one as we are doing comparison with previous entry removed so that playback starts from last swing displayed
         if (playintervalID != null) clearInterval(playintervalID);
@@ -1010,7 +933,10 @@ backIcon.onclick=function(){
     if (currentSwingDisplayed == 0) return;
     if (currentSwingDisplayed == null) currentSwingDisplayed=1;
     currentSwingDisplayed -= 1;
-    drawFrame();
+    drawFrame(ctxHS1);
+    drawFrame(ctxHS2);
+    drawFrame(ctxBS1);
+    drawFrame(ctxBS2);
     drawSamples(swingStarts[currentSwingDisplayed],(swingStarts[currentSwingDisplayed+1]-1) - swingStarts[currentSwingDisplayed]);
     textBell((currentSwingDisplayed+1).toString());
     currentStatus &= ~(LASTHS1 | LASTBS1 | LASTHS2 | LASTBS2);
@@ -1033,7 +959,10 @@ forwardIcon.onclick=function(){
     } else {
         iterations = (swingStarts[currentSwingDisplayed +1]-1) - swingStarts[currentSwingDisplayed];
     }
-    drawFrame();
+    drawFrame(ctxHS1);
+    drawFrame(ctxHS2);
+    drawFrame(ctxBS1);
+    drawFrame(ctxBS2);
     drawSamples(swingStarts[currentSwingDisplayed],iterations);
     textBell((currentSwingDisplayed+1).toString());
     currentStatus &= ~(LASTHS1 | LASTBS1 | LASTHS2 | LASTBS2);
@@ -1256,7 +1185,7 @@ function updateIcons(){
 
 }
 ////////////////////////////////////////////////////////////////
-//                       MODAL FUNCTIONS                      //
+//                       MODAL FUNCTIONS                         //
 ////////////////////////////////////////////////////////////////
 
 
@@ -1319,7 +1248,7 @@ window.onclick = function(event) {
 };
 
 ////////////////////////////////////////////////////////////////
-//                   WINDOW RESIZE FUNCTIONS                  //
+//                   WINDOW RESIZE FUNCTIONS                     //
 ////////////////////////////////////////////////////////////////
 
 
@@ -1332,10 +1261,10 @@ window.addEventListener("resize", function(event){
     drawTDCs();
   }
 });
-
 window.addEventListener("load", function(event){
     recalculateSize();
     updateIcons();
+    currentStatus |= GRIDLINESDISPLAYED;  // have these displayed by default
     drawTDCs();
     clearAT();
     document.body.addEventListener("touchstart", preventZoom); // doesn't appear to work
@@ -1345,65 +1274,119 @@ function recalculateSize() {
     var winWidth =  window.innerWidth;
     var rightWidth = Math.max(800,winWidth-16);
 
-    var canvasWidth=rightWidth-16;
-    var canvasHeight=((rightWidth-CBwidth)/4)/1.3;
+    var canvasWidth=((rightWidth-12)/4)-21;
+    var canvasHeight=(((rightWidth-21)/4)-21)/1.5;
 
     var winHeight =  window.innerHeight;
-    var rightHeight = winHeight - 210;
+    var rightHeight = Math.max (((((rightWidth-21)/4)-19)/1.5),winHeight - 16 - 172 - 25);
 
     document.getElementById("bellGraphics").style.width = rightWidth + "px";
     document.getElementById("bellGraphics").style.height = rightHeight + "px";
     document.getElementById("helpScreen").style.width = rightWidth + "px";
     document.getElementById("helpScreen").style.height = rightHeight + "px";
-    document.getElementById("helpIframe").style.width = (rightWidth-42) + "px";
-    document.getElementById("helpIframe").style.height = (rightHeight -20) + "px";
+    document.getElementById("helpIframe").style.width = (rightWidth-40) + "px";
+    document.getElementById("helpIframe").style.height = (rightHeight-40) + "px";
 
-    canvasBD.width=canvasWidth;
-    canvasBD.height=canvasHeight;
-    canvasBD.style.top=10;
-    canvasBD.style.left=8;
-    canvasBDt.width=canvasWidth;
-    canvasBDt.height=canvasHeight;
-    canvasBDt.style.top=10;
-    canvasBDt.style.left=8;
+    canvasHS1.width=canvasWidth;
+    canvasHS1.height=canvasHeight;
+    canvasHS1.style.top=10;
+    canvasHS1.style.left=0;
+    canvasHS1t.width=canvasWidth;
+    canvasHS1t.height=canvasHeight;
+    canvasHS1t.style.top=10;
+    canvasHS1t.style.left=0;
 
-    posBS2 = 0;
-    BDwidth = (canvasWidth-CBwidth)/4 
-    posHS1 = BDwidth;
-    posCB = BDwidth * 2;
-    posHS2 = canvasWidth - (BDwidth *2);
-    posBS1 = canvasWidth - BDwidth;
-    radius = canvasHeight;
+    canvasHS2.width=canvasWidth;
+    canvasHS2.height=canvasHeight;
+    canvasHS2.style.top=10;
+    canvasHS2.style.left=canvasWidth;
+    canvasHS2t.width=canvasWidth;
+    canvasHS2t.height=canvasHeight;
+    canvasHS2t.style.top=10;
+    canvasHS2t.style.left=canvasWidth;
+
+    canvasBS1.width=canvasWidth;
+    canvasBS1.height=canvasHeight;
+    canvasBS1.style.top=10;
+    canvasBS1.style.left=2*canvasWidth+64;
+    canvasBS1t.width=canvasWidth;
+    canvasBS1t.height=canvasHeight;
+    canvasBS1t.style.top=10;
+    canvasBS1t.style.left=2*canvasWidth+64;
+
+    canvasBS2.width=canvasWidth;
+    canvasBS2.height=canvasHeight;
+    canvasBS2.style.top=10;
+    canvasBS2.style.left=3*canvasWidth+64;
+    canvasBS2t.width=canvasWidth;
+    canvasBS2t.height=canvasHeight;
+    canvasBS2t.style.top=10;
+    canvasBS2t.style.left=3*canvasWidth+64;
+
+    canvasbell.width=64;
+    canvasbell.height=canvasHeight;
+    canvasbell.style.top=10;
+    canvasbell.style.left=2*canvasWidth;
 
     canvasAT.width=rightWidth * 2;
-    canvasAT.height=Math.min(canvasHeight,rightHeight-canvasHeight-20);
-    canvasAT.style.top=(canvasHeight + 20) + (rightHeight - canvasAT.height - canvasBD.height)/2;
+    canvasAT.height=rightHeight-canvasHeight;
+    canvasAT.style.top=canvasHeight+5;
     canvasAT.style.left=0;
     canvasATt.width=rightWidth * 2;
-    canvasATt.height=Math.min(canvasHeight,rightHeight-canvasHeight-20);
-    canvasATt.style.top=(canvasHeight + 20) + (rightHeight - canvasAT.height - canvasBD.height)/2;
+    canvasATt.height=rightHeight-canvasHeight;
+    canvasATt.style.top=canvasHeight+5;
     canvasATt.style.left=0;
-   
-    ctxBD.fillStyle='rgba(0,0,255,0.1)';
-    ctxBD.fillRect(posBS2,0,BDwidth,canvasBD.height);
-    ctxBD.fillStyle='rgba(0,255,255,0.1)';
-    ctxBD.fillRect(posHS1,0,BDwidth,canvasBD.height);
-    ctxBD.fillStyle='rgba(255,0,255,0.1)';
-    ctxBD.fillRect(posHS2,0,BDwidth,canvasBD.height);
-    ctxBD.fillStyle='rgba(255,255,255,0.5)';
-    ctxBD.fillRect(posBS1,0,BDwidth,canvasBD.height);
-    ctxBD.fillStyle='rgba(255,0,0,0.1)';
-    ctxBD.fillRect(posCB,0,CBwidth,canvasBD.height);
-    
+//    document.getElementById('ATdiv').style.top = canvasHeight + "px";
+//    document.getElementById('ATdiv').style.left = 10 + "px";
+//    document.getElementById('ATdiv').style.width = rightWidth + "px";
+//    document.getElementById('ATdiv').style.height = (rightHeight-canvasHeight-80) + "px";
+
+/*    document.getElementById("canvasAT").style.top = canvasHeight + "px";
+    document.getElementById("canvasAT").style.left = 10 + "px";
+    document.getElementById("canvasAT").style.width = (rightWidth) + "px";
+    document.getElementById("canvasAT").style.height = rightHeight-canvasHeight + "px";
+
+    document.getElementById("canvasATt").style.top = canvasHeight + "px";
+    document.getElementById("canvasATt").style.left = 10 + "px";
+    document.getElementById("canvasATt").style.width = (rightWidth) + "px";
+    document.getElementById("canvasATt").style.height = (rightHeight-canvasHeight) + "px";
+*/
+
+
+//    canvasATBS.width=canvasWidth*2;
+//    canvasATBS.height=0.3*canvasHeight;
+//    canvasATBS.style.top=canvasHeight;
+//    canvasATBS.style.left=2*canvasWidth+64;
+//    canvasATBSt.width=canvasWidth*2;
+//    canvasATBSt.height=0.3*canvasHeight;
+//    canvasATBSt.style.top=canvasHeight;
+//    canvasATBSt.style.left=2*canvasWidth+64;
+
 //    ctxAT.fillStyle='rgba(0,0,255,0.1)';
 //    ctxAT.fillRect(0,0,canvasAT.width,canvasAT.height);
 //    ctxATt.fillStyle='rgba(0,128,255,0.1)';
 //    ctxATt.fillRect(0,0,(canvasATt.width/2),canvasATt.height);
 
+
+
 //    ctxATBS.fillStyle='rgba(0,255,255,0.1)';
 //    ctxATBS.fillRect(0,0,canvasATBS.width,canvasATBS.height);
 
-    drawFrame();
+    radius = canvasHS1.height * 0.8;
+    ctxHS1.translate(0.6*canvasHS1.height, 0.9*canvasHS1.height);
+    ctxHS2.translate(0.9*canvasHS2.height, 0.9*canvasHS2.height);
+    ctxBS1.translate(0.6*canvasBS1.height, 0.9*canvasBS1.height);
+    ctxBS2.translate(0.9*canvasBS2.height, 0.9*canvasBS2.height);
+
+    ctxHS1t.translate(0.6*canvasHS1t.height, 0.9*canvasHS1t.height);
+    ctxHS2t.translate(0.9*canvasHS2t.height, 0.9*canvasHS2t.height);
+    ctxBS1t.translate(0.6*canvasBS1t.height, 0.9*canvasBS1t.height);
+    ctxBS2t.translate(0.9*canvasBS2t.height, 0.9*canvasBS2t.height);
+
+    drawFrame(ctxHS1);
+    drawFrame(ctxHS2);
+    drawFrame(ctxBS1);
+    drawFrame(ctxBS2);
     clearAT();
 /*
     ctx.save();
@@ -1422,41 +1405,72 @@ function recalculateSize() {
 */
 }
 
-function drawFrame(){
-    ctxBD.clearRect(posBS2, 0, BDwidth * 2, ctxBD.canvas.height);
-    ctxBD.clearRect(posHS2, 0, BDwidth * 2, ctxBD.canvas.height);
-    ctxBD.lineWidth=1;
-    ctxBD.font = "12px sans serif";
-    ctxBD.fillStyle = "white";
-    ctxBD.textAlign = "center";
-    ctxBD.fillText("Handstroke Pull", posHS1+ BDwidth/2, 10);
-    ctxBD.fillText("Handstroke Check", posHS2 + BDwidth/2, 10);
-    ctxBD.fillText("Backstroke Pull", posBS1 + BDwidth/2, 10);
-    ctxBD.fillText("Backstroke Check", BDwidth/2, 10);
+function drawFrame(ctx){
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
 
-    ctxBD.beginPath();
-    ctxBD.strokeStyle="rgba(240,240,240,0.6)";
-    ctxBD.rect(posBS2, -1, BDwidth, 13);
-    ctxBD.rect(posHS1, -1, BDwidth, 13);
-    ctxBD.rect(posHS2, -1, BDwidth, 13);
-    ctxBD.rect(posBS1, -1, BDwidth, 13);
-    ctxBD.rect(posBS2, ctxBD.canvas.height-24, BDwidth * 2, 25);
-    ctxBD.rect(posHS2, ctxBD.canvas.height-24, BDwidth * 2, 25);
+    ctx.font = "12px sans serif";
+    ctx.fillStyle = "white";
+    if (ctx === ctxHS1){
+        ctx.textAlign = "center";
+        ctx.fillText("Handstroke Pull", ctx.canvas.width*0.4, 10);
+    } else if (ctx === ctxHS2) {
+        ctx.textAlign = "center";
+        ctx.fillText("Handstroke Check", ctx.canvas.width*0.6, 10);
+    } else if (ctx === ctxBS1) {
+        ctx.textAlign = "center";
+        ctx.fillText("Backstroke Pull", ctx.canvas.width*0.4, 10);
+    } else if (ctx === ctxBS2) {
+        ctx.textAlign = "center";
+        ctx.fillText("Backstroke Check", ctx.canvas.width*0.6, 10);
+    }
 
-    ctxBD.stroke();
+    ctx.restore();
+    ctx.beginPath();
+    ctx.arc(0, 0, 0.05*radius, 0, 2*Math.PI);
+    ctx.fillStyle = "white";
+    ctx.fill();
+
+    if (ctx === ctxHS1){
+        starta=0;
+        enda=240*Math.PI/180;
+        hand=true;
+    } else if (ctx === ctxHS2) {
+        starta= 180*Math.PI/180;
+        enda = 300*Math.PI/180;
+        hand=false;
+    } else if (ctx === ctxBS1) {
+        starta=0;
+        enda=240*Math.PI/180;
+        hand= true;
+    } else if (ctx === ctxBS2) {
+        starta= 180*Math.PI/180;
+        enda = 300*Math.PI/180;
+        hand=false;
+    }
+    ctx.beginPath();
+    ctx.arc(0, 0, 0.1*radius, starta, enda, hand);
+    ctx.strokeStyle = "white";
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.arc(0, 0, radius, starta, enda, hand);
+    ctx.strokeStyle = "white";
+    ctx.stroke();
 }
 
 function textBell(text){
-    ctxBD.clearRect(2*BDwidth , 0, 64, ctxBD.canvas.height);
-    ctxBD.font="bold 16px verdana, sans-serif";
-    ctxBD.textAlign="center";
-    ctxBD.fillStyle = "white";
-    ctxBD.fillText(text,2*BDwidth + 32,32);
+    ctxCB.clearRect(0, 0, ctxCB.canvas.width, ctxCB.canvas.height);
+    ctxCB.font="bold 16px verdana, sans-serif";
+    ctxCB.textAlign="center";
+    ctxCB.fillStyle = "white";
+    ctxCB.fillText(text,32,32);
 }
 
 function clearBell(){
 //    ctxCB.clearRect(0, 0, ctxCB.canvas.width, ctxCB.canvas.height);
-    ctxBD.clearRect(2*BDwidth, 0, 64, 64);
+    ctxCB.clearRect(0, 0, ctxCB.canvas.width, 64);
 
 }
 
@@ -1479,28 +1493,28 @@ function clearAT(){
 
 function drawBell(angle) {
     var DEG2RAD = Math.PI/180;
-    var bx = 2*BDwidth + 32 + (Math.sin((angle - 80) * DEG2RAD) * 10);
+    var bx = 32 + (Math.sin((angle - 80) * DEG2RAD) * 10);
     var by = 32 + (Math.cos((angle - 80) * DEG2RAD) * 10);
-    var cx = 2*BDwidth + 32 + (Math.sin((angle -  5) * DEG2RAD) * 15);
+    var cx = 32 + (Math.sin((angle -  5) * DEG2RAD) * 15);
     var cy = 32 + (Math.cos((angle -  5) * DEG2RAD) * 15);
-    var dx = 2*BDwidth + 32 + (Math.sin((angle - 40) * DEG2RAD) * 30);
+    var dx = 32 + (Math.sin((angle - 40) * DEG2RAD) * 30);
     var dy = 32 + (Math.cos((angle - 40) * DEG2RAD) * 30);
-    var ex = 2*BDwidth + 32 + (Math.sin((angle + 80) * DEG2RAD) * 10);
+    var ex = 32 + (Math.sin((angle + 80) * DEG2RAD) * 10);
     var ey = 32 + (Math.cos((angle + 80) * DEG2RAD) * 10);
-    var fx = 2*BDwidth + 32 + (Math.sin((angle +  5) * DEG2RAD) * 15);
+    var fx = 32 + (Math.sin((angle +  5) * DEG2RAD) * 15);
     var fy = 32 + (Math.cos((angle +  5) * DEG2RAD) * 15);
-    var gx = 2*BDwidth + 32 + (Math.sin((angle + 40) * DEG2RAD) * 30);
+    var gx = 32 + (Math.sin((angle + 40) * DEG2RAD) * 30);
     var gy = 32 + (Math.cos((angle + 40) * DEG2RAD) * 30);
-    ctxBD.clearRect(2*BDwidth, 0, 64, 64);
-    ctxBD.beginPath();
-    ctxBD.moveTo(2*BDwidth + 32, 32);
-    ctxBD.bezierCurveTo(bx, by, cx, cy, dx, dy);
-    ctxBD.moveTo(2*BDwidth + 32, 32);
-    ctxBD.bezierCurveTo(ex, ey, fx, fy, gx, gy);
-    ctxBD.lineWidth = 4;
+    ctxCB.clearRect(0, 0, ctxCB.canvas.width, 64);
+    ctxCB.beginPath();
+    ctxCB.moveTo(32, 32);
+    ctxCB.bezierCurveTo(bx, by, cx, cy, dx, dy);
+    ctxCB.moveTo(32, 32);
+    ctxCB.bezierCurveTo(ex, ey, fx, fy, gx, gy);
+    ctxCB.lineWidth = 4;
 //    ctxCB.strokeStyle = "#303030";
-    ctxBD.strokeStyle = "white";
-    ctxBD.stroke();
+    ctxCB.strokeStyle = "white";
+    ctxCB.stroke();
 }
 
 function drawAccel(ctx, pos1, pos2, length, clearonly) {
@@ -1619,113 +1633,144 @@ function drawAccelT(ctx, pos1, pos2, length) {
 function drawTDCs(){
 
     drawTarget();
-
-    var stepSize = (BDwidth * 1.0)/(ROIL-ROIU); // this is how much the position needs to be scaled
-    var zero = (0-ROIU) * stepSize;
-    var currentStep = null;
-    var angleJump = null;
-
-    ctxBDt.font = "12px sans serif";
-    ctxBDt.fillStyle = "rgb(255,100,100)";
-    ctxBDt.textAlign = "center";
-    ctxBDt.textBaseline="bottom";
-    ctxBDt.fillText("TDC", posBS2 + BDwidth - zero, ctxBDt.canvas.height);
-    ctxBDt.fillText("TDC", posHS1 + zero, ctxBDt.canvas.height);
-    ctxBDt.fillText("TDC", posHS2 + BDwidth - zero, ctxBDt.canvas.height);
-    ctxBDt.fillText("TDC", posBS1 + zero, ctxBDt.canvas.height);
-    ctxBDt.fillText(ROIU.toString(), posHS1, ctxBDt.canvas.height);
-    ctxBDt.fillText(ROIU.toString(), posBS1, ctxBDt.canvas.height);
-//    ctxBDt.fillText(ROIL.toString(), posBS1, ctxBDt.canvas.height);
-//    ctxBDt.fillText(ROIL.toString(), posHS1 + BDwidth, ctxBDt.canvas.height);
-//    ctxBDt.fillText(ROIL.toString(), posHS2, ctxBDt.canvas.height);
-//    ctxBDt.fillText(ROIL.toString(), posBS1 + BDwidth, ctxBDt.canvas.height);
-    ctxBDt.beginPath();
-    ctxBDt.strokeStyle = "rgb(255,100,100)";
-    ctxBDt.moveTo(posHS1, ctxBDt.canvas.height - 16);
-    ctxBDt.lineTo(posHS1, 14);
-    ctxBDt.moveTo(posBS1, ctxBDt.canvas.height - 16);
-    ctxBDt.lineTo(posBS1, 14);
-    
-    ctxBDt.moveTo(posBS2 + BDwidth - zero, ctxBDt.canvas.height - 16);
-    ctxBDt.lineTo(posBS2 + BDwidth - zero, ctxBDt.canvas.height * 0.7);
-    ctxBDt.moveTo(posHS1 + zero, ctxBDt.canvas.height -16);
-    ctxBDt.lineTo(posHS1 + zero, ctxBDt.canvas.height * 0.7);
-    ctxBDt.moveTo(posHS2 + BDwidth - zero, ctxBDt.canvas.height - 16);
-    ctxBDt.lineTo(posHS2 + BDwidth - zero, ctxBDt.canvas.height * 0.7);
-    ctxBDt.moveTo(posBS1 + zero, ctxBDt.canvas.height - 16);
-    ctxBDt.lineTo(posBS1 + zero, ctxBDt.canvas.height * 0.7);
-    ctxBDt.stroke();
-
-    
+    if ((currentStatus & GRIDLINESDISPLAYED) == 0) return;
+    var stepSize=null;
+    var currentStep=0;
+    drawTDC(ctxHS1t,0,"TDC");
+    drawTDC(ctxHS2t,0,"TDC");
+    drawTDC(ctxBS1t,0,"TDC");
+    drawTDC(ctxBS2t,0,"TDC");
     if (ROIL-ROIU >=60){
-        angleJump=20;
+        stepSize=20;
         currentStep=20;
     } else {
-        angleJump=10;
+        stepSize=10;
         currentStep=10;
     }
-    ctxBDt.beginPath();
-    ctxBDt.strokeStyle = "rgb(255,100,100)";
-    while (currentStep < ROIL){
-        ctxBDt.fillText(currentStep.toString(), posBS2 + BDwidth - zero - (currentStep * stepSize), ctxBDt.canvas.height);
-        ctxBDt.moveTo(posBS2 + BDwidth - zero - (currentStep * stepSize), ctxBDt.canvas.height - 16);
-        ctxBDt.lineTo(posBS2 + BDwidth - zero - (currentStep * stepSize), ctxBDt.canvas.height * 0.7);
-
-        ctxBDt.fillText(currentStep.toString(), posHS1 + zero + (currentStep * stepSize), ctxBDt.canvas.height);
-        ctxBDt.moveTo(posHS1 + zero + (currentStep * stepSize), ctxBDt.canvas.height -16);
-        ctxBDt.lineTo(posHS1 + zero + (currentStep * stepSize), ctxBDt.canvas.height * 0.7);
-
-        ctxBDt.fillText(currentStep.toString(), posHS2 + BDwidth - zero - (currentStep * stepSize), ctxBDt.canvas.height);
-        ctxBDt.moveTo(posHS2 + BDwidth - zero - (currentStep * stepSize), ctxBDt.canvas.height - 16);
-        ctxBDt.lineTo(posHS2 + BDwidth - zero - (currentStep * stepSize), ctxBDt.canvas.height * 0.7);
-
-        ctxBDt.fillText(currentStep.toString(), posBS1 + zero + (currentStep * stepSize), ctxBDt.canvas.height);
-        ctxBDt.moveTo(posBS1 + zero + (currentStep * stepSize), ctxBDt.canvas.height -16);
-        ctxBDt.lineTo(posBS1 + zero + (currentStep * stepSize), ctxBDt.canvas.height * 0.7);
-
-        currentStep+=angleJump;
+    while (currentStep <= ROIL){
+        drawTDC(ctxHS1t,currentStep,currentStep.toString());
+        drawTDC(ctxHS2t,currentStep,currentStep.toString());
+        drawTDC(ctxBS1t,currentStep,currentStep.toString());
+        drawTDC(ctxBS2t,currentStep,currentStep.toString());
+        currentStep+=stepSize;
     }
-    ctxBDt.stroke();
-        
-    ctxBDt.textAlign = "start";
-    ctxBDt.textBaseline="alphabetic";
-
 }
 
 function drawTarget(){
-    var stepSize = (BDwidth * 1.0)/(ROIL-ROIU);
-    var zero = (0-ROIU) * stepSize;
+    var scaleSize = 120/(ROIL-ROIU);
 
-    if (targetAngleHand !== null && targetAngleHand >= ROIU  && targetAngleHand <= ROIL) {
-        ctxBDt.beginPath();
-        ctxBDt.lineWidth=4;
-        ctxBDt.strokeStyle="rgba(0,240,0,0.9)";
-        
-        ctxBDt.moveTo((BDwidth - zero)-(targetAngleHand * stepSize),14);
-        ctxBDt.lineTo((BDwidth - zero)-(targetAngleHand * stepSize), ctxBD.canvas.height-26);
+    if (targetAngleHand !== null) {
+        var angle = targetAngleHand;
+        var zero = -30+((angle-ROIU)*scaleSize);
+        zero = (zero+180)*Math.PI/180;
+        ctxHS1t.beginPath();
+        ctxHS1t.moveTo(0,0);
+        ctxHS1t.rotate(zero);
+        ctxHS1t.moveTo(0, 0.15*radius);
+        ctxHS1t.lineTo(0, 0.95*radius);
+        ctxHS1t.lineWidth=4;
+        ctxHS1t.strokeStyle="rgba(0,240,0,0.9)";
+        ctxHS1t.rotate(-zero);
+        ctxHS1t.stroke();
+        ctxHS1t.lineWidth=1;
 
-        ctxBDt.moveTo((BDwidth + zero) + (targetAngleHand * stepSize),14);
-        ctxBDt.lineTo((BDwidth + zero) + (targetAngleHand * stepSize), ctxBDt.canvas.height-26);
-       
-        ctxBDt.stroke();
-        ctxBDt.lineWidth=1;
+        zero = -30+((angle-ROIU)*scaleSize);
+        zero = (180-zero)*Math.PI/180;
+        ctxBS2t.beginPath();
+        ctxBS2t.moveTo(0,0);
+        ctxBS2t.rotate(zero);
+        ctxBS2t.moveTo(0, 0.15*radius);
+        ctxBS2t.lineTo(0, 0.95*radius);
+        ctxBS2t.lineWidth=4;
+        ctxBS2t.strokeStyle="rgba(0,240,0,0.9)";
+        ctxBS2t.rotate(-zero);
+        ctxBS2t.stroke();
+        ctxBS2t.lineWidth=1;
+
     }
-    
-    if (targetAngleBack !== null && targetAngleBack >= ROIU  && targetAngleBack <= ROIL) {
-        ctxBDt.beginPath();
-        ctxBDt.lineWidth=4;
-        ctxBDt.strokeStyle="rgba(0,240,0,0.9)";
-        
-        ctxBDt.moveTo(posHS2 + (BDwidth-zero)-(targetAngleBack * stepSize),14);
-        ctxBDt.lineTo(posHS2 + (BDwidth-zero)-(targetAngleBack * stepSize), ctxBD.canvas.height-26);
+    if (targetAngleBack !== null) {
 
-        ctxBDt.moveTo(posHS2 + (BDwidth + zero) + (targetAngleBack * stepSize),14);
-        ctxBDt.lineTo(posHS2 + (BDwidth + zero) + (targetAngleBack * stepSize), ctxBDt.canvas.height-26);
-       
-        ctxBDt.stroke();
-        ctxBDt.lineWidth=1;
+        angle = targetAngleBack;
+        zero = 270+(((360-angle)-(360-ROIL))*scaleSize);
+        zero = (zero-180)*Math.PI/180;
+        ctxHS2t.beginPath();
+        ctxHS2t.moveTo(0,0);
+        ctxHS2t.rotate(zero);
+        ctxHS2t.moveTo(0, 0.15*radius);
+        ctxHS2t.lineTo(0, 0.95*radius);
+        ctxHS2t.lineWidth=4;
+        ctxHS2t.strokeStyle="rgba(0,240,0,0.9)";
+        ctxHS2t.rotate(-zero);
+        ctxHS2t.stroke();
+        ctxHS2t.lineWidth=1;
+
+        angle = targetAngleBack;
+        zero = 270+(((360-angle)-(360-ROIL))*scaleSize);
+        zero = (180-zero)*Math.PI/180;
+        ctxBS1t.beginPath();
+        ctxBS1t.moveTo(0,0);
+        ctxBS1t.rotate(zero);
+        ctxBS1t.moveTo(0, 0.15*radius);
+        ctxBS1t.lineTo(0, 0.95*radius);
+        ctxBS1t.lineWidth=4;
+        ctxBS1t.strokeStyle="rgba(0,240,0,0.9)";
+        ctxBS1t.rotate(-zero);
+        ctxBS1t.stroke();
+        ctxBS1t.lineWidth=1;
+
     }
- }
+}
+
+
+function drawTDC(ctx,angle,text){
+    var scaleSize = 120/(ROIL-ROIU); // this is how much the position needs to be scaled
+    var zero = 0;
+    var rot=0;
+    var alt=false;
+
+    if (ctx === ctxHS1t){ // handstroke down
+        zero = -30+((angle-ROIU)*scaleSize);
+        zero = (zero+180)*Math.PI/180;
+        rot = 3.1415/2;
+
+    } else if (ctx === ctxHS2t) { // handstroke up
+        zero = 270+(((360-angle)-(360-ROIL))*scaleSize);
+        zero = (zero-180)*Math.PI/180;
+        rot = -3.1415/2;
+        alt = true;
+
+    } else if (ctx === ctxBS1t) { // backstroke down
+        zero = 270+(((360-angle)-(360-ROIL))*scaleSize);
+        zero = (180-zero)*Math.PI/180;
+        rot = 3.1415/2;
+
+    } else if (ctx === ctxBS2t) { // backstroke up
+        zero = -30+((angle-ROIU)*scaleSize);
+        zero = (180-zero)*Math.PI/180;
+        rot = -3.1415/2;
+        alt=true;
+    }
+    ctx.beginPath();
+    ctx.moveTo(0,0);
+    ctx.rotate(zero);
+    ctx.moveTo(0, 0.15*radius);
+    ctx.lineTo(0, 0.95*radius);
+    ctx.strokeStyle="rgb(255,100,100)";
+    ctx.rotate(-zero);
+    ctx.stroke();
+
+    ctx.font = "12px sans serif";
+    ctx.fillStyle = "rgb(255,100,100)";
+    ctx.rotate(zero+rot);
+    if (alt == false) {
+        ctx.textAlign = "end";
+        ctx.fillText(text, 0.95*radius, -3);
+    } else {
+        ctx.textAlign = "start";
+        ctx.fillText(text, -0.95*radius, -3);
+    }
+    ctx.rotate(-zero-rot);
+}
 
 function preventZoom(e) {
     var t2 = e.timeStamp;

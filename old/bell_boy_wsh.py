@@ -16,16 +16,19 @@
 
 # This script forms part of the Bell-Boy project to measure the force applied by a bell ringer to a tower
 # bell rope.  The Bell-Boy uses tangential acceleration of the bell as a proxy for force applied.  The
-# hardware is currently a Pi Zero running Arch Linux, a MPU6050 breakout board and the official Pi Wifi dongle
+# hardware is currently a Pi Zero running Arch Linux, two MPU6050 breakout boards and the official Pi Wifi dongle
+# The MPU6050 breakout boards are mounted on opposite sides of the bell axle such that gravity pulls
+# on the MPU6050s in the same direction but so that the tangential acceleration applied by the ringer 
+# works in opposite directions on each sensor.  This makes it easy to separate out tangential acceleration 
+# due to gravity and tangential acceleration due to force applied.
 
-# This version of the pywebsocket file is used to test a single accelerometer
-
-# I pulled snippets of code from loads of places so if any of you recognise anything you wrote - thanks! 
+# I pulled anippets of code from loads of places so if any of you recognise anything you wrote - thanks! 
 
 # The script below is called by pywebsocket https://github.com/google/pywebsocket.  Websockets are needed 
 # by the front-end Javascript which pulls data from the Bell-Boy device.
 
-# The MPU6050 device is connected to the I2C-1 GPIOs on the Raspberry Pi (GPIOs 2 and 3, header pins 3 and 5)
+# The two MPU6050 devices are connected to I2C-1 GPIOs on the Raspberry Pi (GPIOs 2 and 3, header pins 3 and 5)
+# One MPU6050 should have the AD0 pin pulled high so that it appears on the I2C bus at address 0x69
 
 from multiprocessing import Process, Queue, Event
 from time import time,sleep,strftime
@@ -40,6 +43,7 @@ from MPUConstants import MPUConstants as C
 import smbus
 
 DEV_ADDR_1=0x68
+DEV_ADDR_2=0x69
 i2c=smbus.SMBus(1)
 sample_period = 1/50.0 # this is the current sample period (50 samples/sec].  This needs to reflect 
                        # MPU6050_RA_SMPLRT_DIV in enable_FIFO in the MPU6050 class
@@ -134,37 +138,62 @@ class process_sample(Process):
         self.datastore = []
         self.negateReadings = None
         self.stopped = workerevent
-        self.imu=MPU6050(DEV_ADDR_1)
+        self.imu1=MPU6050(DEV_ADDR_1)
+        self.imu2=MPU6050(DEV_ADDR_2)
         self.kalfilter = Kalman()
         self.timestamp = 0.0
-        self.lastGyro = 0.0
-        if self.imu.who_am_i() != 104:  # can't detect one of the IMUs
+        if self.imu1.who_am_i() != 104 or self.imu2.who_am_i() != 104:  # can't detect one of the IMUs
             self.q.put("EIMU:")
         else:
 # these values are determined through a separate calibration process (one time only)
-            self.imu.set_x_accel_offset(-5886)
-            self.imu.set_y_accel_offset(-1269)
-            self.imu.set_z_accel_offset(1331)
-            self.imu.set_x_gyro_offset(38)
-            self.imu.set_y_gyro_offset(-35)
-            self.imu.set_z_gyro_offset(15)
+            self.imu1.set_x_accel_offset(-5886)
+            self.imu1.set_y_accel_offset(-1269)
+            self.imu1.set_z_accel_offset(1331)
+            self.imu1.set_x_gyro_offset(38)
+            self.imu1.set_y_gyro_offset(-35)
+            self.imu1.set_z_gyro_offset(15)
             
-            self.imu.enable_FIFO()
-            self.imu.reset_FIFO()
+            self.imu2.set_x_accel_offset(-4532)
+            self.imu2.set_y_accel_offset(-1774)
+            self.imu2.set_z_accel_offset(1414)
+            self.imu2.set_x_gyro_offset(146)
+            self.imu2.set_y_gyro_offset(8)
+            self.imu2.set_z_gyro_offset(73)
+            
+            self.imu1.enable_FIFO()
+            self.imu2.enable_FIFO()
+            self.imu1.reset_FIFO()
+            self.imu2.reset_FIFO()
             
             Process.__init__ (self)
             
     def run(self):
         while not self.stopped.wait(self.interval):
-            fifo = self.imu.get_FIFO_count()
-            if fifo == 1024: # should never happen
-                self.imu.reset_FIFO()
+            fifo1 = self.imu1.get_FIFO_count()
+            fifo2 = self.imu2.get_FIFO_count()
+            if fifo1 == 1024 or fifo2 == 1024: # should never happen
+                self.imu1.reset_FIFO()
+                self.imu2.reset_FIFO()
                 print "Overflow"
                 continue
-            while fifo >= 12:
-                data = self.imu.read_FIFO_block()
-                fifo -= 12
-                self.kalfilter.calculate(data[1],data[2], data[3]) 
+            if fifo1 - fifo2 >= 24:  # MPU6050 clocks are not quite in sync.  Part of calibration will be to work out the clocks that are closest but this section ditches samples of the faster funning IMU
+                ditch = self.imu1.read_FIFO_block()
+                fifo1 -= 12
+                print "Out of sync"
+            elif fifo2 - fifo1 >= 24:
+                ditch = self.imu2.read_FIFO_block()
+                fifo2 -= 12
+                print "Out of sync"
+            while fifo1 >= 12 and fifo2 >= 12:
+                data1 = self.imu1.read_FIFO_block()
+                data2 = self.imu2.read_FIFO_block()
+                fifo1 -= 12
+                fifo2 -= 12
+                accGravY = (data1[1] + data2[1])/2.0 # for the Y axis gravity is pulling in the same direction on the sensor, centripetal acceleration in opposite direction so add to get gravity
+                accGravZ = (data1[2] + data2[2])/2.0 # for the Z axis gravity is pulling in the same direction on the sensor, tangential acceleration in opposite direction so add two readings to get gravity only.
+                accTang = (data2[2] - data1[2])/2.0 # this is the tangential acceleration signal we want to measure
+                avgGyro = (data1[3] + data2[3])/2.0 # may as well average the two X gyro readings
+                self.kalfilter.calculate(accGravY,accGravZ, avgGyro) 
                 self.timestamp += (sample_period * 1000000) # 50 samples/sec in microseconds
 
                 if self.initcount != 100: # ditch first two seconds to allow for stability (doesn't need that much)
@@ -186,14 +215,12 @@ class process_sample(Process):
                         else:
                             print "out of range %f" % (self.kalfilter.KalAngle)
                             self.q.put("ESTD:")
-                        if abs(data[3] > 0.1): # if moving more than 0.1 degrees.sec
+                        if abs(avgGyro > 0.1): # if moving more than 0.1 degrees.sec
                             self.q.put("EMOV:")
-                        self.lastGyro=data[3]
                     continue
-                accel = data[3]-self.lastGyro # quick and dirty diff, arbitary units
+                accel = accTang * 8192 # 8192 * g force
                 angle = self.kalfilter.KalAngle # degrees
-                rate = data[3] # degrees/sec
-                self.lastGyro = rate
+                rate = avgGyro # degrees/sec
                 if self.negateReadings:
                     angle = -1.0*angle
                     rate = -1.0*rate
@@ -201,7 +228,7 @@ class process_sample(Process):
                 entry = "A:{0:.3f},R:{1:.3f},C:{2:.3f}".format(angle,rate,accel)
                 self.q.put(entry + "\n")
 #                self.datastore.append("A:{0:.3f},R:{1:.3f},C:{2:.3f}, X:{3:.3f}, Z:{4:.3f}, TS:{5:d}, GY:{6:.3f}, GZ:{7:.3f}".format(angle,rate,accn,accel[0],accel[2],tstamp,gyro[1],gyro[2]))
-                self.datastore.append("A:{0:.3f},R:{1:.3f},C:{2:.3f},TS :{3:1f},AX1:{4:.3f},AY1:{5:.3f},AZ1:{6:.3f},AX2:{7:.3f},AY2:{8:.3f},AZ2:{9:.3f},GX1:{10:.3f},GY1:{11:.3f},GZ1:{12:.3f},GX2:{13:.3f},GY2:{14:.3f},GZ2:{15:.3f}".format(angle,rate,accel,0.0,data[0],data[1],data[2],0.0,0.0,0.0,data[3],data[4],data[5],0.0,0.0,0.0))
+                self.datastore.append("A:{0:.3f},R:{1:.3f},C:{2:.3f},TS :{3:1f},AX1:{4:.3f},AY1:{5:.3f},AZ1:{6:.3f},AX2:{7:.3f},AY2:{8:.3f},AZ2:{9:.3f},GX1:{10:.3f},GY1:{11:.3f},GZ1:{12:.3f},GX2:{13:.3f},GY2:{14:.3f},GZ2:{15:.3f}".format(angle,rate,accel,int(self.timestamp),data1[0],data1[1],data1[2],data2[0],data2[1],data2[2],data1[3],data1[4],data1[5],data2[3],data2[4],data2[5]))
                 if self.q.qsize() > 500: # if nowt being pulled for 10 secs assume broken link and save off what we have
                     self.filename += "(aborted)"
                     break
@@ -435,3 +462,6 @@ class MPU6050:
 
         self.write_bit(C.MPU6050_RA_USER_CTRL,C.MPU6050_USERCTRL_FIFO_EN_BIT, 1)            
             
+       
+    
+

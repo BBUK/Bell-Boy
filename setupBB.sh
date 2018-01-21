@@ -16,29 +16,22 @@
 #       ACCEPT LIABILITY FOR DEATH OR PERSONAL INJURY CAUSED BY NEGLIGENCE AND FOR ALL MATTERS LIABILITY 
 #       FOR WHICH MAY NOT BE LAWFULLY LIMITED OR EXCLUDED UNDER ENGLISH LAW
 
-# This script forms part of the Bell-Boy project to measure the force applied by a bell ringer to a tower
-# bell rope.  The Bell-Boy uses tangential acceleration of the bell as a proxy for force applied.  The
-# hardware is currently a Pi Zero running Arch Linux, two MPU6050 breakout boards and the official Pi Wifi dongle
-# The MPU6050 breakout boards are mounted on opposite sides of the bell axle such that gravity pulls
-# on MPU6050s in the same direction but so that the tangential acceleration applied by the ringer 
-# works in opposite directions on each sensor.  This makes it easy to separate out tangential acceleration 
-# due to gravity and tangential acceleration due to force applied.
-
 # The script below takes a stock installation of Arch Linux Arm (for the Raspberry Pi) and adds all scripts
 # and installs all required packages to turn the Pi into a Bell-Boy device. General instructions are: 
-#    (a)    Install Arch Linux to an SD card https://archlinuxarm.org/platforms/armv6/raspberry-pi or 
-#           https://archlinuxarm.org/platforms/armv7/broadcom/raspberry-pi-2;
+#    (a)    Install Arch Linux to an SD card https://archlinuxarm.org/platforms/armv6/raspberry-pi;
 #    (b)    Copy this script to the FAT partition (for convenience)
-#    (c)    Pop the SD card into your Raspberry Pi and boot it up with an internet connection (use ethernet
-#           port or usb/ethernet adapter)
-#    (d)    SSH into the Pi (username alarm, password alarm), change to root user (su root, password root) 
-#    (e)    run this script - it will take a while
-# Note that for first time usage, the MPU6050s should be calibrated and that the MPU6050 clocks need to be
-# chosen in order to sync the two MPU6050s as far as is reasonably possible.
+#    (c)    Pop the SD card into your Raspberry Pi and boot it up with an internet connection (usb/ethernet adapter)
+#    (d)    SSH into the Pi hostname alarmpi (or use IP address set up by your router), log in
+#           (username alarm, password alarm), change to root user (su root, password root) 
+#    (e)    run this script - /boot/setup.sh (assuming you placed the script into the FAT partition.
 
+# This script also configures some GPIO pins of the Pi.  GPIO 17 (pulled down by the DTS compiled below)
+# is used to detect whether the power button has been pressed on the device (i.e. when it has been switched on)
+# so that it can be shut down.  The GPIO power down overlay is configured to use GPIO 18 to indicate power
+# up.  The standard PCB for the device wires things up to these GPIOs.   
 
 PORTABLEWIFINETWORK=Bell-Boy
-HOSTNAME=Bell-Boy_D
+HOSTNAME=Bell-Boy
 
 if [ $(id -u) -ne 0 ]; then
     echo "You appear not to be running as root user (an assumption this script makes).  Try 'su root'.  Exiting"
@@ -49,9 +42,9 @@ if [ $(cat /boot/config.txt | grep 'dtparam=i2c_arm=on' | wc -l) -eq 0 ]; then
   echo -e "\ndtparam=i2c_arm=on\ndtparam=i2c_arm_baudrate=400000\n" | tee -a /boot/config.txt
 fi
 
-if [ $(cat /boot/config.txt | grep 'dtoverlay=pi3-disable-wifi' | wc -l) -eq 0 ]; then
-  echo -e "\ndtoverlay=pi3-disable-wifi\n" | tee -a /boot/config.txt
-fi
+#if [ $(cat /boot/config.txt | grep 'dtoverlay=pi3-disable-wifi' | wc -l) -eq 0 ]; then
+#  echo -e "\ndtoverlay=pi3-disable-wifi\n" | tee -a /boot/config.txt
+#fi
 
 if [ $(cat /boot/config.txt | grep 'dtoverlay=pi3-disable-bt' | wc -l) -eq 0 ]; then
   echo -e "\ndtoverlay=pi3-disable-bt\n" | tee -a /boot/config.txt
@@ -66,7 +59,7 @@ fi
 #fi
 
 if [ $(cat /boot/config.txt | grep 'dtoverlay=gpio-poweroff' | wc -l) -eq 0 ]; then
-  echo -e "\ndtoverlay=gpio-poweroff,gpiopin=5,active_low\n" | tee -a /boot/config.txt
+  echo -e "\ndtoverlay=gpio-poweroff,gpiopin=18,active_low\n" | tee -a /boot/config.txt
 fi
 
 if [ $(cat /etc/modules-load.d/raspberrypi.conf | grep 'i2c-dev' | wc -l) -eq 0 ]; then
@@ -113,12 +106,6 @@ max-lease-time 7200;
 option domain-name "Bell-Boy";
 }
 HDHD
-
-#wget --no-check-certificate http://www.dropbox.com/s/rcxkbidv7a3t9kk/hostapd-rtl8192cu-0.8-1.src.tar.gz { echo "Failed download hostapd.  Exiting"; exit 1; }
-#tar -zxvf hostapd-rtl8192cu-0.8-1.src.tar.gz
-#cd hostapd*
-#su alarm -c "makepkg" || { echo "Failed to build hostapd.  Exiting"; exit 1; }
-#pacman -U --noconfirm *.xz
 
 tee /etc/hostapd/hostapd.conf << HDHD || { echo "Unable to write hostapd config - exiting"; exit 1; }
 interface=wlan0
@@ -180,13 +167,6 @@ WantedBy=multi-user.target
 HDHD
 
 #cd ~
-#
-#git clone https://github.com/adafruit/Adafruit_Python_BNO055.git
-#cd Adafruit_Python_BNO055
-#curl https://github.com/johnweber/Adafruit_Python_BNO055/commit/424916e703a20b413d120ca8e99ade2c70e7f56f.patch | patch -f -p1 -i -
-#python2 setup.py install || { echo "Unable to install BNO055 files"; exit 1; }
-
-#cd ~
 #git clone https://github.com/RTIMULib/RTIMULib2.git
 #cd RTIMULib2/Linux/python
 #python2 setup.py build || { echo "Unable to install RTIMULib2 files"; exit 1; }
@@ -205,6 +185,10 @@ mv * /srv/http
 
 mkdir -p /data/samples
 mv samples/* /data/samples/
+
+cd python
+python2 setup.py build_ext --inplace || { echo "Unable to build dcmimu module"; exit 1; }
+cp dcmimu.so /srv/http/
 
 cd ~
 tee gpio_pull-overlay.dts <<HDHD
@@ -231,9 +215,9 @@ tee gpio_pull-overlay.dts <<HDHD
     target = <&gpio>;
     __overlay__ {
        gpio_pins: gpio_pins {
-          brcm,pins = <6 13>; /* list of gpio(n) pins to pull */
-          brcm,function = <0 0>; /* boot up direction:in=0 out=1 */
-          brcm,pull = <2 1>; /* pull direction: none=0, 1 = down, 2 = up */
+          brcm,pins = <17>; /* list of gpio(n) pins to pull */
+          brcm,function = <0>; /* boot up direction:in=0 out=1 */
+          brcm,pull = <1>; /* pull direction: none=0, 1 = down, 2 = up */
        };
     };
   };
@@ -261,13 +245,21 @@ if [ $(cat /boot/config.txt | grep 'dtoverlay=gpio_pull' | wc -l) -eq 0 ]; then
   echo -e "\ndtoverlay=gpio_pull\n" | tee -a /boot/config.txt
 fi
 
-if [ ! -f /etc/samba/smb.conf ]; then
-  cp /etc/samba/smb.conf.default /etc/samba/smb.conf
-fi
+tee /etc/samba/smb.conf <<HDHD
+[global]
+# workgroup = NT-Domain-Name or Workgroup-Name
+workgroup = WORKGROUP
 
-comp=`cat /etc/samba/smb.conf | grep '\[BELL SAMPLES\]'`
-if [ ! "$comp" = "[BELL SAMPLES]" ]; then
-  tee -a /etc/samba/smb.conf <<HDHD
+server string = Samba Server
+
+printcap name = /etc/printcap
+load printers = no
+log file = /var/log/samba/%m.log
+max log size = 50
+map to guest = Bad User
+security = user
+dns proxy = no 
+
 [BELL SAMPLES]
 comment = Bell-Boy Recorded Samples
 path = /data/samples
@@ -280,12 +272,6 @@ browseable = yes
 force user = root
 public = yes
 HDHD
-  sed -i '
-/security = user/ i\
-    map to guest = Bad User
-' /etc/samba/smb.conf
-  sed -i 's/MYGROUP/WORKGROUP/' etc/samba/smb.conf
-fi
 
 systemctl enable bellboy
 systemctl enable dhcpd4

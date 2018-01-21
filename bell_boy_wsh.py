@@ -15,20 +15,13 @@
 #       FOR WHICH MAY NOT BE LAWFULLY LIMITED OR EXCLUDED UNDER ENGLISH LAW
 
 # This script forms part of the Bell-Boy project to measure the force applied by a bell ringer to a tower
-# bell rope.  The Bell-Boy uses tangential acceleration of the bell as a proxy for force applied.  The
-# hardware is currently a Pi Zero running Arch Linux, two MPU6050 breakout boards and the official Pi Wifi dongle
-# The MPU6050 breakout boards are mounted on opposite sides of the bell axle such that gravity pulls
-# on the MPU6050s in the same direction but so that the tangential acceleration applied by the ringer 
-# works in opposite directions on each sensor.  This makes it easy to separate out tangential acceleration 
-# due to gravity and tangential acceleration due to force applied.
+# bell rope.  The Bell-Boy uses rotationsl acceleration of the bell as a proxy for force applied.  The
+# hardware is currently a Pi Zero running Arch Linux and an Adafruit Precision NXP Breakout Board
 
 # I pulled anippets of code from loads of places so if any of you recognise anything you wrote - thanks! 
 
-# The script below is called by pywebsocket https://github.com/google/pywebsocket.  Websockets are needed 
-# by the front-end Javascript which pulls data from the Bell-Boy device.
-
-# The two MPU6050 devices are connected to I2C-1 GPIOs on the Raspberry Pi (GPIOs 2 and 3, header pins 3 and 5)
-# One MPU6050 should have the AD0 pin pulled high so that it appears on the I2C bus at address 0x69
+# The script below is used by pywebsocket https://github.com/google/pywebsocket.  The websocket created by pywebsocket
+# is used to deal with communication with the users browser and the Javascrip code running on it. 
 
 from multiprocessing import Process, Queue, Event
 from time import time,sleep,strftime
@@ -39,25 +32,63 @@ from subprocess import call
 import sys
 import os.path
 import math
-from MPUConstants import MPUConstants as C
-import smbus
 
-DEV_ADDR_1=0x68
-DEV_ADDR_2=0x69
-i2c=smbus.SMBus(1)
-sample_period = 1/50.0 # this is the current sample period (50 samples/sec].  This needs to reflect 
-                       # MPU6050_RA_SMPLRT_DIV in enable_FIFO in the MPU6050 class
+import dcmimu
+
+sample_period = None    # this is the sample period measured by dcmimu.NXP_fifo_timer().  It
+                        # may differ from the chosen sample rate (datasheet says by up to 2.5%)
+chosen_sample_rate = 200 # this is the chosen number of samples per second.  Must be one of 25 50 100 200 400 and 800
 
 dataQueue=Queue()
 
 worker = None
 workerevent = None
 
+#system("/usr/bin/sync && /usr/bin/shutdown -P now")
+
 def web_socket_do_extra_handshake(request):
     pass
+#    request.ws_stream.send_message("SAMP:%f", binary=False)
+
+    
+# There are eight possible command sent by the user's browser:
+# (a)   STRT:[filename] Start recording a session with a bell.  The bell
+#       must be at stand and (reasonably) stationary otherwise this script
+#       will return ESTD: or EMOV: either of which signals the browser 
+#       to stop expecting data.  If Filename is not provided then a
+#       default filename of "CurrentRecording [date]" is used.
+# (b)   STOP: stops a recording in progress.  This also saves off the
+#       collected data into a file in /data/samples/
+# (c)   LDAT: a request for data from the broswer, only works when there
+#       is a recording in progress
+# (d)   FILE: get a listing of the previous recordings stored in
+#       /data/samples/ .  Used to display the selection box to the user.
+# (e)   LOAD:[filename] used to transmit a previous recording to the browser
+# (f)   DATE:[string] sets the date on the device to the date on the browser 
+#             string is unixtime (microsecs since 1/1/70)
+# (g)   SAMP: requests the current sample period
+# (h)   SHDN: tells the device to shutdown
+# 
+# There are the following responses back to the user's browser:
+# (i)   STPD: tells the browser that the device has sucessfully stopped sampling
+# (ii)  ESTP: signals an error in the stop process (an attempt to stopped when not started)
+# (iii) LIVE:[string] the string contains the data recorded by the device in the format
+#             "A:[angle]R:[rate]C:[acceleration]".  Angle, rate and acceleration are 
+#             ordinary floating point numbers.  Angle is in degrees, rate is in degrees/sec
+#             and acceleration is in degrees/sec/sec.
+# (iv)  NDAT: indicates that there is no current data to send to the browser
+# (v)   SAMP: returns the sample period
+# (vi)  EIMU: IMU not detected
+# (vii) ESTD: bell not at stand (aborts started session)
+# (viii)EMOV: bell moving when session started (the bell has to be stationary at start)
+# (ix)  ESAM: (sent by dcmimu) sample period needs to be measured first - dcmimu.NXP_fifo_timer()
+# (x)   EFIF: (sent by dcmimu) fifos need to be started before calling dcmimu.NXP_pull_data()
+# (xi)  ESTR: (sent by dcmimu) internal error related to data from dcmimu - shouldn't happen!
+# (xii) DATA:[string]  chunk of data from a previously stored file.  In same format as LIVE:
+# (xiii)EOVF: (sent by dcmimu) fifo overflow flagged.
 
 def web_socket_transfer_data(request):
-    global worker,workerevent
+    global worker,workerevent,sample_period
     while True:
         instruction = request.ws_stream.receive_message()
         if instruction is None:
@@ -75,7 +106,7 @@ def web_socket_transfer_data(request):
         elif instruction[:5] == "STOP:":
             if worker is not None:
                 workerevent.set()
-                sleep(1) # allow existing server threads to stop but must dump any further LDATS: recieved (done in JS)
+                sleep(1) # allow existing grabber thread to stop but must dump any further LDATS: recieved (done in JS)
                 request.ws_stream.send_message("STPD:quite a few", binary=False)
                 while (not dataQueue.empty()):
                     dataQueue.get(False)
@@ -90,7 +121,7 @@ def web_socket_transfer_data(request):
                 while (not dataQueue.empty()):
                     temp=dataQueue.get()
                     if temp[:1] == "E": # error flagged
-                        workerevent.set() # doesn't appear to need a sleep here
+                        workerevent.set() # shut down grabber thread.  Doesn't appear to need a sleep here
                         data_out=[]
                         data_out.append(temp)
                         while (not dataQueue.empty()):
@@ -99,7 +130,7 @@ def web_socket_transfer_data(request):
                         data_out.append("LIVE:" + temp)
                 request.ws_stream.send_message(''.join(data_out), binary=False)
             else:
-                request.ws_stream.send_message("NDAT:", binary=False)
+                request.ws_stream.send_message("NDAT:", binary=False) # send no-data as response
 
         elif instruction[:5] == "FILE:":
             for line in [f for f in listdir("/data/samples/") if isfile(join("/data/samples/", f))]:
@@ -108,7 +139,11 @@ def web_socket_transfer_data(request):
             with open('/data/samples/' + instruction[5:]) as f:
                 chunk = 0
                 data_out = []
+                reduceSampleFreq = 0 # only give one out of 2 lines to client.
                 for line in f:
+                    reduceSampleFreq += 1
+                    if reduceSampleFreq & 0x01 != 0:
+                        continue
                     chunk += 1
                     if (line == "" or len(line.split(",")) < 3): #ignore bad line
                         chunk -= 1
@@ -120,348 +155,99 @@ def web_socket_transfer_data(request):
                 if (chunk % 60) != 0:
                     request.ws_stream.send_message(''.join(data_out), binary=False)
                 request.ws_stream.send_message("LFIN: " + str(chunk), binary=False)
+        elif instruction[:5] == "DATE:":
+            system("/usr/bin/date --set=\"$(date --date='@%s')\" && touch /var/lib/systemd/clock" % instruction[5:])
+        elif instruction[:5] == "SAMP:":
+            try:
+                result = dcmimu.NXP_test()
+                if result < 0:
+                    request.ws_stream.send_message("EIMU:", binary=False)
+                else:
+                    sample_period=dcmimu.NXP_fifo_timer(chosen_sample_rate)
+                    request.ws_stream.send_message("SAMP:" + str(sample_period), binary=False)
+                    sample_period = result 
+            except:
+                request.ws_stream.send_message("EIMU:", binary=False)
         elif instruction[:5] == "SHDN:":
             system("/usr/bin/sync && /usr/bin/shutdown -P now")
             #pass
 
-            
-# Using multiprocessing class here.  At some point the Pi 3A will become available
-# and we can then really ramp up the sample rate as this could run in its own core.
-# At the moment with 50 samples/sec and everything else going on here, we are
-# burning about 50% CPU.
+
+# The purpose of this class is to pull readings from the IMU sensor and use them to calculate the rotational
+# acceleration, rotational velocity and position (angle) of the bell.
+#
+# The co-ordinate system we are using is such that zero degrees is TDC at start of handstroke/end of backstroke
+# and 360 degrees is TDC at end of handstroke/beginning of backstroke.  180 degrees is with the open end of the
+# bell facing straight down.  The overall range is between about -15 degrees (stand at handstroke) to 
+# 375 degrees (stand at backstroke).
+# 
+# The special properties of the bell system introduces some complexities and makes some simplifications possible.
+# 
+# One complexity is that for a significant proportion of the stroke, the bell is under large angular
+# acceleration - this means that accelerometer values can not be reliably used to determine orientation.
+# The traditional methods of calulating orientation (eg using complementary or kalman filters) will not work well.
+# What this class does, therefore, is to use a gyro-only position calculation when the bell is accelerating
+# hard and flip to a gyro only method otherwise.
+
 class process_sample(Process):
     def __init__ (self, filename, interval, q, workerevent):
         self.filename = filename
         self.interval = interval
         self.q = q
-        self.initcount = 0
         self.datastore = []
-        self.negateReadings = None
         self.stopped = workerevent
-        self.imu1=MPU6050(DEV_ADDR_1)
-        self.imu2=MPU6050(DEV_ADDR_2)
-        self.kalfilter = Kalman()
-        self.timestamp = 0.0
-        if self.imu1.who_am_i() != 104 or self.imu2.who_am_i() != 104:  # can't detect one of the IMUs
-            self.q.put("EIMU:")
-        else:
-# these values are determined through a separate calibration process (one time only)
-            self.imu1.set_x_accel_offset(-5886)
-            self.imu1.set_y_accel_offset(-1269)
-            self.imu1.set_z_accel_offset(1331)
-            self.imu1.set_x_gyro_offset(38)
-            self.imu1.set_y_gyro_offset(-35)
-            self.imu1.set_z_gyro_offset(15)
-            
-            self.imu2.set_x_accel_offset(-4532)
-            self.imu2.set_y_accel_offset(-1774)
-            self.imu2.set_z_accel_offset(1414)
-            self.imu2.set_x_gyro_offset(146)
-            self.imu2.set_y_gyro_offset(8)
-            self.imu2.set_z_gyro_offset(73)
-            
-            self.imu1.enable_FIFO()
-            self.imu2.enable_FIFO()
-            self.imu1.reset_FIFO()
-            self.imu2.reset_FIFO()
-            
-            Process.__init__ (self)
+        self.rotations = [ -1, -1, -1] # x,y and z direction corrections
+        Process.__init__ (self)
             
     def run(self):
-        while not self.stopped.wait(self.interval):
-            fifo1 = self.imu1.get_FIFO_count()
-            fifo2 = self.imu2.get_FIFO_count()
-            if fifo1 == 1024 or fifo2 == 1024: # should never happen
-                self.imu1.reset_FIFO()
-                self.imu2.reset_FIFO()
-                print "Overflow"
-                continue
-            if fifo1 - fifo2 >= 24:  # MPU6050 clocks are not quite in sync.  Part of calibration will be to work out the clocks that are closest but this section ditches samples of the faster funning IMU
-                ditch = self.imu1.read_FIFO_block()
-                fifo1 -= 12
-                print "Out of sync"
-            elif fifo2 - fifo1 >= 24:
-                ditch = self.imu2.read_FIFO_block()
-                fifo2 -= 12
-                print "Out of sync"
-            while fifo1 >= 12 and fifo2 >= 12:
-                data1 = self.imu1.read_FIFO_block()
-                data2 = self.imu2.read_FIFO_block()
-                fifo1 -= 12
-                fifo2 -= 12
-                accGravY = (data1[1] + data2[1])/2.0 # for the Y axis gravity is pulling in the same direction on the sensor, centripetal acceleration in opposite direction so add to get gravity
-                accGravZ = (data1[2] + data2[2])/2.0 # for the Z axis gravity is pulling in the same direction on the sensor, tangential acceleration in opposite direction so add two readings to get gravity only.
-                accTang = (data2[2] - data1[2])/2.0 # this is the tangential acceleration signal we want to measure
-                avgGyro = (data1[3] + data2[3])/2.0 # may as well average the two X gyro readings
-                self.kalfilter.calculate(accGravY,accGravZ, avgGyro) 
-                self.timestamp += (sample_period * 1000000) # 50 samples/sec in microseconds
+        try:
+            if dcmimu.NXP_test() < 0:
+                self.q.put("EIMU:")
+                return
+            if dcmimu.set_rotations(self.rotations[0],self.rotations[1],self.rotations[2]) < 0:
+                self.q.put("EIMU:")
+                return
+            dcmimu.set_debug()
+            dcmimu.set_swap_XY()
+            initials = dcmimu.NXP_get_orientation()
+            if abs(initials[0]) > 5.0 or abs(initials[1]) > 5.0 or abs(initials[2]) > 5.0:
+                self.q.put("EMOV:") # bell moving
+                return
+            start_angle = atan2(initials[4],initials[5])*180/3.142
+            if start_angle < 20 and start_angle >= 3: #angle is "wrong" way round
+                print "wrong %f" % (start_angle)
+                dcmimu.set_rotations(-self.rotations[0],-self.rotations[1],self.rotations[2])
+            elif start_angle > -20 and start_angle <= -3: #angle is "right" way round
+                print "right %f" % (start_angle)
+            else:
+                print "out of range %f" % (start_angle)
+                self.q.put("ESTD:")
+            dcmimu.NXP_start_fifos(200,500,2) # ODR, gyro range, accel range
+            sleep(0.05)
+            results = dcmimu.NXP_pull_data() # get Kalman to settle down
+            print results
+        except:
+            print("Exception")
+            self.q.put("EIMU:")
+            dcmimu.NXP_stop_fifos();
+            return
 
-                if self.initcount != 100: # ditch first two seconds to allow for stability (doesn't need that much)
-                    self.initcount +=1
-# To make mounting easier we don't want then user to think too much about which way the bell is going to rotate
-# so we allow for two mounting positions, the difference being the measurement of the angle when the bell is at
-# stand.  Tests have shown that the reported angle at stand is about 9-10 degrees from balance so if the bell
-# is in that range we define it as being at stand.  The two possibilities are angle at stand between -20 and -3 degrees
-# we define this as the "right" way i.e. angles as per the Kalman filter and pull at handstroke producing
-# positive acceleration and postive velocity.  If at stand the bell is reporting an angle between 3 and 20
-# we define this as the wrong way and have to negate angle, velocity and acceleration readings.
-                    if self.initcount == 100:
-                        if self.kalfilter.KalAngle < 20 and self.kalfilter.KalAngle >= 3: #angle is "wrong" way round
-                            self.negateReadings=True
-                            print "wrong %f" % (self.kalfilter.KalAngle)
-                        elif self.kalfilter.KalAngle > -20 and self.kalfilter.KalAngle <= -3: #angle is "right" way round
-                            self.negateReadings=False
-                            print "right %f" % (self.kalfilter.KalAngle)
-                        else:
-                            print "out of range %f" % (self.kalfilter.KalAngle)
-                            self.q.put("ESTD:")
-                        if abs(avgGyro > 0.1): # if moving more than 0.1 degrees.sec
-                            self.q.put("EMOV:")
-                    continue
-                accel = accTang * 8192 # 8192 * g force
-                angle = self.kalfilter.KalAngle # degrees
-                rate = avgGyro # degrees/sec
-                if self.negateReadings:
-                    angle = -1.0*angle
-                    rate = -1.0*rate
-                    accn = -1.0*accel
-                entry = "A:{0:.3f},R:{1:.3f},C:{2:.3f}".format(angle,rate,accel)
-                self.q.put(entry + "\n")
-#                self.datastore.append("A:{0:.3f},R:{1:.3f},C:{2:.3f}, X:{3:.3f}, Z:{4:.3f}, TS:{5:d}, GY:{6:.3f}, GZ:{7:.3f}".format(angle,rate,accn,accel[0],accel[2],tstamp,gyro[1],gyro[2]))
-                self.datastore.append("A:{0:.3f},R:{1:.3f},C:{2:.3f},TS :{3:1f},AX1:{4:.3f},AY1:{5:.3f},AZ1:{6:.3f},AX2:{7:.3f},AY2:{8:.3f},AZ2:{9:.3f},GX1:{10:.3f},GY1:{11:.3f},GZ1:{12:.3f},GX2:{13:.3f},GY2:{14:.3f},GZ2:{15:.3f}".format(angle,rate,accel,int(self.timestamp),data1[0],data1[1],data1[2],data2[0],data2[1],data2[2],data1[3],data1[4],data1[5],data2[3],data2[4],data2[5]))
-                if self.q.qsize() > 500: # if nowt being pulled for 10 secs assume broken link and save off what we have
-                    self.filename += "(aborted)"
-                    break
+        while not self.stopped.wait(self.interval * 4): # wait for a few samples to build up before pulling them
+            results = dcmimu.NXP_pull_data()
+            if len(results) == 0:
+                continue
+            for entry in results.split("\n"):
+                if entry[:5] == "EOVF:":
+                    print("Overflow")
+                else:
+                    self.q.put(entry[:29] + "\n")
+                self.datastore.append(entry)
+#         output.append("A:{0:.3f},R:{1:.3f},C:{2:.3f},AX:{3:.3f},AY:{4:.3f},AZ:{5:.3f},GX:{6:.3f},GY:{7:.3f},GZ:{8:.3f}, ATN:{9:.3f}".format(calcAngle,gx1,(accTang*8192.0/100.0)-0*sin(calcAngle*3.1416/180),ax1,ay1,az1,gx1,gy1,gz1, accAngle))
+
+            if self.q.qsize() > 500: # if nowt being pulled for a bit then assume broken link and save off what we have
+                self.filename += "(aborted)"
+                break
+        dcmimu.NXP_stop_fifos()
         with open('/data/samples/' + self.filename, "w") as f:
             f.writelines( "%s\n" % item for item in self.datastore )
-
-            
-# Thanks to TKJ Electronics https://github.com/TKJElectronics/KalmanFilter
-# and to Berry IMU https://github.com/mwilliams03/BerryIMU
-class Kalman:
-    def __init__(self):
-        self.timeDelta= sample_period #time between samples
-        self.Q_angle  =  0.01 # process noise for accelerometer
-        self.Q_gyro   =  0.0003 # process noise for gyro
-        self.R_angle  =  0.01  # measurement noise the bigger this value is the slower the filter will respond to changes
-        self.bias = 0.0
-        self.P_00 = 0.0
-        self.P_01 = 0.0
-        self.P_10 = 0.0
-        self.P_11 = 0.0
-        self.KalAngle = 0.0
-        self.lastAccAngle = None
-        
-    def calculate(self, accGravY, accGravZ, gyroRate):
-# what we want is report of 0 degrees at balance at start of handstroke then increasing to 360 degrees at balance 
-# at backstroke.  Stand at handstroke should report -ve angle, stand at backstroke should report angle of > 360
-# overall range is about -20 to +380.  The use of atan2 means that there is a discontinuity when that angle
-# flips from +180 to -180 or vice versa.  The bell is a simple system so rather than using quaternions throughout
-# we can just detect the flip and adjust accordingly
-        if self.lastAccAngle is None:
-            accAngle = atan2(accGravY,accGravZ)*180/3.142 # assumes accx is zero?? : roll=atan2(accy,sqrt(accx^2+accz^2))
-            if accAngle < -40: # in case kalman stuff is started when the bell is down - shouldn't happen
-                accAngle += 360.0
-            self.KalAngle = accAngle
-        else:
-            accAngleDiff = atan2(accGravY,accGravZ)*180/3.142 - self.lastAccAngle
-            if accAngleDiff > 300.0:
-                accAngleDiff -= 360.0
-            elif accAngleDiff < -300.0:
-                accAngleDiff += 360.0
-            accAngle = self.lastAccAngle + accAngleDiff
-        self.lastAccAngle = accAngle
-        self.KalAngle += self.timeDelta * (gyroRate - self.bias)
-
-        self.P_00 +=  - self.timeDelta * (self.P_10 + self.P_01) + self.Q_angle * self.timeDelta
-        self.P_01 +=  - self.timeDelta * self.P_11
-        self.P_10 +=  - self.timeDelta * self.P_11
-        self.P_11 +=  self.Q_gyro * self.timeDelta
-
-        y = accAngle - self.KalAngle
-        S = self.P_00 + self.R_angle
-        K_0 = self.P_00 / S
-        K_1 = self.P_10 / S
-
-        self.KalAngle +=  K_0 * y;
-        self.bias  +=  K_1 * y;
-        self.P_00 -= K_0 * self.P_00;
-        self.P_01 -= K_0 * self.P_01;
-        self.P_10 -= K_1 * self.P_00;
-        self.P_11 -= K_1 * self.P_01;
-        
-    def setAngle(self, accGravY, accGravZ):
-        self.KalAngle = atan2(accGravY,accGraxZ)*180/3.142
-
-
-
-class MPU6050:
-    def __init__(self,address):
-        self.dev_addr = address
-        self.accn_scale = None
-        self.gyro_scale = None
-        self.FIFO_block_length = 12
-
-    # reset device
-        self.write_bit(C.MPU6050_RA_PWR_MGMT_1,C.MPU6050_PWR1_DEVICE_RESET_BIT, 1)
-        sleep(0.5)
-    #wakeup
-    #possibly some undocumented behaviour here - gyro config register does
-    #not accept write of FS factor unless device woken up first
-        self.write_bit(C.MPU6050_RA_PWR_MGMT_1, C.MPU6050_PWR1_SLEEP_BIT, 0)
-        
-    #set clock source
-    #because we have two accelerometers with slightly different clocks (and no way of syncing
-    #them with the GY-521 breakouts we are using), we have to select which pll gives the closest
-    #sync on a case by case basis.  Should only be a one time calibration.  The FIFO read code
-    #above takes account of a lack of sync by ditching fifo packets from the faster running device
-    #but wise to keep things as far in sync as we can.
-        t1 = i2c.read_byte_data(self.dev_addr, C.MPU6050_RA_PWR_MGMT_1) & 0xFF
-        i2c.write_byte_data(self.dev_addr, C.MPU6050_RA_PWR_MGMT_1, (t1 & 0xF8) | C.MPU6050_CLOCK_PLL_ZGYRO)
-
-    # set full scale acceleration range
-        i2c.write_byte_data(self.dev_addr, C.MPU6050_RA_ACCEL_CONFIG, C.MPU6050_ACCEL_FS_2 << 3)
-        self.accn_scale = C.MPU6050_ACCEL_SCALE_MODIFIER_2G
-
-    # set full scale gyro range
-        i2c.write_byte_data(self.dev_addr,C.MPU6050_RA_GYRO_CONFIG, C.MPU6050_GYRO_FS_500 << 3)
-        self.gyro_scale = C.MPU6050_GYRO_SCALE_MODIFIER_500DEG
-                
-    def who_am_i(self):
-        return i2c.read_byte_data(self.dev_addr, C.MPU6050_RA_WHO_AM_I) & 0xFF
- 
-    def write_bit(self,a_reg_add, a_bit_num, a_bit):
-        byte = i2c.read_byte_data(self.dev_addr, a_reg_add)
-        if a_bit:
-            byte |= 1 << a_bit_num
-        else:
-            byte &= ~(1 << a_bit_num)
-        i2c.write_byte_data(self.dev_addr, a_reg_add, byte)
-
-    def set_x_accel_offset(self,a_offset):
-        a_offset = a_offset & 0xFFFF
-        i2c.write_byte_data(self.dev_addr, C.MPU6050_RA_XA_OFFS_H,(a_offset >> 8))
-        i2c.write_byte_data(self.dev_addr, C.MPU6050_RA_XA_OFFS_L_TC,(a_offset & 0xFF))
-
-    def set_y_accel_offset(self,a_offset):
-        a_offset = a_offset & 0xFFFF
-        i2c.write_byte_data(self.dev_addr, C.MPU6050_RA_YA_OFFS_H,(a_offset >> 8))
-        i2c.write_byte_data(self.dev_addr, C.MPU6050_RA_YA_OFFS_L_TC,(a_offset & 0xFF))
-
-    def set_z_accel_offset(self,a_offset):
-        a_offset = a_offset & 0xFFFF
-        i2c.write_byte_data(self.dev_addr, C.MPU6050_RA_ZA_OFFS_H,(a_offset >> 8))
-        i2c.write_byte_data(self.dev_addr, C.MPU6050_RA_ZA_OFFS_L_TC,(a_offset & 0xFF))
-
-    def set_x_gyro_offset(self, a_offset):
-        a_offset = a_offset & 0xFFFF
-        i2c.write_byte_data(self.dev_addr, C.MPU6050_RA_XG_OFFS_USRH,(a_offset >> 8))
-        i2c.write_byte_data(self.dev_addr, C.MPU6050_RA_XG_OFFS_USRL,(a_offset & 0xFF))
-
-    def set_y_gyro_offset(self, a_offset):
-        a_offset = a_offset & 0xFFFF
-        i2c.write_byte_data(self.dev_addr, C.MPU6050_RA_YG_OFFS_USRH,(a_offset >> 8))
-        i2c.write_byte_data(self.dev_addr, C.MPU6050_RA_YG_OFFS_USRL,(a_offset & 0xFF))
-
-    def set_z_gyro_offset(self, a_offset):
-        a_offset = a_offset & 0xFFFF
-        i2c.write_byte_data(self.dev_addr, C.MPU6050_RA_ZG_OFFS_USRH,(a_offset >> 8))
-        i2c.write_byte_data(self.dev_addr, C.MPU6050_RA_ZG_OFFS_USRL,(a_offset & 0xFF))
-
-    def read_word_signed(self, register):
-        high = i2c.read_byte_data(self.dev_addr, register)
-        res = (high << 8) + i2c.read_byte_data(self.dev_addr, register + 1)
-        if (res >= 0x8000):
-            return res - 0x10000
-        return res
-
-    def write_word_signed(self,register,value):
-        value = value & 0xFFFF
-        i2c.write_byte_data(self.dev_addr, register,(value >> 8))
-        i2c.write_byte_data(self.dev_addr, register + 1,(value & 0xFF))
-        
-    def get_acceleration(self):
-        result = []
-        readbytes = i2c.read_i2c_block_data(self.dev_addr, C.MPU6050_RA_ACCEL_XOUT_H, 6)
-        result.append(readbytes[0] << 8 | readbytes[1])
-        result.append(readbytes[2] << 8 | readbytes[3])
-        result.append(readbytes[4] << 8 | readbytes[5])
-        for index in range(3):
-            if (result[index] >= 0x8000):
-                result[index] -= 0x10000
-        return result
-
-    def get_rotation(self):
-        result = []
-        readbytes = i2c.read_i2c_block_data(self.dev_addr, C.MPU6050_RA_GYRO_XOUT_H, 6)
-        result.append(readbytes[0] << 8 | readbytes[1])
-        result.append(readbytes[2] << 8 | readbytes[3])
-        result.append(readbytes[4] << 8 | readbytes[5])
-        for index in range(3):
-            if (result[index] >= 0x8000):
-                result[index] -= 0x10000
-        return result
-        
-    def reset_FIFO(self):
-        self.write_bit(C.MPU6050_RA_USER_CTRL,C.MPU6050_USERCTRL_FIFO_EN_BIT, 0)
-        self.write_bit(C.MPU6050_RA_USER_CTRL,C.MPU6050_USERCTRL_FIFO_RESET_BIT, 1)
-        self.write_bit(C.MPU6050_RA_USER_CTRL,C.MPU6050_USERCTRL_FIFO_EN_BIT, 1)
-
-    def get_int_status(self):
-        return i2c.read_byte_data(self.dev_addr, C.MPU6050_RA_INT_STATUS)
-        
-    def get_FIFO_count(self):
-        high = i2c.read_byte_data(self.dev_addr, C.MPU6050_RA_FIFO_COUNTH)
-        return (high << 8) + i2c.read_byte_data(self.dev_addr, C.MPU6050_RA_FIFO_COUNTL)
-
-    def read_FIFO_block(self):
-        result = [] # accn x,y,z then gyro x,y,z
-        readbytes=[]
-        for index in range(self.FIFO_block_length):
-            readbytes.append(i2c.read_byte_data(self.dev_addr, C.MPU6050_RA_FIFO_R_W))
-        for index in range(0, self.FIFO_block_length,2):
-            result.append((readbytes[index] << 8) + readbytes[index+1])
-            if (result[len(result)-1] >= 0x8000):
-                result[len(result)-1] -= 0x10000
-        result[0] /= float(self.accn_scale) # results in g
-        result[1] /= float(self.accn_scale)
-        result[2] /= float(self.accn_scale)
-        result[3] /= float(self.gyro_scale) # result degrees/sec
-        result[4] /= float(self.gyro_scale)
-        result[5] /= float(self.gyro_scale)
-        return result
-        
-    def enable_FIFO(self):
-        # set LPF to 188Hz
-        
-        t1 = i2c.read_byte_data(self.dev_addr, C.MPU6050_RA_CONFIG) & 0xFF
-        i2c.write_byte_data(self.dev_addr, C.MPU6050_RA_CONFIG, (t1 & 0xF8) | C.MPU6050_DLPF_BW_188) # 5 Hz LPF
-
-        #set gyroscope output rate divider
-        # * The sensor register output, FIFO output, DMP sampling, Motion detection, Zero
-        # * Motion detection, and Free Fall detection are all based on the Sample Rate.
-        # * The Sample Rate is generated by dividing the gyroscope output rate by
-        # * SMPLRT_DIV:
-        # *
-        # * Sample Rate = Gyroscope Output Rate / (1 + SMPLRT_DIV)
-        # *
-        # * where Gyroscope Output Rate = 8kHz when the DLPF is disabled (DLPF_CFG = 0 or
-        # * 7), and 1kHz when the DLPF is enabled (see Register 26).
-        # *
-        # * Note: The accelerometer output rate is 1kHz. This means that for a Sample
-        # * Rate greater than 1kHz, the same accelerometer sample may be output to the
-        # * FIFO, DMP, and sensor registers more than once.
-        # *
-        # * For a diagram of the gyroscope and accelerometer signal paths, see Section 8
-        # * of the MPU-6000/MPU-6050 Product Specification document
-
-        i2c.write_byte_data(self.dev_addr, C.MPU6050_RA_SMPLRT_DIV, 19) # takes us to 50hz
-        
-        # enable fifo, select accel and gyro to go in
-        i2c.write_byte_data(self.dev_addr, C.MPU6050_RA_FIFO_EN, 0x78) # enable temp = 0xF8
-
-        self.write_bit(C.MPU6050_RA_USER_CTRL,C.MPU6050_USERCTRL_FIFO_EN_BIT, 1)            
-            
-       
-    
-
+          

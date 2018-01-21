@@ -1,0 +1,45 @@
+Bell-Boy construction guide
+
+Hardware
+
+There are two versions of the hardware, the basic version and the advanced version.  The differences between the two are that the basic version is easier to construct and the advanced version has a built-in battery, battery charging functionality and physical on-off and reset controls.
+
+Parts list (basic version):
+
+(a) Raspberry Pi (widely available). See eBay or www.pimoroni.com www.pi-supply www.thepihut
+
+(b) Micro SD card of at least 8Gb capacity (widely available).  There are some fake branded cards about, pease be sure to use a reputable supplier.
+
+(c) 2x MPU-6050 accelerometer/gyroscope break out boards. There are quite a few types of this board, the one we have had most success in using is known as GY-521 (although it is often marked on the board as ITG/MPU).  Other boards may work but they need to be capable of being powered from 5V (3.3V ones should work but they need to be connected to the 3.3V output of the Raspberry Pi's 40 pin header rather than the 5V output)
+
+
+You will also need:
+
+(i) a soldering iron (quite fine tipped and a 15W or higher iron will be fine).  We have used a batttery powered soldering iron (only 8W) and whilst it works soldering ground connections (which usually need to have more copper heated to temperature) is more difficult.
+
+(ii) connecting wire.  Best to use thin Kynar wire 28AWG as
+
+(iii) side angle clippers for cutting wire to length
+
+(iv) a computer with wifi connection and 
+
+Skills:
+
+(1) soldering - if you have no experience of this then read one of the many online guides or enlist someone with experience.  Only 14 connections need to be soldered but in some cases the holes require "double stuffing" with two wires in one hole - so a little more skill is required
+
+(2) experience with a Linux environment is preferred. 
+
+
+Software installation:
+
+This section just covers the basics of the Bell-Boy software installation.  The code is open source and can be free downloaded but the icons used by the browser interface, whilst free to be included in a website or a product, are licensed from a professional designer so can not be supplied in a separately downloadable form.  The SD card versioon of the 
+
+The software that runs the Bell-Boy is installed in a Linux environment - one particular Linux distribution called Arch Linux is used.
+
+The first step is to install Arch Linux onto the SD card.  Follow the instructions here:
+
+https://archlinuxarm.org/platforms/armv6/raspberry-pi
+
+(click on the "Installation" tab)
+
+Once that is complete then put the SD card into the Raspberry Pi plug the
