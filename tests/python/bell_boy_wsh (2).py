@@ -106,7 +106,7 @@ def web_socket_transfer_data(request):
         elif instruction[:5] == "STOP:":
             if worker is not None:
                 workerevent.set()
-                sleep(1) # allow existing grabber thread to stop but must dump any further LDATS: recieved (done in JS)
+                sleep(4) # allow existing grabber thread to stop but must dump any further LDATS: recieved (done in JS)
                 request.ws_stream.send_message("STPD:quite a few", binary=False)
                 while (not dataQueue.empty()):
                     dataQueue.get(False)

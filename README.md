@@ -21,15 +21,14 @@ This script takes a stock installation of Arch Linux Arm (for the Raspberry Pi) 
           port or usb/ethernet adapter)
    (d)    SSH into the Pi (username alarm, password alarm), change to root user (su root, password root) 
    (e)    run this script - it will take a while
-Note that for first time usage, the MPU6050s should be calibrated and that the MPU6050 clocks need to be chosen in order to sync the two MPU6050s as far as is reasonably possible.
 
-bell_boy_wsh.py
+bb_dcmimu
 
-This script is called by pywebsocket https://github.com/google/pywebsocket.  Websockets are needed by the front-end Javascript which pulls data from the Bell-Boy device.  This script takes data from the MPU6050s separates out gravity and tangential acceleration, applies a Kalman filter and then makes the data available to the browser running the front end. 
+This folder contains the source for a small executable which interfaces with websocketd (https://github.com/joewalnes/websocketd).  Websockets are used by the front-end Javascript to interface with the Bell-Boy device.  The executable takes data from IMU ICs, applies am extended Kalman filter (from https://github.com/hhyyti/dcm-imu) then makes the data available to the browser running the front end via websocketd. 
 
 bellboy.js
 
-The Javascript that takes the data from teh Bell-Boy and presents it.  The browser must support HTML5 and websockets.
+The Javascript that takes the data from the Bell-Boy and presents it.  The browser must support HTML5 and websockets.
 
 index.html
 

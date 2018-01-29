@@ -1,3 +1,5 @@
+//gcc testwebsd.c -o testwebsd
+
 /*
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -18,12 +20,14 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
-#include "Python.h"
 #include <math.h>
 #include <sys/time.h>
+#include <time.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <unistd.h>
+#include <signal.h>
 #include <fcntl.h>
 #include <sys/ioctl.h>
 #include <sys/time.h>
@@ -32,8 +36,8 @@ SOFTWARE.
 #include <linux/types.h>
 #include <linux/i2c.h>
 #include <linux/i2c-dev.h>
+#include <dirent.h>
 #include "bb_dcmimu.h"
-
 
 #ifndef NULL
 #define NULL 0
@@ -57,147 +61,325 @@ SOFTWARE.
 
 #define DEGREES_TO_RADIANS_MULTIPLIER 0.017453 
 #define RADIANS_TO_DEGREES_MULTIPLIER 57.29578 
+#define I2CDEV "/dev/i2c-1"
 
 int NXP_fd_gyro = -1;
 int NXP_fd_accel = -1;
+FILE *fd_write_out;
 //int MPU6050_fd = -1;
 float yaw = 0.0;
 float pitch = 0.0;
 float roll = 0.0;
 float a[3];
 float sample_period = 0.0;
-float gyro_bias[3] = { 0.0, 0.0, 0.0 };
+float GYRO_BIAS[3] = { 0.0, 0.0, 0.0 };
 int DEBUG = 0;
+
 
 float NXP_gyro_scale_factor = 0;
 float NXP_accel_scale_factor = 0;
-int rotations[6] = { 1,1,1 }; //set rotation values for mounting IMU device gx gy gx ax ay az
-int SWAPXY = 0; // swap XY for different mounting.  Swap is applied before rotation.
 
-static PyObject *set_gyro_bias(PyObject *self, PyObject *args){
-    float bx, by, bz;
-    if (!PyArg_ParseTuple(args, "fff;set_gyro_bias expects three floats", &bx, &by, &bz)) return NULL;
-    gyro_bias[0] = bx;
-    gyro_bias[1] = by;
-    gyro_bias[2] = bz;
+int ROTATIONS[3] = { -1, -1, -1 }; //set rotation values for mounting IMU device x y z
 
-    return Py_BuildValue("i", 0); 
+int SWAPXY = 1; // swap XY for different mounting.  Swap is applied before rotation.
+
+int ODR = 0;
+int FS_GYRO = 0;
+int FS_ACCEL = 0;
+
+int RUNNING = 0;
+
+char READ_OUTBUF[1500];
+char READ_OUTBUF_LINE[150];
+int READ_OUTBUF_COUNT;
+
+char FILENAME[50];
+
+int LOOPSLEEP = 100000; // sleep for 0.1 of a second unless actively sampling then sleep 4000000/ODR
+
+volatile sig_atomic_t sig_exit = 0;
+void sig_handler(int signum) {
+    if (signum == SIGINT) fprintf(stderr, "received SIGINT\n");
+    if (signum == SIGTERM) fprintf(stderr, "received SIGTERM\n");
+    sig_exit = 1;
 }
-
-
-static PyObject *set_rotations(PyObject *self, PyObject *args){
-    int r0, r1, r2;
-    if (!PyArg_ParseTuple(args, "iii", &r0, &r1, &r2)) return NULL;
-    if ( abs(r0) != 1 || abs(r1) != 1 || abs(r2) != 1 ) return Py_BuildValue("i", -1);
-    rotations[0] = r0;
-    rotations[1] = r1;
-    rotations[2] = r2;
-
-    return Py_BuildValue("i", 0); 
-}
-
-static PyObject *set_swap_XY(PyObject *self){
-    SWAPXY = 1;
-    return Py_BuildValue("i", 0); 
-}
-
-static PyObject *clear_swap_XY(PyObject *self){
-    SWAPXY = 0;
-    return Py_BuildValue("i", 0); 
-}
-
-static PyObject *set_debug(PyObject *self){
-    DEBUG = 1;
-    return Py_BuildValue("i", 0); 
-}
-
-static PyObject *clear_debug(PyObject *self){
-    DEBUG = 0;
-    return Py_BuildValue("i", 0); 
-}
-
-static PyObject *get_sample_period(PyObject *self){
-    return Py_BuildValue("f", sample_period); 
-}
-
 /*
-Wrapper for the calculate function
+# There are eight possible command sent by the user's browser:
+# (a)   STRT:[filename] Start recording a session with a bell.  The bell
+#       must be at stand and (reasonably) stationary otherwise this
+#       will return ESTD: or EMOV: either of which signals the browser 
+#       to stop expecting data.  If Filename is not provided then a
+#       default filename of "CurrentRecording [date]" is used.
+# (b)   STOP: stops a recording in progress.  This also saves off the
+#       collected data into a file in /data/samples/
+# (c)   LDAT: a request for data from the broswer, only works when there
+#       is a recording in progress - deprecated.  Does nothing.
+# (d)   FILE: get a listing of the previous recordings stored in
+#       /data/samples/ .  Used to display the selection box to the user.
+# (e)   LOAD:[filename] used to transmit a previous recording to the browser
+# (f)   DATE:[string] sets the date on the device to the date on the browser 
+#             string is unixtime (microsecs since 1/1/70)
+# (g)   SAMP: requests the current sample period
+# (h)   SHDN: tells the device to shutdown
+# 
+# There are the following responses back to the user's browser:
+# (i)   STPD: tells the browser that the device has sucessfully stopped sampling
+# (ii)  ESTP: signals an error in the stop process (an attempt to stopped when not started)
+# (iii) LIVE:[string] the string contains the data recorded by the device in the format
+#             "A:[angle]R:[rate]C:[acceleration]".  Angle, rate and acceleration are 
+#             ordinary floating point numbers.  Angle is in degrees, rate is in degrees/sec
+#             and acceleration is in degrees/sec/sec.
+# (iv)  NDAT: indicates that there is no current data to send to the browser (deprecated)
+# (v)   SAMP: returns the sample period
+# (vi)  EIMU: IMU not detected or some IMU related failure
+# (vii) ESTD: bell not at stand (aborts started session)
+# (viii)EMOV: bell moving when session started (the bell has to be stationary at start)
+# (ix)  ESAM: sample period needs to be measured first (deprecated)
+# (x)  ESTR: internal error related to data / filenames (shouldn't happen)!
+# (xi) DATA:[string]  chunk of data from a previously stored file.  In same format as LIVE:
+# (xii)EOVF: (sent by dcmimu) fifo overflow flagged.
+# (xiii)FILE:[filename] in response to FILE: a list of the previous recordings in /data/samples
+# (xiv) STRT: in response to STRT: indicates a sucessful start.
+# (xv)  LFIN:[number] indicates the end of a file download and the number of samples sent
 */
+int main(int argc, char const *argv[]){
+    char linein[50];
+    char command[6];
+    char details[42];
+    char oscommand[90];
+    float start_angle = 0.0;
+    int entries;
+    
+    struct sigaction sig_action;
+    memset(&sig_action, 0, sizeof(struct sigaction));
+    sig_action.sa_handler = sig_handler;
+    sigaction(SIGTERM, &sig_action, NULL);
+    sigaction(SIGINT, &sig_action, NULL);
+    
+    setbuf (stdout, NULL);
+    setbuf (stdin, NULL);
+    fcntl(STDIN_FILENO, F_SETFL, fcntl(STDIN_FILENO, F_GETFL) | O_NONBLOCK);
 
-static PyObject *w_calculate(PyObject *self, PyObject *args){
-    float u0, u1, u2, z0, z1, z2, h;
-    if (!PyArg_ParseTuple(args, "fffffff", &u0, &u1, &u2, &z0, &z1, &z2, &h)) return NULL;
-    calculate(u0, u1, u2, z0, z1, z2, h);
-    return Py_BuildValue("fff", roll, pitch, yaw);
-}
-
-static PyObject *w_NXP_start_fifos(PyObject *self, PyObject *args){
-    int ODR, FS_gyro, FS_accel;
-    if (!PyArg_ParseTuple(args, "iii;NXP_start_fifos expects 3 integers, ODR, gyro fs and accelerometer fs.", &ODR, &FS_gyro, &FS_accel)) return NULL;
-    if (ODR != 50 && ODR != 100 && ODR != 200 && ODR != 400 && ODR != 800) return NULL;
-    if (FS_gyro != 500 && FS_gyro != 1000) return NULL;
-    if (FS_accel != 2 && FS_accel != 4) return NULL;
-    if(sample_period == 0.0) sample_period = 1.0/ODR;
-    return Py_BuildValue("i", NXP_start_fifos(ODR, FS_gyro, FS_accel));
-}
-
-static PyObject *w_NXP_stop_fifos(PyObject *self){
+    if(argc != 4){
+        printf("Incorrect number of arguments for BellBoy app.  Expect ODR, FS gyro and FS accelerometer.\n");
+        return -1;
+    }
+    ODR = atoi(argv[1]);
+    if (ODR != 50 && ODR != 100 && ODR != 200 && ODR != 400 && ODR != 800) {
+        printf("Incorrect ODR.  Expects 50, 100, 200, 400 or 800 as first argument.\n");
+        return -1;
+    }
+    
+    FS_GYRO = atoi(argv[2]);
+    if (FS_GYRO != 500 && FS_GYRO != 1000) {
+        printf("Incorrect FS gyro.  Expects 500 or 1000 as second argument.\n");
+        return -1;
+    }
+    
+    FS_ACCEL = atoi(argv[3]);
+    if (FS_ACCEL != 2 && FS_ACCEL != 4) {
+        printf("Incorrect FS accel.  Expects 2 or 1000 as second argument.\n");
+        return -1;
+    }
+    
+    if(NXP_test() != 0){
+        printf("EIMU:\n");
+        return -1;
+    }
+    
+    while(!sig_exit){
+        usleep(LOOPSLEEP);
+        if(RUNNING) NXP_pull_data();
+        while(fgets(linein, sizeof(linein), stdin ) != NULL) {
+            entries = sscanf(linein, "%5s%[^\n]", command, details);
+            if(entries < 1) {
+                fprintf( stderr, "\nError reading: %s \n", linein );
+                continue;
+            }
+//            if(entries == 2) printf("Command: %s Details: %s Count: %d \n", command, details, count);
+//            if(entries == 1) printf("Command: %s Count: %d \n", command, count);
+  
+            if(strcmp("DATE:", command) == 0 && entries == 2  && strlen(details) < 12){
+                sprintf(oscommand,"/usr/bin/date --set=\"$(date --date='@%s')\" && /usr/bin/touch /var/lib/systemd/clock", details);
+                system(oscommand);
+                continue;
+            }
+            if(strcmp("SAMP:", command) == 0) {
+                if(NXP_fifo_timer() == 0) {
+                    printf("SAMP:%f\n",sample_period);
+                } else {
+                    printf("EIMU:\n");
+                }
+                continue;
+            }
+            if(strcmp("FILE:", command) == 0) {
+                DIR *d;
+                struct dirent *dir;
+                d = opendir("/data/samples");
+                if(d){
+                    while ((dir = readdir(d)) != NULL) {
+                        if(dir->d_type == DT_REG) printf("FILE:%s\n", dir->d_name);
+                    }
+                closedir(d);
+                }
+                continue;
+            }
+            if(strcmp("STRT:", command) == 0) {
+                if(entries == 2  && strlen(details) < 34){
+                    sprintf(FILENAME, "/data/samples/%s", details);
+                } else {
+                    struct tm *timenow;
+                    time_t now = time(NULL);
+                    timenow = gmtime(&now);
+                    strftime(FILENAME, sizeof(FILENAME), "/data/samples/Unnamed_%d-%m-%y_%H:%M", timenow);
+                }
+                ROTATIONS[0] = -1;   // reset rotations
+                ROTATIONS[1] = -1;
+                ROTATIONS[2] = -1;
+                start_angle = NXP_get_orientation(); // also sets gyro biasses
+                if(start_angle == -999) {
+                    printf("ESTR:\n");
+                    fprintf(stderr, "Can't calculate start angle\n");
+                }
+                if(start_angle < 2.0 && start_angle > -2.0) {
+                    printf("ESTD:\n"); // bell out of range for stand
+                    continue;
+                }
+                if(start_angle >= 2.0){             // this check enables the user not to think
+                    ROTATIONS[0] = -ROTATIONS[0];   // about which way to mount the sensor
+                    ROTATIONS[1] = -ROTATIONS[1];   // it just flips things around as if the sensor
+                    start_angle = -start_angle;     // was mounted the other way round
+                }
+                if(start_angle < -20){
+                    printf("ESTD:\n"); // bell out of range for stand
+                    continue;
+                }
+                if(GYRO_BIAS[0] > 5.0){
+                    printf("EMOV:\n"); // bell is moving
+                    continue;
+                }
+                fd_write_out = fopen(FILENAME,"w");
+                if(fd_write_out == NULL) {
+                    fprintf(stderr, "Could not open file for writing\n");
+                    printf("ESTR:\n");
+                    continue;
+                } else {
+                    if(NXP_start_fifos(ODR,FS_GYRO,FS_ACCEL) == 0){
+                        LOOPSLEEP = 4000000/ODR;
+                        RUNNING = 1;
+                        printf("STRT:\n");
+                    } else {
+                        printf("EFIF:\n");
+                        printf("STPD:\n");
+                    }
+                }
+                continue;
+            }
+            if(strcmp("STOP:", command) == 0) {
+                if(fd_write_out != NULL){
+                    fclose(fd_write_out);
+                    fd_write_out = NULL;
+                }
+                NXP_stop_fifos();
+                RUNNING = 0;
+                LOOPSLEEP = 100000;
+                printf("STPD:\n");
+                continue;
+            }
+            if(strcmp("LOAD:", command) == 0 && RUNNING == 0) {
+                if(entries == 2  && strlen(details) < 34){
+                    sprintf(FILENAME, "/data/samples/%s", details);
+                } else {
+                    printf("ESTR:\n");
+                    continue;
+                }
+                FILE *fd_read_in;
+                fd_read_in = fopen(FILENAME,"r");
+                if(fd_read_in == NULL) {
+                    fprintf(stderr, "Could not open file for reading\n");
+                    printf("ESTR:\n");
+                    continue;
+                } else {
+                    int counter = 0;
+                    READ_OUTBUF_COUNT = 0;
+                    while(fgets(READ_OUTBUF_LINE, sizeof(READ_OUTBUF_LINE), fd_read_in ) != NULL) {
+                        size_t ln = strlen(READ_OUTBUF_LINE);
+                        if(ln > 0 && READ_OUTBUF_LINE[ln -1] == '\n') READ_OUTBUF_LINE[ln - 1] = '\0';   // get rid of /n
+//                        READ_OUTBUF_LINE[strcspn(READ_OUTBUF_LINE, "\n")] = 0;
+                        if (READ_OUTBUF_COUNT + strlen(READ_OUTBUF_LINE) + 7 > (sizeof(READ_OUTBUF) -2)) {
+                            printf("%s\n", READ_OUTBUF);
+                            READ_OUTBUF_COUNT = 0;
+                        }
+                        READ_OUTBUF_COUNT += sprintf(&READ_OUTBUF[READ_OUTBUF_COUNT],"DATA:%s",READ_OUTBUF_LINE);
+                        counter += 1;
+                    }
+                    if(READ_OUTBUF_COUNT != 0) printf("%s\n",READ_OUTBUF);
+                    printf("LFIN:%d\n", counter);
+                }
+                fclose(fd_read_in);
+                continue;
+            }
+            if(strcmp("SHDN:", command) == 0) {
+                system("/usr/bin/sync && /usr/bin/shutdown -P now");
+                continue;
+            }
+            printf("ESTR:\n");
+            fprintf(stderr, "Unrecognised command: %s \n", command);
+        }
+    }
+    if(fd_write_out != NULL) fclose(fd_write_out);
     NXP_stop_fifos();
-    return Py_BuildValue("i", 0);
+    system("/usr/bin/touch /var/lib/systemd/clock");
+    return 0;
 }
 
-/*
-Tests that the IMU is accessible over i2c.  Returns negative number if tests fails, zero otherwise
-*/
-static PyObject *NXP_test(PyObject *self){
-    if (NXP_fd_gyro != -1) return Py_BuildValue("i", -10);
-	if ((NXP_fd_gyro = open("/dev/i2c-1", O_RDWR)) < 0) {
+int NXP_test(void){
+    if (NXP_fd_gyro != -1) return -10;
+	if ((NXP_fd_gyro = open(I2CDEV, O_RDWR)) < 0) {
         NXP_fd_gyro = -1;
-        return Py_BuildValue("i", -1);
+        return -1;
     }
   	if (ioctl(NXP_fd_gyro, I2C_SLAVE, NXP_GYRO_I2C_ADDRESS) < 0) {
 	    close(NXP_fd_gyro);
         NXP_fd_gyro = -1;
-        return Py_BuildValue("i", -2);
+        return -2;
 	}
     if (i2c_smbus_read_byte_data(NXP_fd_gyro, NXP_GYRO_REGISTER_WHO_AM_I) != NXP_GYRO_ID) {
         close(NXP_fd_gyro);
         NXP_fd_gyro = -1;
-        return Py_BuildValue("i", -3);
+        return -3;
     }
     close(NXP_fd_gyro);
     NXP_fd_gyro = -1;
 
-    if (NXP_fd_accel != -1) return Py_BuildValue("i", -11);
-	if ((NXP_fd_accel = open("/dev/i2c-1", O_RDWR)) < 0) {
+    if (NXP_fd_accel != -1) return -11;
+	if ((NXP_fd_accel = open(I2CDEV, O_RDWR)) < 0) {
         NXP_fd_accel = -1;
-        return Py_BuildValue("i", -4);
+        return -4;
     }
   	if (ioctl(NXP_fd_accel, I2C_SLAVE, NXP_ACCEL_I2C_ADDRESS) < 0) {
 	    close(NXP_fd_accel);
         NXP_fd_accel = -1;
-        return Py_BuildValue("i", -5);
+        return -5;
 	}
     if (i2c_smbus_read_byte_data(NXP_fd_accel, NXP_ACCEL_REGISTER_WHO_AM_I) != NXP_ACCEL_ID){
         close(NXP_fd_accel);
         NXP_fd_accel = -1;
-        return Py_BuildValue("i", -6);
+        return -6;
     }
     close(NXP_fd_accel);
     NXP_fd_accel = -1;
 
-    return Py_BuildValue("i", 0);
+    return 0;
 }
 
-static PyObject *NXP_fifo_timer(PyObject *self, PyObject *args){
+int NXP_fifo_timer(void){
     struct timeval start, stop;
-    int cco, ODR, loops;
-    float dummy[3], gyro_result = 0, accel_result = 0;
-    if (!PyArg_ParseTuple(args, "i;NXP_fifo_timer expects an integer ODR rate", &ODR)) return NULL;
-    if (ODR != 50 && ODR != 100 && ODR != 200 && ODR != 400 && ODR != 800) return NULL;
+    int cco, loops;
+    float dummy[3], gyro_result = 0; //, accel_result = 0;
     if (NXP_start_fifos(ODR,500,2) < 0){
         NXP_stop_fifos();
-        return NULL;
+        return -1;
     }
     loops = (int)(ODR/25);
     for(int i = 0; i < loops; ++i){
@@ -205,10 +387,7 @@ static PyObject *NXP_fifo_timer(PyObject *self, PyObject *args){
         while (NXP_read_gyro_fifo_count() == 0);
         gettimeofday(&start, NULL);
         NXP_read_gyro_data(dummy);
-        Py_BEGIN_ALLOW_THREADS
-        // Py_BLOCK_THREADS // Py_UNBLOCK_THREADS
-        while (NXP_read_gyro_fifo_count() < 26) usleep((int)(2/ODR)*1000000);  // sleep for about 2 periods
-        Py_END_ALLOW_THREADS
+        while (NXP_read_gyro_fifo_count() < 26) usleep((int)((2/ODR)*1000000));  // sleep for about 2 periods
         while(1){
             cco = NXP_read_gyro_fifo_count();
             if(cco == 30) {
@@ -222,7 +401,7 @@ static PyObject *NXP_fifo_timer(PyObject *self, PyObject *args){
             }
         }
     }
-    for(int i = 0; i < loops; ++i){
+/*    for(int i = 0; i < loops; ++i){
         while (NXP_read_accel_fifo_count() != 0) NXP_read_accel_data(dummy);
         while (NXP_read_accel_fifo_count() == 0);
         gettimeofday(&start, NULL);
@@ -244,125 +423,72 @@ static PyObject *NXP_fifo_timer(PyObject *self, PyObject *args){
             }
         }
     }
+*/
     NXP_stop_fifos();
     sample_period = gyro_result/(30*loops);
-    if(DEBUG) return Py_BuildValue("ff", accel_result/(30*loops), gyro_result/(30*loops));
-    return Py_BuildValue("f", sample_period); 
+//    if(DEBUG) accel_period = accel_result;
+    return 0; 
 }
 
-static PyObject *NXP_pull_data(PyObject *self){
-    float gyro_data[3], accel_data[3], accTang;
-    static float last_x_gyro = 0.0, last_angle = 0.0, angle_correction = 0.0;    
-    int accel_count, number_to_pull, i, max_string, duplicate;
-    Py_ssize_t string_count;
-    char * output;
-    PyObject * result;
-    string_count = 0;
-//    if (sample_period == 0.0) return Py_BuildValue("s", "ESAM:\n"); // sample period needs to be measured first
-    if (NXP_fd_gyro == -1 || NXP_fd_accel == -1) return Py_BuildValue("s", "EFIF:\n"); // fifos need to be started
-    
-    accel_count = NXP_read_accel_fifo_count();
-    number_to_pull = NXP_read_gyro_fifo_count();
-    if(number_to_pull == 0 || accel_count == 0) return Py_BuildValue("s", "");
-    Py_BEGIN_ALLOW_THREADS
-    if((accel_count - number_to_pull) >= 2) NXP_read_accel_data(accel_data);   //acceleration ahead, ditch a sample from the acceleration fifo
-    if(DEBUG){
-        max_string = 98 + number_to_pull * 146;
-    } else {
-        max_string = 32 + number_to_pull * 30;  // 30 characters per output plus 32 for safety!
-    }
-    output = malloc(max_string);
-    if (accel_count >= 31 || number_to_pull >= 31){ // overflow (or nearly so)
-        string_count += sprintf(&output[string_count],"EOVF:\n");
-    }
-
-    for(i=0; i<number_to_pull; ++i){
-        if (accel_count != 0) {
-            NXP_read_accel_data(accel_data);
-            accel_count -= 1;
-        }
-        NXP_read_gyro_data(gyro_data);
-
-        calculate(gyro_data[0],gyro_data[1],gyro_data[2], accel_data[0],accel_data[1],accel_data[2],sample_period);
-        accTang = gyro_data[0] - last_x_gyro; // assumes rotation of bell is around y axis
-        roll += angle_correction;                                   // need to correct reported angles to match
-        if ((last_angle - roll) > 250 && angle_correction != 360){    // the system we are using 0 degrees = bell at
-            angle_correction = 360;                                 // balance at handstroke, 360 degrees = bell at
-            roll += 360.0;                                          // balance at backstroke. 180 degrees = BDC. 
-        } else if ((last_angle - roll) < -250 && angle_correction != 0) {                                                 
-            angle_correction = 0;
-            roll -= 360.0;
-        }
-        if(DEBUG){
-            string_count += sprintf(&output[string_count],"A:%+07.1f,R:%+07.1f,C:%+07.1f,P:%+07.1f,Y:%+07.1f,AX:%+06.3f,AY:%+06.3f,AZ:%+06.3f,GX:%+07.1f,GY:%+07.1f,GZ:%+07.1f,X:%+06.3f,Y:%+06.3f,Z:%+06.3f\n", roll, (gyro_data[0] + last_x_gyro)/2.0, accTang, pitch, yaw, accel_data[0], accel_data[1], accel_data[2], gyro_data[0], gyro_data[1], gyro_data[2],a[0],a[1],a[2]);
-        } else {
-            string_count += sprintf(&output[string_count],"A:%+07.1f,R:%+07.1f,C:%+07.1f\n", roll, (gyro_data[0] + last_x_gyro)/2.0, accTang);
-        }
-        if((string_count + 30) >= max_string ) break; // shouldn't happen!
-        last_x_gyro = gyro_data[0];
-        last_angle = roll;
-    }
-    Py_END_ALLOW_THREADS
-    if(DEBUG && (string_count + 30) >= max_string ) {
-        free(output);
-        return Py_BuildValue("s", "ESTR:\n");
-    }
-    result = Py_BuildValue("s#", output, string_count - 1); // -1 to ditch the last /n
-    free(output);
-    return result;
-}
-
-/*
-Gets an initial set of values for accelerometer and gyro (smoothed)
-This is used when a ringing session is started to ensure that the bell is up
-and stationary.  It is also used to deal with two main mounting positions of
-the device (so the user does not have to worry about which way the bell
-is to rotate when initially mounting the device (the python method calling this
-makes the measurement and adjusts by changing the rotation array/tuple).
-I will probably use this also to make an initial angle correction when the device
-is first switched on - the device may not be quite horizontally mounted or 
-the headstock itself may not be quite parallel with the ground! 
-*/
-
-static PyObject *NXP_get_orientation(PyObject *self){
+float NXP_get_orientation(void){
     int count;
-    float u0=0, u1=0, u2=0, z0=0, z1=0, z2=0, gyro_data[3], accel_data[3];
+    float u0=0.0, u1=0.0, u2=0.0, z0=0.0, z1=0.0, z2=0.0;
+    float gyro_data[3];
+    float accel_data[3];
     
-    if (NXP_fd_gyro != -1) return Py_BuildValue("i", -10);
-	if ((NXP_fd_gyro = open("/dev/i2c-1", O_RDWR)) < 0) {
+    if (NXP_fd_gyro != -1) return -999;
+	if ((NXP_fd_gyro = open(I2CDEV, O_RDWR)) < 0) {
         NXP_fd_gyro = -1;
-        return Py_BuildValue("i", -1);
+        return -999;
     }
   	if (ioctl(NXP_fd_gyro, I2C_SLAVE, NXP_GYRO_I2C_ADDRESS) < 0) {
 	    close(NXP_fd_gyro);
         NXP_fd_gyro = -1;
-        return Py_BuildValue("i", -2);
+        return -999;
 	}
     i2cWriteByteData(NXP_fd_gyro,NXP_GYRO_REGISTER_CTRL_REG1, 0x00);  // device to standby
-    i2cWriteByteData(NXP_fd_gyro,NXP_GYRO_REGISTER_CTRL_REG0, 0x02);  // 500 degrees/sec
-    NXP_gyro_scale_factor = NXP_GYRO_SENSITIVITY_500DPS;
+    switch(FS_GYRO){
+        case 1000:
+            i2cWriteByteData(NXP_fd_gyro,NXP_GYRO_REGISTER_CTRL_REG0, 0x01);  
+            NXP_gyro_scale_factor = NXP_GYRO_SENSITIVITY_1000DPS;
+            break;
+        case 500:
+            i2cWriteByteData(NXP_fd_gyro,NXP_GYRO_REGISTER_CTRL_REG0, 0x02); 
+            NXP_gyro_scale_factor = NXP_GYRO_SENSITIVITY_500DPS;
+            break;
+    }    
     i2cWriteByteData(NXP_fd_gyro,NXP_GYRO_REGISTER_F_SETUP, 0x00);  // disable fifo
     i2cWriteByteData(NXP_fd_gyro,NXP_GYRO_REGISTER_CTRL_REG1, 0x06); // 400 samples/sec
 
-    if (NXP_fd_accel != -1) return Py_BuildValue("i", -11);
-	if ((NXP_fd_accel = open("/dev/i2c-1", O_RDWR)) < 0) {
+    if (NXP_fd_accel != -1) return -999;
+	if ((NXP_fd_accel = open(I2CDEV, O_RDWR)) < 0) {
         NXP_fd_accel = -1;
-        return Py_BuildValue("i", -4);
+        return -999;
     }
   	if (ioctl(NXP_fd_accel, I2C_SLAVE, NXP_ACCEL_I2C_ADDRESS) < 0) {
 	    close(NXP_fd_accel);
         NXP_fd_accel = -1;
-        return Py_BuildValue("i", -5);
+        return -999;
 	}
-    Py_BEGIN_ALLOW_THREADS
     i2cWriteByteData(NXP_fd_accel, NXP_ACCEL_REGISTER_CTRL_REG1, 0x00);  // device to standby
     i2cWriteByteData(NXP_fd_accel, NXP_ACCEL_REGISTER_CTRL_REG2, 0x02);  // High resolution
     i2cWriteByteData(NXP_fd_accel, NXP_ACCEL_REGISTER_MCTRL_REG1, 0x00); // disable magnetometer
-    i2cWriteByteData(NXP_fd_accel,NXP_ACCEL_REGISTER_XYZ_DATA_CFG, 0x00); // 2g full scale
-    NXP_accel_scale_factor = NXP_ACCEL_SENSITIVITY_2G;
+    switch(FS_ACCEL){
+        case 4:
+            i2cWriteByteData(NXP_fd_accel,NXP_ACCEL_REGISTER_XYZ_DATA_CFG, 0x01); 
+            NXP_accel_scale_factor = NXP_ACCEL_SENSITIVITY_4G;
+            break;
+        case 2:
+            i2cWriteByteData(NXP_fd_accel,NXP_ACCEL_REGISTER_XYZ_DATA_CFG, 0x00);
+            NXP_accel_scale_factor = NXP_ACCEL_SENSITIVITY_2G;
+    }
     i2cWriteByteData(NXP_fd_accel, NXP_ACCEL_REGISTER_F_SETUP, 0x00);  // disable fifo
     i2cWriteByteData(NXP_fd_accel, NXP_ACCEL_REGISTER_CTRL_REG1, 0x0D); // 400 samples/sec
 
+    usleep(5000);
+    NXP_read_accel_data(accel_data); // ditch a sample or two
+    NXP_read_gyro_data(gyro_data);
+    usleep(5000);
     NXP_read_accel_data(accel_data);
     NXP_read_gyro_data(gyro_data);
  
@@ -385,47 +511,23 @@ static PyObject *NXP_get_orientation(PyObject *self){
     z1 = z1/50.0;
     z2 = z2/50.0;
     
+    GYRO_BIAS[0] = u0;
+    GYRO_BIAS[1] = u1;
+    GYRO_BIAS[2] = u2;
+    
+    printf("GXB:%+07.1f GYB:%+07.1f GXB:%+07.1f\n", u0,u1,u2); 
+    
     close(NXP_fd_accel);
     NXP_fd_accel = -1;
     close(NXP_fd_gyro);
     NXP_fd_gyro = -1;
-    Py_END_ALLOW_THREADS
-    return Py_BuildValue("[ffffff]", u0, u1, u2, z0, z1, z2);
+    
+    return atan2(z1, z2) * RADIANS_TO_DEGREES_MULTIPLIER;
 }
-/*
-Method definitions
-*/
-
-static PyMethodDef dcmimu_methods[] = {
-    {"calculate", w_calculate, METH_VARARGS, "Calculate roll angle.  Can but shouldn't be called directly."},
-    {"NXP_start_fifos", w_NXP_start_fifos, METH_VARARGS, "Starts the two NXP fifos."},
-    {"set_gyro_bias", set_gyro_bias, METH_VARARGS, "Sets gyro bias.  3 floats, x, y and z representing the number to be subtracted from the gyros.  Applied after swaps and rotations"},
-    {"set_rotations", set_rotations, METH_VARARGS, "Sets the rotation of the sensor."},
-    {"NXP_stop_fifos", (PyCFunction)w_NXP_stop_fifos, METH_NOARGS, "Stops the two NXP fifos and clears file descriptors etc."},
-    {"NXP_test", (PyCFunction)NXP_test, METH_NOARGS, "Tests that the IMU is accessible over i2c."},
-    {"NXP_pull_data", (PyCFunction)NXP_pull_data, METH_NOARGS, "Pulls data from the NXP devices and returns a string in a format suitable for the front end 'A:+XXXX.X,R:+YYYY.Y,C:+ZZZZ.Z'"},
-    {"set_debug", (PyCFunction)set_debug, METH_NOARGS, "Sets the debug flag - pushes more data out"},
-    {"clear_debug", (PyCFunction)clear_debug, METH_NOARGS, "Clears the debug flag"},
-    {"set_swap_XY", (PyCFunction)set_swap_XY, METH_NOARGS, "Sets the swapXY flag - swaps the readings for the X and Y axes - eases making changes for mounting.  Swap is applied before rotations!"},
-    {"clear_swap_XY", (PyCFunction)clear_swap_XY, METH_NOARGS, "Clears the swapXY flag"},
-    {"get_sample_period", (PyCFunction)get_sample_period, METH_NOARGS, "Gets the current sample period."},
-    {"NXP_get_orientation", (PyCFunction)NXP_get_orientation, METH_NOARGS, "Reports initial accelerometer and gyro readings.  Smoothed over 50 samples."},
-    {"NXP_fifo_timer", NXP_fifo_timer, METH_VARARGS, "Times the rates of the two fifos and returns the result (seconds)."},
-    {NULL, NULL, 0, NULL}
-};
-
-PyMODINIT_FUNC
-initdcmimu(void) {
-    Py_InitModule("dcmimu", dcmimu_methods);
-}
-
-/* 
-Internal functions 
-*/
 
 int NXP_start_fifos(int ODR, int gyro_fs, int accel_fs){
     if (NXP_fd_gyro != -1) return -1;
-	if ((NXP_fd_gyro = open("/dev/i2c-1", O_RDWR)) < 0) {
+	if ((NXP_fd_gyro = open(I2CDEV, O_RDWR)) < 0) {
         NXP_fd_gyro = -1;
         return -1;
     }
@@ -436,7 +538,7 @@ int NXP_start_fifos(int ODR, int gyro_fs, int accel_fs){
 	}
 
     if (NXP_fd_accel != -1) return -1;
-	if ((NXP_fd_accel = open("/dev/i2c-1", O_RDWR)) < 0) {
+	if ((NXP_fd_accel = open(I2CDEV, O_RDWR)) < 0) {
         NXP_fd_accel = -1;
         return -1;
     }
@@ -527,24 +629,78 @@ void NXP_stop_fifos(){
     }
 }
 
-void NXP_clear_fifos(){
-    if (NXP_fd_gyro != -1){
-        i2cWriteByteData(NXP_fd_gyro,NXP_GYRO_REGISTER_F_SETUP, 0x00);
-        i2cWriteByteData(NXP_fd_gyro,NXP_GYRO_REGISTER_F_SETUP, 0x80); 
+void NXP_pull_data(){
+    float gyro_data[3];
+    float accel_data[3]; 
+    float accTang;
+    static float last_x_gyro = 0.0, last_angle = 0.0, angle_correction = 0.0;    
+    int accel_count, number_to_pull, i, duplicate;
+
+    static char local_outbuf[4000];
+    static char remote_outbuf[1500];
+    static char local_outbuf_line[150];
+    static char remote_outbuf_line[150];
+    int local_count = 0;
+    int remote_count = 0;
+
+    if (NXP_fd_gyro == -1 || NXP_fd_accel == -1 || fd_write_out == NULL) {
+        fprintf(stderr,"Fifos not started or can't write to file\n");
+        printf("EFIF:\n");
+        printf("STPD:\n");
+        NXP_stop_fifos();
+        RUNNING = 0;
+        LOOPSLEEP = 100000;
+        if(fd_write_out != NULL){
+            fclose(fd_write_out);
+            fd_write_out = NULL;
+        }
+    }
+    accel_count = NXP_read_accel_fifo_count();
+    number_to_pull = NXP_read_gyro_fifo_count();
+    if(number_to_pull == 0 || accel_count == 0) return;
+    if((accel_count - number_to_pull) >= 2) NXP_read_accel_data(accel_data);   //acceleration ahead, ditch a sample from the acceleration fifo
+    if (accel_count >= 31 || number_to_pull >= 31){ // overflow (or nearly so)
+        printf("EOVF:\n");
     }
 
-    if (NXP_fd_accel != -1){
-        i2cWriteByteData(NXP_fd_accel,NXP_ACCEL_REGISTER_F_SETUP, 0x00); 
-        i2cWriteByteData(NXP_fd_accel,NXP_ACCEL_REGISTER_F_SETUP, 0x80); 
+    for(i=0; i<number_to_pull; ++i){
+        if (accel_count != 0) {
+            NXP_read_accel_data(accel_data);
+            accel_count -= 1;
+        }
+        NXP_read_gyro_data(gyro_data);
+
+        calculate(gyro_data[0],gyro_data[1],gyro_data[2], accel_data[0],accel_data[1],accel_data[2],sample_period);
+        accTang = (gyro_data[0] - last_x_gyro)/sample_period; // assumes rotation of bell is around y axis
+        roll += angle_correction;                                   // need to correct reported angles to match
+        if ((last_angle - roll) > 250 && angle_correction != 360){    // the system we are using 0 degrees = bell at
+            angle_correction = 360;                                 // balance at handstroke, 360 degrees = bell at
+            roll += 360.0;                                          // balance at backstroke. 180 degrees = BDC. 
+        } else if ((last_angle - roll) < -250 && angle_correction != 0) {                                                 
+            angle_correction = 0;
+            roll -= 360.0;
+        }
+        sprintf(remote_outbuf_line, "LIVE:A:%+07.1f,R:%+07.1f,C:%+07.1f", roll, (gyro_data[0] + last_x_gyro)/2.0, accTang);
+        if (remote_count + strlen(remote_outbuf_line) > (sizeof remote_outbuf -2)) {
+            printf("%s\n",remote_outbuf);
+            remote_count = 0;
+        }
+        remote_count += sprintf(&remote_outbuf[remote_count],remote_outbuf_line);
+ 
+        sprintf(local_outbuf_line,"A:%+07.1f,R:%+07.1f,C:%+07.1f,P:%+07.1f,Y:%+07.1f,AX:%+06.3f,AY:%+06.3f,AZ:%+06.3f,GX:%+07.1f,GY:%+07.1f,GZ:%+07.1f,X:%+06.3f,Y:%+06.3f,Z:%+06.3f\n", roll, (gyro_data[0] + last_x_gyro)/2.0, accTang, pitch, yaw, accel_data[0], accel_data[1], accel_data[2], gyro_data[0], gyro_data[1], gyro_data[2],a[0],a[1],a[2]);
+        if (local_count + strlen(local_outbuf_line) > (sizeof local_outbuf -2)) {
+            fputs(local_outbuf, fd_write_out);
+            local_count = 0;
+        }
+        local_count += sprintf(&local_outbuf[local_count],local_outbuf_line);
+       
+//        fprintf(fd_write_out,"A:%+07.1f,R:%+07.1f,C:%+07.1f,P:%+07.1f,Y:%+07.1f,AX:%+06.3f,AY:%+06.3f,AZ:%+06.3f,GX:%+07.1f,GY:%+07.1f,GZ:%+07.1f,X:%+06.3f,Y:%+06.3f,Z:%+06.3f\n", roll, (gyro_data[0] + last_x_gyro)/2.0, accTang, pitch, yaw, accel_data[0], accel_data[1], accel_data[2], gyro_data[0], gyro_data[1], gyro_data[2],a[0],a[1],a[2]);
+        last_x_gyro = gyro_data[0];
+        last_angle = roll;
     }
-}
-
-int NXP_read_gyro_fifo_count(){
-  return i2c_smbus_read_byte_data(NXP_fd_gyro, NXP_GYRO_REGISTER_F_STATUS) & 0x3F;
-}
-
-int NXP_read_accel_fifo_count(){
-  return i2c_smbus_read_byte_data(NXP_fd_accel, NXP_GYRO_REGISTER_STATUS) & 0x3F;
+    if(remote_count != 0) printf("%s\n",remote_outbuf);
+    if(local_count != 0) fputs(local_outbuf, fd_write_out);
+    
 }
 
 void NXP_read_gyro_data(float *values){
@@ -563,13 +719,13 @@ void NXP_read_gyro_data(float *values){
         values[0] = values[1];
         values[1] = temp;
     }
-    values[0] *= rotations[0]; // deal with package being mounted differently
-    values[1] *= rotations[1];
-    values[2] *= rotations[2];
+    values[0] *= ROTATIONS[0]; // deal with package being mounted differently
+    values[1] *= ROTATIONS[1];
+    values[2] *= ROTATIONS[2];
 
-    values[0] -= gyro_bias[0]; // adjust for gyro bias
-    values[1] -= gyro_bias[1];
-    values[2] -= gyro_bias[2];
+//    values[0] -= gyro_bias[0]; // adjust for gyro bias
+//    values[1] -= gyro_bias[1];
+//    values[2] -= gyro_bias[2];
 }
 
 void NXP_read_accel_data(float *values){
@@ -589,18 +745,32 @@ void NXP_read_accel_data(float *values){
         values[0] = values[1];
         values[1] = temp;
     }
-    values[0] *= rotations[0]; // deal with package being mounted differently
-    values[1] *= rotations[1];
-    values[2] *= rotations[2];
+    values[0] *= ROTATIONS[0]; // deal with package being mounted differently
+    values[1] *= ROTATIONS[1];
+    values[2] *= ROTATIONS[2];
 }
 
+int NXP_read_gyro_fifo_count(){
+  return i2c_smbus_read_byte_data(NXP_fd_gyro, NXP_GYRO_REGISTER_F_STATUS) & 0x3F;
+}
+
+int NXP_read_accel_fifo_count(){
+  return i2c_smbus_read_byte_data(NXP_fd_accel, NXP_GYRO_REGISTER_STATUS) & 0x3F;
+}
 
 /* 
 This function does some magic with an Extended Kalman Filter to produce roll
 pitch and yaw measurements from accelerometer/gyro data.  Of the filters tested,
 it produced the best results.
-Github is here: https://github.com/hhyyti/dcm-imu
-inputs are 
+
+Github is here: https://github.com/hhyyti/dcm-imu 
+
+MIT licence but the readme includes this line:
+    If you use the algorithm in any scientific context, please cite: Heikki Hyyti and Arto Visala, 
+    "A DCM Based Attitude Estimation Algorithm for Low-Cost MEMS IMUs," International Journal 
+    of Navigation and Observation, vol. 2015, Article ID 503814, 18 pages, 2015. http://dx.doi.org/10.1155/2015/503814
+
+function inputs are 
 Xgyro (u0 - in degrees/sec), Ygyro (u1 - in degrees/sec), Zgyro (u2 - in degrees/sec), 
 Xaccel (z0 - in g), Yaccel (z1 - in g), Zaccel (z2 - in g),
 interval (h - in seconds from the last time the function was called)

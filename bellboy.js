@@ -29,8 +29,8 @@ var BGCOLOUR="#686888";
 var nonLive=false;
 var wsHost="10.0.0.1"
 
-var sampleInterval = 0.0;  // milliseconds for each sample
-var collectChunk = 5; // samples to collect at any one time
+var sampleInterval = 5.0;  // milliseconds for each sample (default 200 times/sec)
+var collectInterval = 50.0; // update display in ms - here 20 times/sec
 
 var canvasBD = document.getElementById("canvasBD");
 var ctxBD = canvasBD.getContext("2d");
@@ -68,9 +68,7 @@ var currentROI=3;
 var ROIU = ROIRanges[currentROI][0];
 var ROIL = ROIRanges[currentROI][1];
 
-//formula for calculation [2]*[1] = [0]*collectChunk
-//var playbackRanges = [[150,150,10],[100,100,10],[80,80,10],[50,100,5],[30,75,4],[10,100,1]]; // percent to report, slowdown percentage, number of iterations per cycle
-var playbackRanges = [[200,200,5],[150,150,5],[100,100,5],[80,80,5],[50,62.5,4],[30,75,2],[10,50,1]]; // percent to report, slowdown percentage, number of iterations per cycle
+var playbackRanges = [200, 150, 100, 80, 50, 30, 10]; // percent to report, slowdown percentage, number of iterations per cycle
 
 var currentPlaybackSpeed = 2;
 var targets = [ "none", "-10", "-7", "-5", "-2" , "0", "2", "5", "7" , "10" ]; // these are target balance angles
@@ -80,6 +78,7 @@ var currentPlaybackPosition = 1;
 var playintervalID = null;
 var statusintervalID = null;
 var liveintervalID = null;
+
 
 var currentStatus = 0;
 var DOWNLOADINGFILE=1;
@@ -136,7 +135,7 @@ document.getElementById("zoomSelect").selectedIndex = currentROI.toString();
 document.getElementById("speedSelect").options.length = 0;
 for (var i=0; i < playbackRanges.length; i++) {
     var option = document.createElement("option");
-    option.text=playbackRanges[i][0].toString() + "%"
+    option.text=playbackRanges[i].toString() + "%"
     document.getElementById("speedSelect").add(option);
 }
 document.getElementById("speedSelect").selectedIndex = currentPlaybackSpeed;
@@ -177,7 +176,7 @@ ws.onmessage = function (event) {
         var arrayLength = sampArray.length;
         var added = 0;
         for (var i = 0; i < arrayLength; i++) {
-            if (sampArray[i].length > 0) {   // have more checks for good data
+            if (sampArray[i].length > 20) {   // have more checks for good data
                 sample[sample.length] = extractData(sampArray[i]);
                 added+=1;
             }
@@ -190,7 +189,7 @@ ws.onmessage = function (event) {
         var sampArray = dataBack.split("LIVE:");
         var arrayLength = sampArray.length;
         for (var i = 0; i < arrayLength; i++) {
-            if (sampArray[i].length > 0) {   // have more checks for good data
+            if (sampArray[i].length > 10) {   // have more checks for good data
                 sample[sample.length] = extractData(sampArray[i]);
             }
         }
@@ -296,7 +295,7 @@ ws.onmessage = function (event) {
     }
     if (dataBack.slice(0,5) == "SAMP:"){
         sampleInterval = parseFloat(dataBack.slice(5))*1000;
-        setStatus("Received sample period of " + sampleInterval.toString() + "ms");
+        setStatus("Received sample period of " + dataBack.slice(5) + "s");
         return;
     }
 
@@ -356,7 +355,10 @@ function extractData(datastring){
 }
 
 function playbackSample(){
-    var iterations = playbackRanges[currentPlaybackSpeed][2]; // do this so that slower speeds are smoother
+//         playintervalID=setInterval(playbackSample,sampleInterval*(100/playbackRanges[currentPlaybackSpeed][1]));
+// sampleInterval*collectChunk*(100/playbackRanges[currentPlaybackSpeed][1])
+    var normalChunk = collectInterval/sampleInterval;
+    var iterations = Math.round((playbackRanges[currentPlaybackSpeed]/100.0) * normalChunk); // do this so that slower speeds are smoother
     if (currentPlaybackPosition + iterations > sample.length-1){
         iterations = sample.length-currentPlaybackPosition-1;
     }
@@ -382,8 +384,8 @@ function getWeighting(){
 }
 
 function calculateError(guess){
-    var count = 0, error = 0;
-    for(var i = 0; i < samples.length; i++){
+    var count = 0.0, error = 0.0;
+    for(var i = 0; i < sample.length; i++){
         if(sample[i][0] > 70 && sample[i][0] < 110 && sample[i] > 0){
             count += 1;
             error += guess*Math.sin(sample[i][0]*3.1416/180) - sample[i][2];
@@ -395,7 +397,7 @@ function calculateError(guess){
 }
 
 function showLive(){
-    ws.send("LDAT:");
+//    ws.send("LDAT:"); // consider removing this line.
     var iterations = (sample.length-1) - currentPlaybackPosition;
     if (iterations < 5) return; // draw not fewer than 5 samples at a time
     drawSamples(currentPlaybackPosition,iterations);
@@ -754,10 +756,6 @@ zoomSelect.onchange = function(){
 speedSelect.onchange = function(){
     currentPlaybackSpeed = document.getElementById("speedSelect").selectedIndex;
 // consider whether to allow this to be changed during active playback
-    if (playintervalID != null) {
-        clearInterval(playintervalID);
-        playintervalID=setInterval(playbackSample,sampleInterval*collectChunk*(100/playbackRanges[currentPlaybackSpeed][1]));
-    }
 }
 
 /*
@@ -871,7 +869,7 @@ recordIcon.onclick=function(){
 recordButton.onclick = function() {
     var fileName = document.getElementById("recordFileName").value;
     var patt = /^[a-z0-9_. ()-]+$/i;
-    if (patt.test(fileName)) {
+    if (patt.test(fileName) && fileName.length < 31) {
         recordModal.style.display = "none";
         currentStatus |= RECORDINGSESSION;
         currentStatus &= ~SESSIONLOADED;
@@ -881,7 +879,7 @@ recordButton.onclick = function() {
         clearAT();
         currentPlaybackPosition = 1; // needs to be one as we are doing comparison with previous entry removed so that playback starts from last swing displayed
         if (liveintervalID != null) clearInterval(liveintervalID);
-        liveintervalID=setInterval(showLive,sampleInterval*collectChunk);
+        liveintervalID=setInterval(showLive,collectInterval);
         currentSwingDisplayed=null;
         ws.send("STRT:" + fileName);
     } else {
@@ -899,8 +897,8 @@ calibrateButton.onclick = function() {
 
 //  if(calibrationValue != null) return;
     calibrationValue = getWeighting();
-    setStatus("Calibration value = : " + calibrationValue);
-    for(var i = 0; i < samples.length; i++) {
+    setStatus("Calibration value = " + calibrationValue);
+    for(var i = 0; i < sample.length; i++) {
         sample[i][2] -= calibrationValue*Math.sin(sample[i][0]*3.142/180);
     }
 };
@@ -938,7 +936,7 @@ liveIcon.onclick = function() {
         sample = [];
         currentPlaybackPosition = 1; // needs to be one as we are doing comparison with previous entry removed so that playback starts from last swing displayed
         if (liveintervalID != null) clearInterval(liveintervalID);
-        liveintervalID=setInterval(showLive,sampleInterval*collectChunk); // 200ms
+        liveintervalID=setInterval(showLive,collectInterval);
         currentSwingDisplayed=null;
         ws.send("STRT:");
     }
@@ -977,7 +975,7 @@ playIcon.onclick=function(){
         clearAT();
 //        currentPlaybackPosition =1; // needs to be one as we are doing comparison with previous entry removed so that playback starts from last swing displayed
         if (playintervalID != null) clearInterval(playintervalID);
-        playintervalID=setInterval(playbackSample,sampleInterval*collectChunk*(100/playbackRanges[currentPlaybackSpeed][1])); // 100ms = 10 samples per iteration
+        playintervalID=setInterval(playbackSample,collectInterval);
         currentSwingDisplayed=null;
     }
 };
@@ -992,7 +990,7 @@ pauseIcon.onclick=function(){
     if ((currentStatus & PAUSED) != 0) {
         currentStatus &= ~PAUSED
         if (playintervalID != null) clearInterval(playintervalID);
-        playintervalID=setInterval(playbackSample,sampleInterval*collectChunk*(100/playbackRanges[currentPlaybackSpeed][1]));
+        playintervalID=setInterval(playbackSample,collectInterval)
         clearBell();
     } else {
         currentStatus |= PAUSED;
@@ -1011,13 +1009,29 @@ backIcon.onclick=function(){
     if (currentSwingDisplayed == null) currentSwingDisplayed=1;
     currentSwingDisplayed -= 1;
     drawFrame();
-    drawSamples(swingStarts[currentSwingDisplayed],(swingStarts[currentSwingDisplayed+1]-1) - swingStarts[currentSwingDisplayed]);
+    
+    for (var startpoint = swingStarts[currentSwingDisplayed]; startpoint > 3; --startpoint){
+        if (sample[startpoint][1] > 90) break;
+    }
+    var endpoint = 0;
+    if (currentSwingDisplayed > halfSwingStarts.length -1) {
+        endpoint = samples.length - 3;
+    } else {
+        for (endpoint = halfSwingStarts[currentSwingDisplayed]; endpoint < sample.length -3; ++endpoint){
+            if (sample[endpoint][1] < 270) break;
+        }
+    }
+
+//    drawSamples(swingStarts[currentSwingDisplayed],(swingStarts[currentSwingDisplayed+1]-1) - swingStarts[currentSwingDisplayed]);
+    drawSamples(startpoint,endpoint-startpoint);
+
     textBell((currentSwingDisplayed+1).toString());
     currentStatus &= ~(LASTHS1 | LASTBS1 | LASTHS2 | LASTBS2);
     updateIcons();
 };
 
 forwardIcon.addEventListener("touchstart", preventZoom);
+
 forwardIcon.onclick=function(){
     if ((currentStatus & DOWNLOADINGFILE) != 0) return;
     if ((currentStatus & RECORDINGSESSION) != 0) return;
@@ -1028,13 +1042,20 @@ forwardIcon.onclick=function(){
     if (currentSwingDisplayed == swingStarts.length - 1) return;
     var iterations = null;
     currentSwingDisplayed += 1;
-    if (currentSwingDisplayed == swingStarts.length - 1){
-        iterations = (sample.length - 3) - swingStarts[currentSwingDisplayed];
+    
+    for (var startpoint = swingStarts[currentSwingDisplayed]; startpoint > 3; --startpoint){
+        if (sample[startpoint][1] > 90) break;
+    }
+    var endpoint = 0;
+    if (currentSwingDisplayed > halfSwingStarts.length -1) {
+        endpoint = samples.length - 3;
     } else {
-        iterations = (swingStarts[currentSwingDisplayed +1]-1) - swingStarts[currentSwingDisplayed];
+        for (endpoint = halfSwingStarts[currentSwingDisplayed]; endpoint < sample.length -3; ++endpoint){
+            if (sample[endpoint][1] < 270) break;
+        }
     }
     drawFrame();
-    drawSamples(swingStarts[currentSwingDisplayed],iterations);
+    drawSamples(startpoint,endpoint-startpoint);
     textBell((currentSwingDisplayed+1).toString());
     currentStatus &= ~(LASTHS1 | LASTBS1 | LASTHS2 | LASTBS2);
     updateIcons();
@@ -1048,13 +1069,27 @@ favIcon.onclick=function(){
     if ((currentStatus & PLAYBACK) != 0) return;
     if (currentSwingDisplayed == null) return;
 
-    if (currentSwingDisplayed == swingStarts.length - 1){
-        iterations = (sample.length - 3) - swingStarts[currentSwingDisplayed];
-    } else {
-        iterations = (swingStarts[currentSwingDisplayed +1]-1) - swingStarts[currentSwingDisplayed];
+    for (var startpoint = swingStarts[currentSwingDisplayed]; startpoint > 3; --startpoint){
+        if (sample[startpoint][1] > 90) break;
     }
+    var endpoint = 0;
+    if (currentSwingDisplayed > halfSwingStarts.length -1) {
+        endpoint = samples.length - 3;
+    } else {
+        for (endpoint = halfSwingStarts[currentSwingDisplayed]; endpoint < sample.length -3; ++endpoint){
+            if (sample[endpoint][1] < 270) break;
+        }
+    }
+
+//    if (currentSwingDisplayed == swingStarts.length - 1){
+//        iterations = (sample.length - 3) - swingStarts[currentSwingDisplayed];
+//    } else {
+//        iterations = (swingStarts[currentSwingDisplayed +1]-1) - swingStarts[currentSwingDisplayed];
+//    }
+
     template=[];
-    for (var i = 0; i<iterations; i++) template[template.length]=sample[swingStarts[currentSwingDisplayed]+i].slice();
+//    for (var i = 0; i<iterations; i++) template[template.length]=sample[swingStarts[currentSwingDisplayed]+i].slice();
+    for (var i = startpoint; i<endpoint; i++) template[template.length]=sample[i].slice();
 
     drawSamplesOnTemplate();
 //    currentStatus &= ~(LASTHS1 | LASTBS1 | LASTHS2 | LASTBS2);

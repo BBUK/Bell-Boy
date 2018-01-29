@@ -87,7 +87,7 @@ hostnamectl set-hostname ${HOSTNAME}
 pacman-key --init
 pacman -Syu --noconfirm || { echo "Failed pacman -Syu.  Exiting"; exit 1; }
 sync
-pacman -S --noconfirm --needed wget dtc samba bzip2 screen python2 python2-numpy tmux hostapd crda samba base-devel i2c-tools unzip dhcp git || { echo "Failed downloading packages.  Exiting"; exit 1; }
+pacman -S --noconfirm --needed wget dtc samba bzip2 screen tmux hostapd crda samba base-devel i2c-tools unzip dhcp git || { echo "Failed downloading packages.  Exiting"; exit 1; }
 
 #Load up CRDA, makes wifi more reliable in the first min or two
 echo -e '\nWIRELESS_REGDOM="GB"\n' >> /etc/conf.d/wireless-regdom
@@ -116,14 +116,14 @@ auth_algs=1
 wmm_enabled=0
 HDHD
 
-tee /usr/lib/systemd/system/dhcpd4.service <<HDHD || { echo "Unable to write dhcpd4 service file - exiting"; exit 1; }
+tee /etc/systemd/system/ap.service <<HDHD || { echo "Unable to write dhcpd4 service file - exiting"; exit 1; }
 [Unit]
 Description=IPv4 DHCP server
 After=network.target
 
 [Service]
 Type=forking
-PIDFile=/run/dhcpd4.pid
+PIDFile=/run/ap.pid
 ExecStartPre=-/usr/bin/tvservice -o
 ExecStartPre=-/usr/bin/ip link set dev wlan0 down
 #ip addr flush dev wlan0
@@ -131,7 +131,7 @@ ExecStartPre=-/usr/bin/ip link set dev wlan0 up
 ExecStartPre=-/usr/bin/iw dev wlan0 set power_save off
 ExecStartPre=/usr/bin/sh -c "sleep 5 && /usr/bin/ip addr add 10.0.0.1/24 broadcast 10.0.0.255 dev wlan0"
 ExecStartPre=/usr/bin/systemctl start hostapd
-ExecStart=/usr/bin/dhcpd -4 -q -cf /etc/dhcpd.conf -pf /run/dhcpd4.pid
+ExecStart=/usr/bin/dhcpd -4 -q -cf /etc/dhcpd.conf -pf /run/ap.pid
 ExecStopPost=/usr/bin/systemctl stop hostapd
 ExecStopPost=-/usr/bin/ip link set dev wlan0 down
 KillSignal=SIGINT
@@ -140,14 +140,18 @@ KillSignal=SIGINT
 WantedBy=multi-user.target
 HDHD
 
-git clone https://github.com/google/pywebsocket.git || { echo "Unable to download pywebsocket.  Exiting"; exit 1; }
+wget https://github.com/joewalnes/websocketd/releases/download/v0.3.0/websocketd-0.3.0-linux_arm.zip
+unzip websocketd-0.3.0-linux_arm.zip || { echo "Unable to extract websocketd executable. Exiting"; exit 1; }
+mv ./websocketd /srv/http/ || { echo "Could not find websocketd executable. Exiting"; exit 1; }
 
-cd pywebsocket
+#git clone https://github.com/google/pywebsocket.git || { echo "Unable to download pywebsocket.  Exiting"; exit 1; }
 
-python2 setup.py build
-python2 setup.py install || { echo "Unable to install Pywebsocket.  Exiting"; exit 1; }
+#cd pywebsocket
 
-cp build/lib/mod_pywebsocket/standalone.py /srv/http/ || { echo "Could not find standalone.py.  Exiting"; exit 1; }
+#python2 setup.py build
+#python2 setup.py install || { echo "Unable to install Pywebsocket.  Exiting"; exit 1; }
+
+#cp build/lib/mod_pywebsocket/standalone.py /srv/http/ || { echo "Could not find standalone.py.  Exiting"; exit 1; }
 
 tee /etc/systemd/system/bellboy.service <<HDHD
 [Unit]
@@ -156,7 +160,7 @@ After=network.target
 [Service]
 User=root
 Type=forking
-ExecStart=/usr/bin/screen -S wrad -d -m sh -c "(/usr/bin/python2 /srv/http/standalone.py -p 80 -w /srv/http/ -d /srv/http/ 2>&1) | tee -a /var/log/bellboy.log"
+ExecStart=/usr/bin/screen -S wrad -d -m sh -c "(/srv/http/websocketd --port=80 --static-dir=/srv/http/ /srv/http/bb_dcmimu 200 500 2 2>&1) | tee -a /var/log/bellboy.log"
 ExecStop=/usr/bin/screen -S wrad -X wrad
 KillMode = control-group
 TimeoutStopSec=0
@@ -179,16 +183,20 @@ HDHD
 cd ~
 
 git clone https://github.com/BBUK/Bell-Boy.git || { echo "Unable to download Bell-Boy code"; exit 1; }
-
 cd Bell-Boy
 mv * /srv/http
 
 mkdir -p /data/samples
 mv samples/* /data/samples/
 
-cd python
-python2 setup.py build_ext --inplace || { echo "Unable to build dcmimu module"; exit 1; }
-cp dcmimu.so /srv/http/
+cd bb_dcmimu
+gcc bb_dcmimu.c -o bb_dcmimu -lm || { echo "Unable compile bb_dcmimu.  Exiting."; exit 1; }
+mv bb_dcmimu /srv/http
+
+
+#cd python
+#python2 setup.py build_ext --inplace || { echo "Unable to build dcmimu module"; exit 1; }
+#cp dcmimu.so /srv/http/
 
 cd ~
 tee gpio_pull-overlay.dts <<HDHD
@@ -238,7 +246,7 @@ tee gpio_pull-overlay.dts <<HDHD
 };
 HDHD
 
-dtc -@ -I dts -O dtb -o gpio_pull.dtbo gpio_pull-overlay.dts || { echo "Unable to compile dts"; exit 1; }
+dtc -Wno-unit_address_vs_reg -@ -I dts -O dtb -o gpio_pull.dtbo gpio_pull-overlay.dts || { echo "Unable to compile dts"; exit 1; }
 cp gpio_pull.dtbo /boot/overlays/
 
 if [ $(cat /boot/config.txt | grep 'dtoverlay=gpio_pull' | wc -l) -eq 0 ]; then
@@ -274,7 +282,7 @@ public = yes
 HDHD
 
 systemctl enable bellboy
-systemctl enable dhcpd4
+systemctl enable ap
 systemctl enable smbd nmbd
 
 #sync && reboot
