@@ -1,4 +1,4 @@
-//gcc testwebsd.c -o testwebsd
+//gcc bb_dcmimu.c -o bb_dcmimu -lm
 
 /*
 Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -660,7 +660,7 @@ void NXP_pull_data(){
     if(number_to_pull == 0 || accel_count == 0) return;
     if((accel_count - number_to_pull) >= 2) NXP_read_accel_data(accel_data);   //acceleration ahead, ditch a sample from the acceleration fifo
     if (accel_count >= 31 || number_to_pull >= 31){ // overflow (or nearly so)
-        printf("EOVF:\n");
+        printf("\nEOVF:\n");
     }
 
     for(i=0; i<number_to_pull; ++i){
