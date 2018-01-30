@@ -164,7 +164,13 @@ ws.onopen = function(){
 };
 
 ws.onmessage = function (event) {
-    var dataBack = event.data;
+    var dataBack = event.data.split("\n");
+    for (var line of databack) {
+        if (line.length > 3) parseResult(line);
+    }
+}
+
+function parseResult(databack) {
     if (dataBack.slice(0,5) == "FILE:"){
         var option = document.createElement("option");
         option.text=dataBack.slice(5);
@@ -606,8 +612,11 @@ function drawSamplesOnTemplate(){
 
 //            drawAccelT(posHS1,startAngle,endAngle,maxlength*(Math.min(Math.abs(dataEntryCurrent[2])/scaleValue,1)));
         } else if (dataEntryCurrent[0] > (360 - ROIL) && dataEntryCurrent[0] < (360 - ROIU) && dataEntryCurrent[1] >= 0) { // within ROI for HS2
-            var endAngle = Math.min((360-ROIU),dataEntryCurrent[0]);
-            var startAngle = Math.max(dataEntryOld[0], (360-ROIL));
+//            var endAngle = Math.min((360-ROIU),dataEntryCurrent[0]);
+//            var startAngle = Math.max(dataEntryOld[0], (360-ROIL));
+            var endAngle = Math.max(ROIU, 360-dataEntryCurrent[0]);
+            var startAngle = Math.min(360-dataEntryOld[0], ROIL);
+            
             if (startAngle >= endAngle) {
                 continue; // for moment don't swap, just do nothing
             }
@@ -627,8 +636,11 @@ function drawSamplesOnTemplate(){
             if (dataEntryNext[0] <= (360 - ROIL)) {
                 dataEntryCurrent[0] = (360 - ROIL); // tidy up at end of ROI
             }
-            var startAngle = Math.min((360-ROIU),dataEntryOld[0]);
-            var endAngle = dataEntryCurrent[0];
+            var startAngle = Math.max(ROIU,360-dataEntryOld[0]);
+            var endAngle = Math.min(ROIL,360-dataEntryCurrent[0]);
+            
+//            var startAngle = Math.min((360-ROIU),dataEntryOld[0]);
+//            var endAngle = dataEntryCurrent[0];
             if (endAngle >= startAngle) {
                 continue; // for moment don't swap, just do nothing
             }
@@ -1089,7 +1101,7 @@ favIcon.onclick=function(){
 
     template=[];
 //    for (var i = 0; i<iterations; i++) template[template.length]=sample[swingStarts[currentSwingDisplayed]+i].slice();
-    for (var i = startpoint; i<endpoint; i++) template[template.length]=sample[i].slice();
+    for (var i = startpoint; i<endpoint; ++i) template[template.length]=sample[i].slice();
 
     drawSamplesOnTemplate();
 //    currentStatus &= ~(LASTHS1 | LASTBS1 | LASTHS2 | LASTBS2);
