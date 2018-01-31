@@ -260,12 +260,14 @@ int main(int argc, char const *argv[]){
                     ROTATIONS[0] = -ROTATIONS[0];   // about which way to mount the sensor
                     ROTATIONS[1] = -ROTATIONS[1];   // it just flips things around as if the sensor
                     start_angle = -start_angle;     // was mounted the other way round
+		    GYRO_BIAS[0] = -GYRO_BIAS[0];
+                    GYRO_BIAS[1] = -GYRO_BIAS[1];
                 }
                 if(start_angle < -20){
                     printf("ESTD:\n"); // bell out of range for stand
                     continue;
                 }
-                if(GYRO_BIAS[0] > 5.0){
+                if(abs(GYRO_BIAS[0]) > 5.0){
                     printf("EMOV:\n"); // bell is moving
                     continue;
                 }
@@ -503,6 +505,10 @@ float NXP_get_orientation(void){
     usleep(5000);
     NXP_read_accel_data(accel_data);
     NXP_read_gyro_data(gyro_data);
+	
+    GYRO_BIAS[0] = 0.0;
+    GYRO_BIAS[1] = 0.0;
+    GYRO_BIAS[2] = 0.0;
  
     for(count = 0; count < 50; ++count){
         usleep(5000);
@@ -735,9 +741,9 @@ void NXP_read_gyro_data(float *values){
     values[1] *= ROTATIONS[1];
     values[2] *= ROTATIONS[2];
 
-//    values[0] -= GYRO_BIAS[0]; // adjust for gyro bias
-//    values[1] -= GYRO_BIAS[1];
-//    values[2] -= GYRO_BIAS[2];
+    values[0] -= GYRO_BIAS[0]; // adjust for gyro bias
+    values[1] -= GYRO_BIAS[1];
+    values[2] -= GYRO_BIAS[2];
 }
 
 void NXP_read_accel_data(float *values){
