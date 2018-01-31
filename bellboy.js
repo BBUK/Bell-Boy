@@ -617,7 +617,7 @@ function drawSamplesOnTemplate(){
             var endAngle = Math.max(ROIU, 360-dataEntryCurrent[0]);
             var startAngle = Math.min(360-dataEntryOld[0], ROIL);
             
-            if (startAngle >= endAngle) {
+            if (endAngle >= startAngle) {
                 continue; // for moment don't swap, just do nothing
             }
             var pixelsFromROIL = (ROIL - startAngle) * stepSize;
@@ -641,7 +641,7 @@ function drawSamplesOnTemplate(){
             
 //            var startAngle = Math.min((360-ROIU),dataEntryOld[0]);
 //            var endAngle = dataEntryCurrent[0];
-            if (endAngle >= startAngle) {
+            if (startAngle >= endAngle) {
                 continue; // for moment don't swap, just do nothing
             }
             var pixelsFromROIU = (startAngle - ROIU) * stepSize;
@@ -853,7 +853,7 @@ recordIcon.onclick=function(){
         alert("Not implemented for this demo");
         return;
     }
-    if (sampleInterval = 0.0){
+    if (sampleInterval == 0.0){
         setStatus("No communication with IMU device.  Aborted.");
         return;
     }
@@ -921,7 +921,7 @@ liveIcon.onclick = function() {
         alert("Not implemented for this demo");
         return;
     }
-    if (sampleInterval = 0.0){
+    if (sampleInterval == 0.0){
         setStatus("No communication with IMU device.  Aborted.");
         return;
     }
@@ -1027,7 +1027,7 @@ backIcon.onclick=function(){
     }
     var endpoint = 0;
     if (currentSwingDisplayed > halfSwingStarts.length -1) {
-        endpoint = samples.length - 3;
+        endpoint = sample.length - 3;
     } else {
         for (endpoint = halfSwingStarts[currentSwingDisplayed]; endpoint < sample.length -3; ++endpoint){
             if (sample[endpoint][1] < 270) break;
@@ -1060,7 +1060,7 @@ forwardIcon.onclick=function(){
     }
     var endpoint = 0;
     if (currentSwingDisplayed > halfSwingStarts.length -1) {
-        endpoint = samples.length - 3;
+        endpoint = sample.length - 3;
     } else {
         for (endpoint = halfSwingStarts[currentSwingDisplayed]; endpoint < sample.length -3; ++endpoint){
             if (sample[endpoint][1] < 270) break;
@@ -1086,7 +1086,7 @@ favIcon.onclick=function(){
     }
     var endpoint = 0;
     if (currentSwingDisplayed > halfSwingStarts.length -1) {
-        endpoint = samples.length - 3;
+        endpoint = sample.length - 3;
     } else {
         for (endpoint = halfSwingStarts[currentSwingDisplayed]; endpoint < sample.length -3; ++endpoint){
             if (sample[endpoint][1] < 270) break;
