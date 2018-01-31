@@ -88,6 +88,7 @@ int FS_GYRO = 0;
 int FS_ACCEL = 0;
 
 int RUNNING = 0;
+int OUT_COUNT = 0;
 
 char READ_OUTBUF[1500];
 char READ_OUTBUF_LINE[150];
@@ -280,6 +281,7 @@ int main(int argc, char const *argv[]){
                     if(NXP_start_fifos(ODR,FS_GYRO,FS_ACCEL) == 0){
                         LOOPSLEEP = 4000000/ODR;
                         RUNNING = 1;
+			OUT_COUNT = 0;
                         printf("STRT:\n");
                     } else {
                         printf("EFIF:\n");
@@ -296,7 +298,7 @@ int main(int argc, char const *argv[]){
                 NXP_stop_fifos();
                 RUNNING = 0;
                 LOOPSLEEP = 100000;
-                printf("STPD:\n");
+                printf("STPD:%d\n", OUT_COUNT);
                 continue;
             }
             if(strcmp("LOAD:", command) == 0 && RUNNING == 0) {
@@ -682,18 +684,18 @@ void NXP_pull_data(){
     }
 
     for(i=0; i<number_to_pull; ++i){
-        if (accel_count != 0) {
+        if (accel_count != 0) { // if we run out of accelerometer samples (because the fifo is running slower), use the last sample
             NXP_read_accel_data(accel_data);
             accel_count -= 1;
         }
         NXP_read_gyro_data(gyro_data);
 
         calculate(gyro_data[0],gyro_data[1],gyro_data[2], accel_data[0],accel_data[1],accel_data[2],sample_period);
-        accTang = (gyro_data[0] - last_x_gyro)/sample_period; // assumes rotation of bell is around y axis
-        roll += angle_correction;                                   // need to correct reported angles to match
+        accTang = (gyro_data[0] - last_x_gyro)/sample_period;         // assumes rotation of bell is around x axis
+        roll += angle_correction;                                     // need to correct reported angles to match
         if ((last_angle - roll) > 250 && angle_correction != 360){    // the system we are using 0 degrees = bell at
-            angle_correction = 360;                                 // balance at handstroke, 360 degrees = bell at
-            roll += 360.0;                                          // balance at backstroke. 180 degrees = BDC. 
+            angle_correction = 360;                                   // balance at handstroke, 360 degrees = bell at
+            roll += 360.0;                                            // balance at backstroke. 180 degrees = BDC. 
         } else if ((last_angle - roll) < -250 && angle_correction != 0) {                                                 
             angle_correction = 0;
             roll -= 360.0;
@@ -718,6 +720,7 @@ void NXP_pull_data(){
     }
     if(remote_count != 0) printf("%s\n",remote_outbuf);
     if(local_count != 0) fputs(local_outbuf, fd_write_out);
+    OUT_COUNT += number_to_pull;
     
 }
 
