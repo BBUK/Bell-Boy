@@ -18,7 +18,7 @@
 // bell rope.  The Bell-Boy uses tangential acceleration of the bell as a proxy for force applied.  The
 // hardware is currently a Pi Zero running Arch Linux.
 
-// I pulled anippets of code from loads of places so if any of you recognise anything you wrote - thanks!
+// I pulled snippets of code from loads of places so if any of you recognise anything you wrote - thanks!
 
 // The script below is the javascript for the front end.  It makes extensive use of HTML5 canvases
 // so HTML5 is required.  Websockets are also used to pull data from the Bell-Boy device.
@@ -29,7 +29,7 @@ var BGCOLOUR="#686888";
 var nonLive=false;
 var wsHost="10.0.0.1"
 
-var sampleInterval = 5.0;  // milliseconds for each sample (default 200 times/sec)
+var sampleInterval = 5.0;  // milliseconds for each sample (default 200 times/sec).  Updated by SAMP: command
 var collectInterval = 50.0; // update display in ms - here 20 times/sec
 
 var canvasBD = document.getElementById("canvasBD");
@@ -68,7 +68,7 @@ var currentROI=3;
 var ROIU = ROIRanges[currentROI][0];
 var ROIL = ROIRanges[currentROI][1];
 
-var playbackRanges = [200, 150, 100, 80, 50, 30, 10]; // percent to report, slowdown percentage, number of iterations per cycle
+var playbackRanges = [200, 150, 100, 80, 50, 30, 10]; // available playback speeds (percent)
 
 var currentPlaybackSpeed = 2;
 var targets = [ "none", "-10", "-7", "-5", "-2" , "0", "2", "5", "7" , "10" ]; // these are target balance angles
@@ -165,12 +165,12 @@ ws.onopen = function(){
 
 ws.onmessage = function (event) {
     var dataBack = event.data.split("\n");
-    for (var line of databack) {
+    for (var line of dataBack) {
         if (line.length > 3) parseResult(line);
     }
 }
 
-function parseResult(databack) {
+function parseResult(dataBack) {
     if (dataBack.slice(0,5) == "FILE:"){
         var option = document.createElement("option");
         option.text=dataBack.slice(5);
@@ -182,7 +182,7 @@ function parseResult(databack) {
         var arrayLength = sampArray.length;
         var added = 0;
         for (var i = 0; i < arrayLength; i++) {
-            if (sampArray[i].length > 20) {   // have more checks for good data
+            if (sampArray[i].length > 20) {   // have more checks for good data (sampArray[i].split[","].length >=3)
                 sample[sample.length] = extractData(sampArray[i]);
                 added+=1;
             }
@@ -195,7 +195,7 @@ function parseResult(databack) {
         var sampArray = dataBack.split("LIVE:");
         var arrayLength = sampArray.length;
         for (var i = 0; i < arrayLength; i++) {
-            if (sampArray[i].length > 10) {   // have more checks for good data
+            if (sampArray[i].length > 20) {   // have more checks for good data (sampArray[i].split[","].length >=3)
                 sample[sample.length] = extractData(sampArray[i]);
             }
         }
@@ -301,7 +301,7 @@ function parseResult(databack) {
     }
     if (dataBack.slice(0,5) == "SAMP:"){
         sampleInterval = parseFloat(dataBack.slice(5))*1000;
-        setStatus("Received sample period of " + dataBack.slice(5) + "s");
+        setStatus("Received sample period of " + sampleInterval.toString() + "ms");
         return;
     }
 
@@ -1050,8 +1050,8 @@ forwardIcon.onclick=function(){
     if ((currentStatus & SESSIONLOADED) == 0) return;
     if ((currentStatus & HELPDISPLAYED) != 0) return;
     if ((currentStatus & PLAYBACK) != 0) return;
-    if (currentSwingDisplayed == null) currentSwingDisplayed = -1;
     if (currentSwingDisplayed == swingStarts.length - 1) return;
+    if (currentSwingDisplayed == null) currentSwingDisplayed = -1;
     var iterations = null;
     currentSwingDisplayed += 1;
     
