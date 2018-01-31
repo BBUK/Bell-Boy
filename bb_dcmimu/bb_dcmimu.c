@@ -79,7 +79,7 @@ int DEBUG = 0;
 float NXP_gyro_scale_factor = 0;
 float NXP_accel_scale_factor = 0;
 
-int ROTATIONS[3] = { -1, -1, -1 }; //set rotation values for mounting IMU device x y z
+float ROTATIONS[3] = { -1.0, -1.0, -1.0 }; //set rotation values for mounting IMU device x y z
 
 int SWAPXY = 1; // swap XY for different mounting.  Swap is applied before rotation.
 
@@ -142,6 +142,16 @@ void sig_handler(int signum) {
 # (xiv) STRT: in response to STRT: indicates a sucessful start.
 # (xv)  LFIN:[number] indicates the end of a file download and the number of samples sent
 */
+
+/*
+* Command line arguments bb_dcmimu {1} {2} {3}
+* {1} = Operational data rate (ODR). One of 800, 400, 200, 100 and 50 samples per second.
+* {2} = gyro full scale range. One of 500 and 1000 (in degrees/second).
+* {3} = accelerometer full scale range.  One of 2 and 4 (g).
+* Example: bb_dcmimu 200 500 2
+* Commands (see above) are received on stdin and output is on stdout.
+* Will work standalone but intended to be interfaced with websocketd https://github.com/joewalnes/websocketd
+*/
 int main(int argc, char const *argv[]){
     char linein[50];
     char command[6];
@@ -169,7 +179,8 @@ int main(int argc, char const *argv[]){
         printf("Incorrect ODR.  Expects 50, 100, 200, 400 or 800 as first argument.\n");
         return -1;
     }
-    
+    sample_period = 1.0/ODR; // this is an initial estimate.  SAMP: command measures this directly and updates sample_period
+	
     FS_GYRO = atoi(argv[2]);
     if (FS_GYRO != 500 && FS_GYRO != 1000) {
         printf("Incorrect FS gyro.  Expects 500 or 1000 as second argument.\n");
@@ -376,7 +387,8 @@ int NXP_test(void){
 int NXP_fifo_timer(void){
     struct timeval start, stop;
     int cco, loops;
-    float dummy[3], gyro_result = 0; //, accel_result = 0;
+    float dummy[3];
+    float gyro_result = 0.0; //, accel_result = 0;
     if (NXP_start_fifos(ODR,500,2) < 0){
         NXP_stop_fifos();
         return -1;
@@ -515,7 +527,7 @@ float NXP_get_orientation(void){
     GYRO_BIAS[1] = u1;
     GYRO_BIAS[2] = u2;
     
-    printf("GXB:%+07.1f GYB:%+07.1f GXB:%+07.1f\n", u0,u1,u2); 
+    printf("GXB:%+07.1f GYB:%+07.1f GZB:%+07.1f\n", u0,u1,u2); 
     
     close(NXP_fd_accel);
     NXP_fd_accel = -1;
@@ -723,9 +735,9 @@ void NXP_read_gyro_data(float *values){
     values[1] *= ROTATIONS[1];
     values[2] *= ROTATIONS[2];
 
-//    values[0] -= gyro_bias[0]; // adjust for gyro bias
-//    values[1] -= gyro_bias[1];
-//    values[2] -= gyro_bias[2];
+//    values[0] -= GYRO_BIAS[0]; // adjust for gyro bias
+//    values[1] -= GYRO_BIAS[1];
+//    values[2] -= GYRO_BIAS[2];
 }
 
 void NXP_read_accel_data(float *values){
