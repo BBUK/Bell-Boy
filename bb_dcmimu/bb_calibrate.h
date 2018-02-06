@@ -23,21 +23,10 @@ SOFTWARE.
 
 void i2cReadBlockData(int fd, __u8 address, __u8 length, __u8 *values);
 void i2cWriteByteData(int fd, __u8 address, __u8 value);
-void setup(void);
-void read_gyro_data(void);
-int read_fifo_count(void);
-void calculate(float u0, float u1, float u2, float z0, float z1,float z2, float h);
-int NXP_start_fifos(int ODR, int gyro_fs, int accel_fs);
-void NXP_stop_fifos(void);
-void NXP_pull_data(void);
+int NXP_setup(void);
 void NXP_read_gyro_data(float *values);
 void NXP_read_accel_data(float *values);
-void NXP_clear_fifos(void);
-int NXP_read_accel_fifo_count(void);
-int NXP_read_gyro_fifo_count(void);
-int NXP_fifo_timer(void);
-int NXP_test(void);
-float NXP_get_orientation(void);
+int NXP_get_calibration_values(float *results, int *temperature);
 
 #define NXP_GYRO_I2C_ADDRESS             0x21
 #define NXP_GYRO_ID                  0xD7

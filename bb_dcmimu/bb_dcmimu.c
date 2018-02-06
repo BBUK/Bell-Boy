@@ -93,6 +93,10 @@ int OUT_COUNT = 0;
 char READ_OUTBUF[1500];
 char READ_OUTBUF_LINE[150];
 int READ_OUTBUF_COUNT;
+float yoffset = 0.0;
+float yscale = 1.0;
+float zoffset = 0.0;
+float zscale = 1.0;
 
 char FILENAME[50];
 
@@ -199,6 +203,26 @@ int main(int argc, char const *argv[]){
         return -1;
     }
     
+    FILE *fd_read_cal;
+    fd_read_cal = fopen("/boot/bb_calibrations","r");
+    if(fd_read_cal == NULL) {
+        fprintf(stderr, "Calibration file not found.\n");
+    } else {
+        if (fgets(READ_OUTBUF_LINE, sizeof(READ_OUTBUF_LINE), fd_read_cal) != NULL) {
+            char *p = strtok(READ_OUTBUF_LINE,",");
+            if(p!= NULL) yoffset = atof(&p[3]);
+            p = strtok(NULL,",");
+            if(p!= NULL) yscale = atof(&p[3]);
+            p = strtok(NULL,",");
+            if(p!= NULL) zoffset = atof(&p[3]);
+            p = strtok(NULL,",");
+            if(p!= NULL) zscale = atof(&p[3]);
+//            fprintf(stderr,"YO:%+06.3f,YS:%+06.3f,ZO:%+06.3f,ZS:%+06.3f\n", yoffset,yscale,zoffset,zscale);
+        }
+        fclose(fd_read_cal);
+    }
+    
+    
     while(!sig_exit){
         usleep(LOOPSLEEP);
         if(RUNNING) NXP_pull_data();
@@ -261,7 +285,7 @@ int main(int argc, char const *argv[]){
                     ROTATIONS[0] = -ROTATIONS[0];   // about which way to mount the sensor
                     ROTATIONS[1] = -ROTATIONS[1];   // it just flips things around as if the sensor
                     start_angle = -start_angle;     // was mounted the other way round
-		    GYRO_BIAS[0] = -GYRO_BIAS[0];
+                    GYRO_BIAS[0] = -GYRO_BIAS[0];
                     GYRO_BIAS[1] = -GYRO_BIAS[1];
                 }
                 if(start_angle < -20){
@@ -281,7 +305,7 @@ int main(int argc, char const *argv[]){
                     if(NXP_start_fifos(ODR,FS_GYRO,FS_ACCEL) == 0){
                         LOOPSLEEP = 4000000/ODR;
                         RUNNING = 1;
-			OUT_COUNT = 0;
+                        OUT_COUNT = 0;
                         printf("STRT:\n");
                     } else {
                         printf("EFIF:\n");
@@ -766,6 +790,11 @@ void NXP_read_accel_data(float *values){
         values[0] = values[1];
         values[1] = temp;
     }
+    values[1] += yoffset;
+    values[1] *= yscale;
+    values[2] += zoffset;
+    values[2] *= zscale;
+    
     values[0] *= ROTATIONS[0]; // deal with package being mounted differently
     values[1] *= ROTATIONS[1];
     values[2] *= ROTATIONS[2];
