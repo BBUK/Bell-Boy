@@ -2,37 +2,71 @@ Bell-Boy construction guide
 
 Hardware
 
-There are two versions of the hardware, the basic version and the advanced version.  The differences between the two are that the basic version is easier to construct and the advanced version has a built-in battery, battery charging functionality and physical on-off and reset controls.
+The hardware comprises:
 
-Parts list (basic version):
+(a) a Rasberry Pi Zero W (not the Raspberry Pi Zero WH - i.e. not the one that has pre-soldered headers on it) - this is widely available from multiple sellers at a cost of around £10
 
-(a) Raspberry Pi (widely available). See eBay or www.pimoroni.com www.pi-supply www.thepihut
+(b) an SD card containing a configured Arch Linux install and the Bell Boy software.  It needs to be at least 4GB in size but it is difficult to get ones that small, so any size up to 64GB will be fine - make sure you get one from a seller that sells original cards from known good manufacturers.  Cards cost around £15 (watch out for cheaper copies)
 
-(b) Micro SD card of at least 8Gb capacity (widely available).  There are some fake branded cards about, pease be sure to use a reputable supplier.
+(c) an Adafruit Precision NXP 9-DOF Breakout Board, this is the IMU that measures the motion of the bell.  Available from many Adafruit distributors.  Cost about £15.  best availability seems to be from Mouser.
 
-(c) 2x MPU-6050 accelerometer/gyroscope break out boards. There are quite a few types of this board, the one we have had most success in using is known as GY-521 (although it is often marked on the board as ITG/MPU).  Other boards may work but they need to be capable of being powered from 5V (3.3V ones should work but they need to be connected to the 3.3V output of the Raspberry Pi's 40 pin header rather than the 5V output)
+(d) the PCB. The Kicad files and gerbers are in the github repository, so you can order your own.  I order from OSH-Park (cheap service for 3 PCBs if you are willing to wait a few weeks).  Cost per PCB is about £10 (incl delivery) but you have to order from OSH Park in multiples of three cards.
 
+(e) a Szomk AK-H-03a case.  This is pretty widely available for a low price (£3 (ish) plus shipping) from a number of sellers on aliexpress.  Here is the main product page http://www.chinaenclosure.com/products/Hot-sale-plastic-handheld-enclosure-with-3AA-batterry-holder-AK-H-03A-industrial-plastic-case-with-1.html but a search for on aliexpress for "3AA enclosure" or "AK-H-03a" should throw up a few listings even if they don't actually mention the manufacturer (Szomk) or the model number.  It comes in orange or light beige versions.  Either will do.  This case was chosen because it is cheap and the PCB is designed to work with this case. It won't be a huge effort to switch to a different case but the PCB would have to be redesigned.  The case comes with the fittings for the battery compartment but does not come with screws to hold the case together or to affix the PCB to the case 
 
-You will also need:
+(f)i Pimoroni Lipo shim.  This is designed to work with Lithium Ion or Lithium Polymer batteries but works fine with the NiMh batteries we are using.  Product page is here.  https://shop.pimoroni.com/products/lipo-shim but it is also available from other sellers.  Cost around £10.
 
-(i) a soldering iron (quite fine tipped and a 15W or higher iron will be fine).  We have used a batttery powered soldering iron (only 8W) and whilst it works soldering ground connections (which usually need to have more copper heated to temperature) is more difficult.
+(g) some ancilliary stuff 3x BAT85 diodes 1x 1N4148 diode a 270R resistor, a 4K7 resistor, a LED, a momentary push to make switch, and some 0.1" headers (2of 2x1 and 1of 2x6) a sticky pad (to affix the Pi to the PCB) and I use a foam strip to stop the batteries rattling around too much in use.  All this is available for a component cost of (guessing) about £0.20 but it is difficult to buy in low quantities.  It is best to buy in bulk and share.
 
-(ii) connecting wire.  Best to use thin Kynar wire 28AWG as
+(h) some AA size rechargeable batteries (NiMH ones).  The device has been designed to work with the slightly lower voltage presented by NiMH batteries rather than the non-rechargeable ones so best to use these.  These are widely available but you may like to buy a charger at the same time.  The Energiser ACCU Recharge Pro comes with 4 batteries and is available for £16 or so.
 
-(iii) side angle clippers for cutting wire to length
+(i) a Micro JST 2.0 PH 2-Pin female connector with flying leads.  This is to connect the Pimoromi LiPo shim to the batteries.  NOTE CAREFULLY these connectors sometimes have red and black leads.  When plugged into the LiPo shim the red lead may go to what the LiPo shim wants as battery -ve and the black lead to battery +ve, accordingly check that whatever lead the LiPo shim expects to be connected to battery -ve (red or black) is connected to battery -ve and whatever the LiPo shim expects as battery +ve to battery +ve.  The LiPo shim has some markings near the connector to help you.
 
-(iv) a computer with wifi connection and 
+I have made a video to show the construction process: here
 
-Skills:
+In general, however, the steps are:
 
-(1) soldering - if you have no experience of this then read one of the many online guides or enlist someone with experience.  Only 14 connections need to be soldered but in some cases the holes require "double stuffing" with two wires in one hole - so a little more skill is required
+Prepare the case.
 
-(2) experience with a Linux environment is preferred. 
+Affix the battery terminals to the case.  If you are buying your own case you will have a choice of battery terminals, the best ones to use are the ones with the "deep" slot - try the different types, you will then know what I mean.  The terminals should be configured so that the batteries are in serial configuration, supplying about 3.6V (3x 1.2V) to the LiPo shim.  Glue the terminals to the case, I guess epoxy would be best but all purpose adhesive (not water based) will probably also work.
 
+Put the PCB in the half of the case with the battery compartment so you can see where it fits.  You should be able to see the component markings and just above them you will see spaces for two, two pin headers.  This is where the power button and power LED fit.  With a pencil mark on the case a point directly in line with these headers so you know where to make the holes.  Take out the PCB and put the two halfs of the case together (this is just for support for the next step).  You will want to make two holes, one for the LED (3mm) and one for the push switch (5mm). The see the video for the placing of these holes (it is fairly critical).
 
-Software installation:
+Prepare the PCB.
 
-This section just covers the basics of the Bell-Boy software installation.  The code is open source and can be free downloaded but the icons used by the browser interface, whilst free to be included in a website or a product, are licensed from a professional designer so can not be supplied in a separately downloadable form.  The SD card versioon of the 
+I like to glue the Adafuit IMU to the PCB.  It is good to have this as flat as possible to minimse errors when it is eventually measuring bells.  You will notice that there are a variety of mounting holes - these are for different IMU devices should the Adafruit IMU become hard to find (specifically, the alternative I have chosen is the GY-521 board using the MPU6050 IMU but to use this the software will need to be adjusted).  The mounting holes you want to use for the Adafruit IMU is the row of 6.  To be safe, therefore, you will need to cover the four unused holes that will be under the board.  I just used electrician's tape (but in an even thickness so that the IMU can still be glued to the PCB.  This method also gives you a fighting chance of getting the IMU board off once you have soldered it (in case it ever needs to be replaced)
+
+When gluing the IMU to the board you will need to make sure that the holes that you are about to solder are completely in line.  I use a header strip to ensure this (but make sure you don't glue the header strip as well).
+
+Shilst the glue is setting, prepare the Pi.
+
+Prepare the Pi.
+
+The Pirmoroni shim connects to the top of the Raspberry Pi and the bottom of the Pi is connected to the PCB.  To arrange this "stack", take the 2x6 header put the long side of the pins from the top of the Pi and through to the bottom so that the black plastic part of the header is on the top of the Pi flush with the board.  This is absolutely not the way this is normally soldered on (normally the short pins go through the Pi).  Solder the header to the Pi, don't use too much solder.  Then solder the Pimoroni shim to the header at the top side of the Pi.  When doing this soldering, it will be useful to solder one pin and then force the header or the Pimoroni shim (depending on what stage you are at) flat.
+
+Mount everything up
+
+Once the glue has set on the IMU, mount the LED and switch headers.  Again these are not mounted in the usual way, the pins have to be pushed through the black plastic part and soldered through the top.  See video for details.  Affix a sticky pad to the bottom of the Pi and attach it to the PCB.  Solder the Pi to the PCB.
+
+Solder the diodes and resistors in, observing the polarity of the diodes.  Solder the three flying wires from the Pimoroni Shim to the PCB.
+
+Fit the switch to the case and then screw the PCB into the case.  You may need to wiggle the leads from the switch so that they contact the header pins properly.  Fit the lead and arrange its leads so that they are touching the header pins (observing the polarity of the LED, the cathode is nearest the Pi).  Solder the LED and trim its leads.
+
+The reason why the LED and switch are mounted this way is that it is then pretty easy to take the board out.
+
+Stick the faom strip to the back of the battery cover, it will be difficult to slide the battery cover on the first time (with batteries in) but it will soom mould to the right shape.
+
+Finally, test fit the PH connector to the Pimoroni shim, check which colour lead goes is +ve and which is -ve and solder the leads to the battery connector tabs.
+
+Testing.
+
+Put the SD card (after programming - see below) into the Pi and push the power button, the LED will glow dimly, hold the button down after about 6 seconds the LED should glow brightly, then release the button.   The device is now on.
+
+To switch it off, you can do so by either using the web console or by pushing the button until the LED stops glowing brightly and instead glows dimly (about 10-15 seconds).  Then release the button and the LED should go off.
+
+Preparing the SD card  
+
+This section just covers the basics of the Bell-Boy software installation.  The code is open source and can be freely downloaded but the icons used by the browser interface, whilst free to be included in a website or a product, are licensed from a professional designer so can not be supplied in a separately downloadable form.  If you buy the pack from me (see below) the programmed SD card I will still will have these icons on it.  Otherwise get in touch and I can e-mail the icon images to you. 
 
 The software that runs the Bell-Boy is installed in a Linux environment - one particular Linux distribution called Arch Linux is used.
 
@@ -42,4 +76,22 @@ https://archlinuxarm.org/platforms/armv6/raspberry-pi
 
 (click on the "Installation" tab)
 
-Once that is complete then put the SD card into the Raspberry Pi plug the
+Once that is complete then the next stage of configuration happens on the Pi itself.  You will need to have access to the command line of the Pi and the best way to do that is to use a USB ethernet connector and to connect to it over SSH.  The PCB is designed so that you can attach the USB ethernet device to the Pi even after the PCB has been assembled.  The initial username:password combination is alarm:alarm.  Then enter the following commands
+
+su root (type "root" as the password)
+cd ~
+wget https://github.com/BBUK/Bell-Boy/raw/master/setupBB.sh
+chmod a+x setupBB.sh
+./setupBB.sh
+
+You will see lots of text going up the screen whilst everything is being installed and configured.
+
+The Bell-Boy is now ready for use and you can shut it down with the following command.
+
+sync && sync && shutdown
+
+Calibration
+
+This stage is optional.  There is an executable in the /srv/http/ folder called bb_calibrate and that automates the process (mostly).  The calibration is worth doing because the accelerometers on the IMU need to have corrections for both offset and gain.  It works by putting the device in four different orientations and taking measurements.  The Bell Boy device should be full assembled with the case fully screwed together.
+
+First prepare a very flat surface (you will need a bullseye spirit level or something similar).  The completed Bell-Boy device should be placed on the surface with one of the large flat sides down.  Start the bb_calibrate program, it will run through an initial stage around gyro biasses (the gyros are not calibrated now, but they are used to work out how still the device is and hence the accuracy of the likely accelerometer measurements).  The program will complain about being insufficiently still a lot it is (intentially really sensitive to shaking and slight movements).  Once yot see something like "East Read" (or another point of the compass), turn the Bell-Boy so that it is resting on one of the long edges - after a few seconds of complaint a reading should be taken and then another turn (by you) to the other flat face and then once a reading has been taken to the other long edge.  The program will print out some text with numbers on it and that's it.  You can then shut the machine down.
