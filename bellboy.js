@@ -755,12 +755,19 @@ zoomSelect.onchange = function(){
     }
     if (currentSwingDisplayed == null) return;
 
-    if (currentSwingDisplayed == swingStarts.length - 1){
-        iterations = (sample.length - 3) - swingStarts[currentSwingDisplayed];
-    } else {
-        iterations = (swingStarts[currentSwingDisplayed +1]-1) - swingStarts[currentSwingDisplayed];
+    for (var startpoint = swingStarts[currentSwingDisplayed]; startpoint > 3; --startpoint){
+        if (sample[startpoint][0] > 90) break;
     }
-    drawSamples(swingStarts[currentSwingDisplayed],iterations);
+    var endpoint = 0;
+    if (currentSwingDisplayed > halfSwingStarts.length -1) {
+        endpoint = sample.length - 3;
+    } else {
+        for (endpoint = halfSwingStarts[currentSwingDisplayed]; endpoint < sample.length -3; ++endpoint){
+            if (sample[endpoint][0] < 270) break;
+        }
+    }
+    drawSamples(startpoint,endpoint-startpoint);
+    
     textBell((currentSwingDisplayed+1).toString());
     currentStatus &= ~(LASTHS1 | LASTBS1 | LASTHS2 | LASTBS2);
 }
@@ -782,13 +789,25 @@ scaleSelect.onchange = function() {
         drawTDCs();
     }
     if (currentSwingDisplayed == null) return;
-
-    if (currentSwingDisplayed == swingStarts.length - 1){
-        iterations = (sample.length - 3) - swingStarts[currentSwingDisplayed];
-    } else {
-        iterations = (swingStarts[currentSwingDisplayed +1]-1) - swingStarts[currentSwingDisplayed];
+    
+    for (var startpoint = swingStarts[currentSwingDisplayed]; startpoint > 3; --startpoint){
+        if (sample[startpoint][0] > 90) break;
     }
-    drawSamples(swingStarts[currentSwingDisplayed],iterations);
+    var endpoint = 0;
+    if (currentSwingDisplayed > halfSwingStarts.length -1) {
+        endpoint = sample.length - 3;
+    } else {
+        for (endpoint = halfSwingStarts[currentSwingDisplayed]; endpoint < sample.length -3; ++endpoint){
+            if (sample[endpoint][0] < 270) break;
+        }
+    }
+//    if (currentSwingDisplayed == swingStarts.length - 1){
+//        iterations = (sample.length - 3) - swingStarts[currentSwingDisplayed];
+//    } else {
+//        iterations = (swingStarts[currentSwingDisplayed +1]-1) - swingStarts[currentSwingDisplayed];
+//    }
+    drawSamples(startpoint,endpoint-startpoint);
+//    drawSamples(swingStarts[currentSwingDisplayed],iterations);
     textBell((currentSwingDisplayed+1).toString());
     currentStatus &= ~(LASTHS1 | LASTBS1 | LASTHS2 | LASTBS2);
 }
