@@ -74,6 +74,7 @@ float a[3];
 float sample_period = 0.0;
 float GYRO_BIAS[3] = { 0.0, 0.0, 0.0 };
 int DEBUG = 0;
+float angle_correction = 0.0;
 
 
 float NXP_gyro_scale_factor = 0;
@@ -306,6 +307,7 @@ int main(int argc, char const *argv[]){
                         LOOPSLEEP = 4000000/ODR;
                         RUNNING = 1;
                         OUT_COUNT = 0;
+						angle_correction = 0.0;
                         printf("STRT:\n");
                     } else {
                         printf("EFIF:\n");
@@ -677,7 +679,7 @@ void NXP_pull_data(){
     float gyro_data[3];
     float accel_data[3]; 
     float accTang;
-    static float last_x_gyro = 0.0, last_angle = 0.0, angle_correction = 0.0;    
+    static float last_x_gyro = 0.0, last_angle = 0.0;    
     int accel_count, number_to_pull, i, duplicate;
 
     static char local_outbuf[4000];
