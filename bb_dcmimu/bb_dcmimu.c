@@ -307,7 +307,7 @@ int main(int argc, char const *argv[]){
                         LOOPSLEEP = 4000000/ODR;
                         RUNNING = 1;
                         OUT_COUNT = 0;
-						angle_correction = 0.0;
+                        angle_correction = 0.0;
                         printf("STRT:\n");
                     } else {
                         printf("EFIF:\n");
