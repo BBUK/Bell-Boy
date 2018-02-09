@@ -392,7 +392,7 @@ function getWeighting(){
 function calculateError(guess){
     var count = 0.0, error = 0.0;
     for(var i = 0; i < sample.length; i++){
-        if(sample[i][0] > 70 && sample[i][0] < 110 && sample[i] > 0){
+        if(sample[i][0] > 70 && sample[i][0] < 110 && sample[i][1] > 0){
             count += 1;
             error += guess*Math.sin(sample[i][0]*3.1416/180) - sample[i][2];
         }
@@ -770,60 +770,6 @@ speedSelect.onchange = function(){
 // consider whether to allow this to be changed during active playback
 }
 
-/*
-plusIcon.onclick=function(){
-    if ((currentStatus & DOWNLOADINGFILE) != 0) return;
-    if ((currentStatus & RECORDINGSESSION) != 0) return;
-    if ((currentStatus & HELPDISPLAYED) != 0) return;
-    if (currentPlaybackSpeed == 0) return;
-    currentPlaybackSpeed -= 1;
-    if (playintervalID != null) {
-        clearInterval(playintervalID);
-        playintervalID=setInterval(playbackSample,200*(100/playbackRanges[currentPlaybackSpeed][1]));
-    }
-    setStatus("Playback speed set to " + playbackRanges[currentPlaybackSpeed][0].toString() + "%");
-    updateIcons();
-}
-
-minusIcon.onclick=function(){
-    if ((currentStatus & DOWNLOADINGFILE) != 0) return;
-    if ((currentStatus & RECORDINGSESSION) != 0) return;
-    if ((currentStatus & HELPDISPLAYED) != 0) return;
-    if (currentPlaybackSpeed >= playbackRanges.length -1) return;
-    currentPlaybackSpeed += 1;
-    if (playintervalID != null) {
-        clearInterval(playintervalID);
-        playintervalID=setInterval(playbackSample,200*(100/playbackRanges[currentPlaybackSpeed][1]));
-    }
-    setStatus("Playback speed set to " + playbackRanges[currentPlaybackSpeed][0].toString() + "%");
-    updateIcons();
-}
-*/
-
-/*
-gridlinesIcon.onclick=function(){
-    if ((currentStatus & DOWNLOADINGFILE) != 0) return;
-    if ((currentStatus & HELPDISPLAYED) != 0) return;
-    if ((currentStatus & GRIDLINESDISPLAYED) == 0) {
-        currentStatus |= GRIDLINESDISPLAYED;
-        if ((currentStatus & FAVOURITEDISPLAYED) != 0){
-            drawSamplesOnTemplate();
-        } else {
-            drawTDCs();
-        }
-    } else {
-        currentStatus &= ~GRIDLINESDISPLAYED;
-        if ((currentStatus & FAVOURITEDISPLAYED) != 0){
-            drawSamplesOnTemplate();
-        } else {
-            clearTemplates();
-            drawTDCs(); // draw target if necessary
-        }
-    }
-    updateIcons();
-}
-*/
-
 
 scaleSelect.onchange = function() {
     scaleValue=parseFloat(scales[document.getElementById("scaleSelect").selectedIndex])
@@ -1023,14 +969,14 @@ backIcon.onclick=function(){
     drawFrame();
     
     for (var startpoint = swingStarts[currentSwingDisplayed]; startpoint > 3; --startpoint){
-        if (sample[startpoint][1] > 90) break;
+        if (sample[startpoint][0] > 90) break;
     }
     var endpoint = 0;
     if (currentSwingDisplayed > halfSwingStarts.length -1) {
         endpoint = sample.length - 3;
     } else {
         for (endpoint = halfSwingStarts[currentSwingDisplayed]; endpoint < sample.length -3; ++endpoint){
-            if (sample[endpoint][1] < 270) break;
+            if (sample[endpoint][0] < 270) break;
         }
     }
 
@@ -1056,14 +1002,14 @@ forwardIcon.onclick=function(){
     currentSwingDisplayed += 1;
     
     for (var startpoint = swingStarts[currentSwingDisplayed]; startpoint > 3; --startpoint){
-        if (sample[startpoint][1] > 90) break;
+        if (sample[startpoint][0] > 90) break;
     }
     var endpoint = 0;
     if (currentSwingDisplayed > halfSwingStarts.length -1) {
         endpoint = sample.length - 3;
     } else {
         for (endpoint = halfSwingStarts[currentSwingDisplayed]; endpoint < sample.length -3; ++endpoint){
-            if (sample[endpoint][1] < 270) break;
+            if (sample[endpoint][0] < 270) break;
         }
     }
     drawFrame();
@@ -1082,14 +1028,14 @@ favIcon.onclick=function(){
     if (currentSwingDisplayed == null) return;
 
     for (var startpoint = swingStarts[currentSwingDisplayed]; startpoint > 3; --startpoint){
-        if (sample[startpoint][1] > 90) break;
+        if (sample[startpoint][0] > 90) break;
     }
     var endpoint = 0;
     if (currentSwingDisplayed > halfSwingStarts.length -1) {
         endpoint = sample.length - 3;
     } else {
         for (endpoint = halfSwingStarts[currentSwingDisplayed]; endpoint < sample.length -3; ++endpoint){
-            if (sample[endpoint][1] < 270) break;
+            if (sample[endpoint][0] < 270) break;
         }
     }
 
