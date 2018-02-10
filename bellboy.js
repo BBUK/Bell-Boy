@@ -146,7 +146,7 @@ for (var i=0; i < scales.length; i++) {
     option.text=scales[i].toString()
     document.getElementById("scaleSelect").add(option);
 }
-document.getElementById("scaleSelect").selectedIndex = 2;  // start at 2000
+document.getElementById("scaleSelect").selectedIndex = 4;  // start at 300
 scaleValue=parseFloat(scales[document.getElementById("scaleSelect").selectedIndex])
 
 ////////////////////////////////////////////////////////////////
@@ -160,7 +160,8 @@ ws.onopen = function(){
     ws.send("FILE:");
     var d = new Date();
     ws.send("DATE:" + parseInt(d.getTime()/1000));
-    ws.send("SAMP:");
+    if (!nonLive) ws.send("SAMP:");
+    
 };
 
 ws.onmessage = function (event) {
@@ -181,22 +182,24 @@ function parseResult(dataBack) {
         var sampArray = dataBack.split("DATA:");
         var arrayLength = sampArray.length;
         var added = 0;
+        var extracted = [];
         for (var i = 0; i < arrayLength; i++) {
             if (sampArray[i].length > 20) {   // have more checks for good data (sampArray[i].split[","].length >=3)
-                sample[sample.length] = extractData(sampArray[i]);
+                sample[sample.length] = extractData(sampArray[i]);    
                 added+=1;
             }
         }
         setStatus("Loaded: " + added.toString() + " samples. Now Have: " + sample.length.toString());
         return;
     }
+    
     if (dataBack.slice(0,5) == "LIVE:"){
         if ((currentStatus & LIVEVIEW) == 0 && (currentStatus & RECORDINGSESSION) == 0) { return; }  // server may push data after stopping
         var sampArray = dataBack.split("LIVE:");
         var arrayLength = sampArray.length;
         for (var i = 0; i < arrayLength; i++) {
             if (sampArray[i].length > 20) {   // have more checks for good data (sampArray[i].split[","].length >=3)
-                sample[sample.length] = extractData(sampArray[i]);
+                sample[sample.length] = extractData(sampArray[i]);    
             }
         }
         return;
@@ -219,6 +222,15 @@ function parseResult(dataBack) {
             return;
         }
         currentStatus |= SESSIONLOADED;
+        calibrationValue = getWeighting();
+        setStatus("Calibration value = " + calibrationValue);
+        for(var i = 1; i < sample.length; i++) { // calibrate and smooth
+            sample[i][2] -= calibrationValue*Math.sin(sample[i][0]*3.142/180);
+            sample[i][0] = 0.92*sample[i-1][0] + 0.08* sample[i][0];
+            sample[i][1] = 0.92*sample[i-1][1] + 0.08* sample[i][1];
+            sample[i][2] = 0.92*sample[i-1][2] + 0.08* sample[i][2];
+        }
+        
         updateIcons();
         swingStarts=[];
         halfSwingStarts=[];
@@ -351,11 +363,7 @@ ws.onclose = function(event){
 function extractData(datastring){
     var entries = datastring.split(",");
 //    return [parseFloat(entries[0].slice(2)), parseFloat(entries[1].slice(2)), parseFloat(entries[2].slice(2)) * 4000.0];
-    if(calibrationValue == null) {
         return [parseFloat(entries[0].slice(2)), parseFloat(entries[1].slice(2)), parseFloat(entries[2].slice(2))];
-    } else {
-        return [parseFloat(entries[0].slice(2)), parseFloat(entries[1].slice(2)), parseFloat(entries[2].slice(2))-calibrationValue*Math.sin(parseFloat(entries[0].slice(2))*3.142/180)];  
-    }
 //    
 
 }
@@ -865,19 +873,20 @@ recordButton.onclick = function() {
 };
 
 calibrateButton.onclick = function() {
-    if ((currentStatus & SESSIONLOADED) == 0) return;
-    if ((currentStatus & DOWNLOADINGFILE) != 0) return;
-    if ((currentStatus & PLAYBACK) != 0) return;
-    if ((currentStatus & HELPDISPLAYED) != 0) return;
-    if ((currentStatus & LIVEVIEW) != 0) return;
-    if ((currentStatus & RECORDINGSESSION) != 0) return
+    return;
+//    if ((currentStatus & SESSIONLOADED) == 0) return;
+//    if ((currentStatus & DOWNLOADINGFILE) != 0) return;
+//    if ((currentStatus & PLAYBACK) != 0) return;
+//    if ((currentStatus & HELPDISPLAYED) != 0) return;
+//    if ((currentStatus & LIVEVIEW) != 0) return;
+//    if ((currentStatus & RECORDINGSESSION) != 0) return
 
 //  if(calibrationValue != null) return;
-    calibrationValue = getWeighting();
-    setStatus("Calibration value = " + calibrationValue);
-    for(var i = 0; i < sample.length; i++) {
-        sample[i][2] -= calibrationValue*Math.sin(sample[i][0]*3.142/180);
-    }
+//    calibrationValue = getWeighting();
+//    setStatus("Calibration value = " + calibrationValue);
+//    for(var i = 0; i < sample.length; i++) {
+//        sample[i][2] -= calibrationValue*Math.sin(sample[i][0]*3.142/180);
+//    }
 };
 
 
@@ -1404,8 +1413,8 @@ function recalculateSize() {
     ctxBD.fillRect(posHS2,0,BDwidth,canvasBD.height);
     ctxBD.fillStyle='rgba(255,255,255,0.5)';
     ctxBD.fillRect(posBS1,0,BDwidth,canvasBD.height);
-    ctxBD.fillStyle='rgba(255,0,0,0.1)';
-    ctxBD.fillRect(posCB,0,CBwidth,canvasBD.height);
+//    ctxBD.fillStyle='rgba(255,0,0,0.1)';
+//    ctxBD.fillRect(posCB,0,CBwidth,canvasBD.height);
     
 //    ctxAT.fillStyle='rgba(0,0,255,0.1)';
 //    ctxAT.fillRect(0,0,canvasAT.width,canvasAT.height);
