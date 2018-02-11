@@ -76,6 +76,10 @@ float GYRO_BIAS[3] = { 0.0, 0.0, 0.0 };
 int DEBUG = 0;
 float angle_correction = 0.0;
 
+float smoothedAngle = 0.0;
+float smoothedRate = 0.0;
+float smoothedAccn = 0.0;
+float smoothFactor = 0.92;
 
 float NXP_gyro_scale_factor = 0;
 float NXP_accel_scale_factor = 0;
@@ -150,11 +154,12 @@ void sig_handler(int signum) {
 */
 
 /*
-* Command line arguments bb_dcmimu {1} {2} {3}
+* Command line arguments bb_dcmimu {1} {2} {3} {4}
 * {1} = Operational data rate (ODR). One of 800, 400, 200, 100 and 50 samples per second.
 * {2} = gyro full scale range. One of 500 and 1000 (in degrees/second).
 * {3} = accelerometer full scale range.  One of 2 and 4 (g).
-* Example: bb_dcmimu 200 500 2
+* {4} = (optional) smooth factor.  If nothing entered here 0.92 is used
+* Example: bb_dcmimu 200 500 2 0.94
 * Commands (see above) are received on stdin and output is on stdout.
 * Will work standalone but intended to be interfaced with websocketd https://github.com/joewalnes/websocketd
 */
@@ -176,8 +181,8 @@ int main(int argc, char const *argv[]){
     setbuf (stdin, NULL);
     fcntl(STDIN_FILENO, F_SETFL, fcntl(STDIN_FILENO, F_GETFL) | O_NONBLOCK);
 
-    if(argc != 4){
-        printf("Incorrect number of arguments for BellBoy app.  Expect ODR, FS gyro and FS accelerometer.\n");
+    if(argc < 4 || argc > 5){
+        printf("Incorrect number of arguments for BellBoy app.  Expect ODR, FS gyro, FS accelerometer and (optionally) a smooth factor between 0 and 1.\n");
         return -1;
     }
     ODR = atoi(argv[1]);
@@ -195,10 +200,18 @@ int main(int argc, char const *argv[]){
     
     FS_ACCEL = atoi(argv[3]);
     if (FS_ACCEL != 2 && FS_ACCEL != 4) {
-        printf("Incorrect FS accel.  Expects 2 or 1000 as second argument.\n");
+        printf("Incorrect FS accel.  Expects 2 or 4 as second argument.\n");
         return -1;
     }
     
+    if (argc == 5){
+        smoothFactor = atof(argv[3]);
+        if(smoothFactor > 1.0 || smoothFactor < 0.0){
+            printf("Incorrect smooth factor.  Expects a number between 0 and 1.\n");
+            return -1;
+        }
+    }
+        
     if(NXP_test() != 0){
         printf("EIMU:\n");
         return -1;
@@ -308,6 +321,9 @@ int main(int argc, char const *argv[]){
                         RUNNING = 1;
                         OUT_COUNT = 0;
                         angle_correction = 0.0;
+                        smoothedAccn = 0.0;
+                        smoothedAngle = 0.0;
+                        smoothedRate = 0.0;
                         printf("STRT:\n");
                     } else {
                         printf("EFIF:\n");
@@ -726,14 +742,19 @@ void NXP_pull_data(){
             angle_correction = 0;
             roll -= 360.0;
         }
-        sprintf(remote_outbuf_line, "LIVE:A:%+07.1f,R:%+07.1f,C:%+07.1f", roll, (gyro_data[0] + last_x_gyro)/2.0, accTang);
+
+        smoothedAccn = smoothFactor*smoothedAccn + (1.0-smoothFactor)* accTang;
+        smoothedAngle = smoothFactor*smoothedAngle + (1.0-smoothFactor)*roll;
+        smoothedRate = smoothFactor*smoothedRate + (1.0-smoothFactor)*((gyro_data[0] + last_x_gyro)/2.0);
+
+        sprintf(remote_outbuf_line, "LIVE:A:%+07.1f,R:%+07.1f,C:%+07.1f", smoothedAngle, smoothedRate, smoothedAccn);
         if (remote_count + strlen(remote_outbuf_line) > (sizeof remote_outbuf -2)) {
             printf("%s\n",remote_outbuf);
             remote_count = 0;
         }
         remote_count += sprintf(&remote_outbuf[remote_count],remote_outbuf_line);
  
-        sprintf(local_outbuf_line,"A:%+07.1f,R:%+07.1f,C:%+07.1f,P:%+07.1f,Y:%+07.1f,AX:%+06.3f,AY:%+06.3f,AZ:%+06.3f,GX:%+07.1f,GY:%+07.1f,GZ:%+07.1f,X:%+06.3f,Y:%+06.3f,Z:%+06.3f\n", roll, (gyro_data[0] + last_x_gyro)/2.0, accTang, pitch, yaw, accel_data[0], accel_data[1], accel_data[2], gyro_data[0], gyro_data[1], gyro_data[2],a[0],a[1],a[2]);
+        sprintf(local_outbuf_line,"A:%+07.1f,R:%+07.1f,C:%+07.1f,RA:%+07.1f,RR:%+07.1f,RC:%+07.1f,AX:%+06.3f,AY:%+06.3f,AZ:%+06.3f,GX:%+07.1f,GY:%+07.1f,GZ:%+07.1f\n", smoothedAngle, smoothedRate, smoothedAccn, roll, (gyro_data[0] + last_x_gyro)/2.0, accTang, accel_data[0], accel_data[1], accel_data[2], gyro_data[0], gyro_data[1], gyro_data[2]);
         if (local_count + strlen(local_outbuf_line) > (sizeof local_outbuf -2)) {
             fputs(local_outbuf, fd_write_out);
             local_count = 0;

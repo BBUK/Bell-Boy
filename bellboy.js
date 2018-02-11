@@ -222,15 +222,6 @@ function parseResult(dataBack) {
             return;
         }
         currentStatus |= SESSIONLOADED;
-        calibrationValue = getWeighting();
-        setStatus("Calibration value = " + calibrationValue);
-        for(var i = 1; i < sample.length; i++) { // calibrate and smooth
-            sample[i][2] -= calibrationValue*Math.sin(sample[i][0]*3.142/180);
-            sample[i][0] = 0.92*sample[i-1][0] + 0.08* sample[i][0];
-            sample[i][1] = 0.92*sample[i-1][1] + 0.08* sample[i][1];
-            sample[i][2] = 0.92*sample[i-1][2] + 0.08* sample[i][2];
-        }
-        
         updateIcons();
         swingStarts=[];
         halfSwingStarts=[];
@@ -403,8 +394,12 @@ function calculateError(guess){
         if(sample[i][0] > 70 && sample[i][0] < 110 && sample[i][1] > 0){
             count += 1;
             error += guess*Math.sin(sample[i][0]*3.1416/180) - sample[i][2];
+        } else if(sample[i][0] < 290 && sample[i][0] > 250 && sample[i][1] < 0){
+            count += 1;
+            error += guess*Math.sin(sample[i][0]*3.1416/180) - sample[i][2];
         }
-        if(count > 2000) break; // should be enough
+
+        if(count > 4000) break; // should be enough
     }
     error /= count;
     return error;
@@ -442,12 +437,13 @@ function drawTimer(position, templated){
 
 function drawSamples(position,iterations){
     var stepSize = (BDwidth * 1.0)/(ROIL-ROIU);
-//    var zero = (0-ROIU) * stepSize;
-    
     for (var i = 0; i < iterations; i++){
         var dataEntryOld = sample[position + i -1].slice();
         var dataEntryCurrent = sample[position + i].slice();
         var dataEntryNext = sample[position + i + 1].slice();
+        if(calibrationValue != null){
+            dataEntryCurrent[2] -= calibrationValue*Math.sin(dataEntryCurrent[0]*3.142/180);
+        }
         drawBell(180-dataEntryCurrent[0]);
         drawAT(dataEntryCurrent[2]);
         if (dataEntryCurrent[0] > ROIU && dataEntryCurrent[0] < ROIL && dataEntryCurrent[1] >= 0) { // within ROI for HS1
@@ -463,8 +459,6 @@ function drawSamples(position,iterations){
             if ((currentStatus & LASTHS1) == 0 ) { // clear highest part of this and previous ROI if this is the first time
                 var pixelsFromROIL = (ROIL - startAngle) * stepSize;
                 ctxBD.clearRect(posBS2 + pixelsFromROIL, 14, 2 * (BDwidth - pixelsFromROIL), ctxBD.canvas.height - 14 - 25);
-//      drawAccel(posBS2,dataEntryOld[0],ROIU,maxlength,true);
-//      drawAccel(posHS1,ROIU,startAngle,maxlength,true);
                 if ((currentStatus & LASTBS2) != 0 ) {
                     drawTimer(position + i, false);
                 } else {
@@ -482,7 +476,7 @@ function drawSamples(position,iterations){
             ctxBD.clearRect(posHS1 + pixelsFromROIU, 14, pixelWidth + 1, ctxBD.canvas.height - 14 - 25);
             ctxBD.fillStyle="white";
             ctxBD.fillRect(posHS1 + pixelsFromROIU, ctxBD.canvas.height - 25, pixelWidth, (0-pixelHeight));
-//            drawAccel(posHS1,startAngle,endAngle,maxlength*(Math.min(Math.abs(dataEntryCurrent[2])/scaleValue,1)),false);
+
         } else if (dataEntryCurrent[0] > (360 - ROIL) && dataEntryCurrent[0] < (360 - ROIU) && dataEntryCurrent[1] >= 0) { // within ROI for HS2
             var endAngle = Math.max(ROIU, 360-dataEntryCurrent[0]);
             var startAngle = Math.min(360-dataEntryOld[0], ROIL);
@@ -503,9 +497,7 @@ function drawSamples(position,iterations){
             ctxBD.fillStyle="white";
             ctxBD.fillRect(posHS2 + pixelsFromROIL, ctxBD.canvas.height - 25, pixelWidth, (0-pixelHeight));
           
-//            drawAccel(posHS2,startAngle,endAngle,maxlength*(Math.min(Math.abs(dataEntryCurrent[2])/scaleValue,1)),false);
         } else if (dataEntryCurrent[0] > (360 - ROIL) && dataEntryCurrent[0] < (360 - ROIU) && dataEntryCurrent[1] < 0) { // within ROI for BS1
-
             if (dataEntryNext[0] <= (360 - ROIL)) {
                 dataEntryCurrent[0] = (360 - ROIL); // tidy up at end of ROI
             }
@@ -517,8 +509,6 @@ function drawSamples(position,iterations){
             if ((currentStatus & LASTBS1) == 0 ) { // clear highest part of this and previous ROI if this is the first time
                 var pixelsFromROIL = (ROIL - startAngle) * stepSize;
                 ctxBD.clearRect(posHS2 + pixelsFromROIL, 14, 2 * (BDwidth - pixelsFromROIL), ctxBD.canvas.height - 14 - 25);
-//                drawAccel(posHS2,dataEntryOld[0],(360-ROIU),maxlength,true);
-//                drawAccel(posBS1,(360-ROIU),startAngle,maxlength,true);
                 if ((currentStatus & LASTHS2) != 0 ) {
                     drawTimer(position + i, false);
                 }
@@ -535,8 +525,6 @@ function drawSamples(position,iterations){
             ctxBD.fillStyle="white";
             ctxBD.fillRect(posBS1 + pixelsFromROIU, ctxBD.canvas.height - 25, pixelWidth, (0-pixelHeight));
             
-//            drawAccel(posBS1,startAngle,endAngle,maxlength*(Math.min(Math.abs(dataEntryCurrent[2])/scaleValue,1)),false);
-
         } else if (dataEntryCurrent[0] > ROIU && dataEntryCurrent[0] < ROIL && dataEntryCurrent[1] < 0) { // within ROI for BS2
             var endAngle = Math.max(ROIU,dataEntryCurrent[0]);
             var startAngle = Math.min(dataEntryOld[0],ROIL);
@@ -557,7 +545,6 @@ function drawSamples(position,iterations){
             ctxBD.fillStyle="white";
             ctxBD.fillRect(posBS2 + pixelsFromROIL, ctxBD.canvas.height - 25, pixelWidth, (0-pixelHeight));
 
-//            drawAccel(posBS2,startAngle,endAngle,maxlength*(Math.min(Math.abs(dataEntryCurrent[2])/scaleValue,1)),false);
         }
     }
 }
@@ -598,6 +585,9 @@ function drawSamplesOnTemplate(){
         var dataEntryOld = template[i -1].slice();
         var dataEntryCurrent = template[i].slice();
         var dataEntryNext = template[i + 1].slice();
+        if(calibrationValue != null){
+            dataEntryCurrent[2] -= calibrationValue*Math.sin(dataEntryCurrent[0]*3.142/180);
+        }
         if (dataEntryCurrent[0] > ROIU && dataEntryCurrent[0] < ROIL && dataEntryCurrent[1] >= 0) { // within ROI for HS1
 
             if (dataEntryNext[0] >= ROIL) {
@@ -613,15 +603,10 @@ function drawSamplesOnTemplate(){
 
             var pixelHeight = (ctxBDt.canvas.height - 14 - 25) * Math.min(dataEntryCurrent[2]/scaleValue,1);
             if (pixelHeight < 0) pixelHeight = 0;
-
-//            ctxBDt.clearRect(posHS1 + pixelsFromROIU, 14, pixelWidth + 1, ctxBDt.canvas.height - 14 - 25);
             ctxBDt.fillStyle="rgba(240,240,0,0.6)";
             ctxBDt.fillRect(posHS1 + pixelsFromROIU, ctxBDt.canvas.height - 25, pixelWidth, (0-pixelHeight));
 
-//            drawAccelT(posHS1,startAngle,endAngle,maxlength*(Math.min(Math.abs(dataEntryCurrent[2])/scaleValue,1)));
         } else if (dataEntryCurrent[0] > (360 - ROIL) && dataEntryCurrent[0] < (360 - ROIU) && dataEntryCurrent[1] >= 0) { // within ROI for HS2
-//            var endAngle = Math.min((360-ROIU),dataEntryCurrent[0]);
-//            var startAngle = Math.max(dataEntryOld[0], (360-ROIL));
             var endAngle = Math.max(ROIU, 360-dataEntryCurrent[0]);
             var startAngle = Math.min(360-dataEntryOld[0], ROIL);
             
@@ -634,11 +619,9 @@ function drawSamplesOnTemplate(){
             var pixelHeight = (ctxBDt.canvas.height - 14 - 25) * Math.min(-(dataEntryCurrent[2])/scaleValue,1);
             if (pixelHeight < 0) pixelHeight = 0;
 
-//            ctxBDt.clearRect(posHS2 + pixelsFromROIL, 14, pixelWidth + 1, ctxBDt.canvas.height - 14 - 25);
             ctxBDt.fillStyle="rgba(240,240,0,0.6)";
             ctxBDt.fillRect(posHS2 + pixelsFromROIL, ctxBDt.canvas.height - 25, pixelWidth, (0-pixelHeight));
             
-//            drawAccelT(posHS2,startAngle,endAngle,maxlength*(Math.min(Math.abs(dataEntryCurrent[2])/scaleValue,1)));
         } else if (dataEntryCurrent[0] > (360 - ROIL) && dataEntryCurrent[0] < (360 - ROIU) && dataEntryCurrent[1] < 0) { // within ROI for BS1
 
             if (dataEntryNext[0] <= (360 - ROIL)) {
@@ -647,8 +630,6 @@ function drawSamplesOnTemplate(){
             var startAngle = Math.max(ROIU,360-dataEntryOld[0]);
             var endAngle = Math.min(ROIL,360-dataEntryCurrent[0]);
             
-//            var startAngle = Math.min((360-ROIU),dataEntryOld[0]);
-//            var endAngle = dataEntryCurrent[0];
             if (startAngle >= endAngle) {
                 continue; // for moment don't swap, just do nothing
             }
@@ -657,12 +638,9 @@ function drawSamplesOnTemplate(){
 
             var pixelHeight = (ctxBDt.canvas.height - 14 - 25) * Math.min(-(dataEntryCurrent[2])/scaleValue,1)
             if (pixelHeight < 0) pixelHeight = 0;
-//            ctxBDt.clearRect(posBS1 + pixelsFromROIU, 14, pixelWidth + 1, ctxBDt.canvas.height - 14 - 25);
             ctxBDt.fillStyle="rgba(240,240,0,0.6)";
             ctxBDt.fillRect(posBS1 + pixelsFromROIU, ctxBDt.canvas.height - 25, pixelWidth, (0-pixelHeight));
        
-//            drawAccelT(posBS1,startAngle,endAngle,maxlength*(Math.min(Math.abs(dataEntryCurrent[2])/scaleValue,1)));
-
         } else if (dataEntryCurrent[0] > ROIU && dataEntryCurrent[0] < ROIL && dataEntryCurrent[1] < 0) { // within ROI for BS2
             var endAngle = Math.max(ROIU,dataEntryCurrent[0]);
             var startAngle = Math.min(dataEntryOld[0],ROIL);
@@ -674,12 +652,8 @@ function drawSamplesOnTemplate(){
 
             var pixelHeight = (ctxBDt.canvas.height - 14 - 25) * Math.min((dataEntryCurrent[2])/scaleValue,1);
             if (pixelHeight < 0) pixelHeight = 0;
-
-//            ctxBDt.clearRect(posBS2 + pixelsFromROIL, 14, pixelWidth + 1, ctxBDt.canvas.height - 14 - 25);
             ctxBDt.fillStyle="rgba(240,240,0,0.6)";
             ctxBDt.fillRect(posBS2 + pixelsFromROIL, ctxBDt.canvas.height - 25, pixelWidth, (0-pixelHeight));
-
-//            drawAccelT(posBS2,startAngle,endAngle,maxlength*(Math.min(Math.abs(dataEntryCurrent[2])/scaleValue,1)));
         }
     }
     drawTDCs();  // function checks what needs to be drawn on template like gridlines and target angles
@@ -873,21 +847,16 @@ recordButton.onclick = function() {
 };
 
 calibrateButton.onclick = function() {
-    return;
-//    if ((currentStatus & SESSIONLOADED) == 0) return;
-//    if ((currentStatus & DOWNLOADINGFILE) != 0) return;
-//    if ((currentStatus & PLAYBACK) != 0) return;
-//    if ((currentStatus & HELPDISPLAYED) != 0) return;
-//    if ((currentStatus & LIVEVIEW) != 0) return;
-//    if ((currentStatus & RECORDINGSESSION) != 0) return
-
-//  if(calibrationValue != null) return;
-//    calibrationValue = getWeighting();
-//    setStatus("Calibration value = " + calibrationValue);
-//    for(var i = 0; i < sample.length; i++) {
-//        sample[i][2] -= calibrationValue*Math.sin(sample[i][0]*3.142/180);
-//    }
-};
+    
+    if ((currentStatus & SESSIONLOADED) == 0) return;
+    if ((currentStatus & DOWNLOADINGFILE) != 0) return;
+    if ((currentStatus & PLAYBACK) != 0) return;
+    if ((currentStatus & HELPDISPLAYED) != 0) return;
+    if ((currentStatus & LIVEVIEW) != 0) return;
+    if ((currentStatus & RECORDINGSESSION) != 0) return
+    calibrationValue = getWeighting();
+    document.getElementById("calibrateButton").value= "Calibrate (" + calibrationValue + ")";
+ };
 
 
 liveIcon.onclick = function() {
