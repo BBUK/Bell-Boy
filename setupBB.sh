@@ -184,7 +184,7 @@ cd ~
 
 git clone https://github.com/BBUK/Bell-Boy.git || { echo "Unable to download Bell-Boy code"; exit 1; }
 cd Bell-Boy
-mv * /srv/http
+cp * /srv/http
 
 mkdir -p /data/samples
 mv samples/* /data/samples/
