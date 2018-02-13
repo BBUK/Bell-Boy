@@ -281,7 +281,7 @@ int main(int argc, char const *argv[]){
                     struct tm *timenow;
                     time_t now = time(NULL);
                     timenow = gmtime(&now);
-                    strftime(FILENAME, sizeof(FILENAME), "/data/samples/Unnamed_%d-%m-%y_%H:%M", timenow);
+                    strftime(FILENAME, sizeof(FILENAME), "/data/samples/Unnamed_%d-%m-%y_%H.%M", timenow);
                 }
                 ROTATIONS[0] = -1;   // reset rotations
                 ROTATIONS[1] = -1;
@@ -322,7 +322,7 @@ int main(int argc, char const *argv[]){
                         OUT_COUNT = 0;
                         angle_correction = 0.0;
                         smoothedAccn = 0.0;
-                        smoothedAngle = 0.0;
+                        smoothedAngle = start_angle;
                         smoothedRate = 0.0;
                         printf("STRT:\n");
                     } else {

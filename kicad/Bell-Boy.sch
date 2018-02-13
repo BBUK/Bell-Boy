@@ -137,7 +137,7 @@ U 1 1 5A7344CA
 P 4650 3200
 F 0 "R1" V 4730 3200 50  0000 C CNN
 F 1 "4.7k" V 4650 3200 50  0000 C CNN
-F 2 "Resistors_ThroughHole:Resistor_Horizontal_RM10mm" V 4580 3200 50  0001 C CNN
+F 2 "Resistors_ThroughHole:Resistor_Horizontal_RM7mm" V 4580 3200 50  0001 C CNN
 F 3 "" H 4650 3200 50  0000 C CNN
 	1    4650 3200
 	0    1    1    0   
@@ -148,7 +148,7 @@ U 1 1 5A734574
 P 6050 2900
 F 0 "R2" V 6130 2900 50  0000 C CNN
 F 1 "270R" V 6050 2900 50  0000 C CNN
-F 2 "Resistors_ThroughHole:Resistor_Horizontal_RM10mm" V 5980 2900 50  0001 C CNN
+F 2 "Resistors_ThroughHole:Resistor_Horizontal_RM7mm" V 5980 2900 50  0001 C CNN
 F 3 "" H 6050 2900 50  0000 C CNN
 	1    6050 2900
 	0    1    1    0   
