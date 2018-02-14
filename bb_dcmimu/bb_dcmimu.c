@@ -205,7 +205,7 @@ int main(int argc, char const *argv[]){
     }
     
     if (argc == 5){
-        smoothFactor = atof(argv[3]);
+        smoothFactor = atof(argv[4]);
         if(smoothFactor > 1.0 || smoothFactor < 0.0){
             printf("Incorrect smooth factor.  Expects a number between 0 and 1.\n");
             return -1;
