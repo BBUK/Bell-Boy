@@ -382,7 +382,7 @@ function playbackSample(){
 function getWeighting(){
     var result = 0, guessLog;
     if ((currentStatus & SESSIONLOADED) == 0) return;
-    for(guessLog = 14; guessLog > 0; --guessLog){
+    for(guessLog = 14; guessLog >= 0; --guessLog){
         if(calculateError(result + Math.pow(2,guessLog)) < 0) result += Math.pow(2,guessLog);
     }
     return result;
@@ -396,7 +396,7 @@ function calculateError(guess){
             error += guess*Math.sin(sample[i][0]*3.1416/180) - sample[i][2];
         } else if(sample[i][0] < 290 && sample[i][0] > 250 && sample[i][1] < 0){
             count += 1;
-            error += guess*Math.sin(sample[i][0]*3.1416/180) - sample[i][2];
+            error += -guess*Math.sin(sample[i][0]*3.1416/180) + sample[i][2];
         }
 
         if(count > 4000) break; // should be enough

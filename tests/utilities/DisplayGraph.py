@@ -39,6 +39,7 @@ def main():
     rates=[]
     accns=[]
     smaccns=[]
+    smcalaccns=[]
     smhandaccns=[]
     smbackaccns=[]
     with open('input', 'rb') as f:
@@ -64,6 +65,8 @@ def main():
         else:
             smangles.append(angles[len(angles)-1])
 
+        smcalaccns.append(smaccns[len(smaccns)-1] - calib*(math.sin(math.radians(smangles[len(smangles)-1]))))
+
         if rates[len(rates) -1] >= 0:
             smhandangles.append(smangles[len(smangles)-1])
             smhandaccns.append(smaccns[len(smaccns)-1] - calib*(math.sin(math.radians(smangles[len(smangles)-1]))))
@@ -75,14 +78,14 @@ def main():
 
 #    plt.plot(angles,accns,"r")
      
-#    plt.plot(smangles,smaccns,"r")
+    plt.plot(smangles,smaccns,"r")
     SIN=[]
     for a in range(-15,375):
 		SIN.append(calib*math.sin(math.radians(a)))
-#    plt.plot(range(-15,375),SIN,"b")
-    plt.plot(smhandangles,smhandaccns,"r.")
-    plt.plot(smbackangles,smbackaccns,"b.")
-#    plt.plot(smangles,smaccns,"r")
+    plt.plot(range(-15,375),SIN,"m")
+#    plt.plot(smhandangles,smhandaccns,"r.")
+#    plt.plot(smbackangles,smbackaccns,"b.")
+    plt.plot(smangles,smcalaccns,"b")
 
     plt.plot(range(-10,371),[0]*381,"g")
 

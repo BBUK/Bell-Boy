@@ -1,0 +1,59 @@
+var calibrationValueH = null;
+var calibrationValueB = null;
+
+
+
+
+currentStatus |= SESSIONLOADED;
+
+        var CV = [];
+        cv = getWeighting();
+        calibrationValueH = cv[0];
+        calibrationValueB = cv[1];
+//        setStatus("Calibration value = " + calibrationValue);
+        for(var i = 1; i < sample.length; i++) { // calibrate and smooth
+            if(sample[i][0]<180){
+                sample[i][2] -= calibrationValueH*Math.sin(sample[i][0]*3.142/180);
+            } else {
+                sample[i][2] -= calibrationValueB*Math.sin(sample[i][0]*3.142/180);
+            }
+            sample[i][0] = 0.92*sample[i-1][0] + 0.08* sample[i][0];
+            sample[i][1] = 0.92*sample[i-1][1] + 0.08* sample[i][1];
+            sample[i][2] = 0.92*sample[i-1][2] + 0.08* sample[i][2];
+
+        }
+
+
+function getWeighting(){
+    var resulth = 0, resultb = 0, guessLog, eoutput=[];
+    if ((currentStatus & SESSIONLOADED) == 0) return;
+    for(guessLog = 14; guessLog > 0; --guessLog){
+        eoutput= calculateError(resulth + Math.pow(2,guessLog), resultb + Math.pow(2,guessLog));
+        if(eoutput[0] < 0) resulth += Math.pow(2,guessLog);
+        if(eoutput[1] < 0) resultb += Math.pow(2,guessLog);
+    }
+    return [resulth, resultb];
+}
+
+
+function calculateError(guessh,guessb){
+    var counth = 0, countb=0, errorh = 0.0, errorb=0.0;
+    for(var i = 0; i < sample.length; i++){
+        if(sample[i][0] > 70 && sample[i][0] < 110 && sample[i][1] > 0){
+            counth += 1;
+            errorh += guessh*Math.sin(sample[i][0]*3.1416/180) - sample[i][2];
+        }
+        if(sample[i][0] < 290 && sample[i][0] > 250 && sample[i][1] < 0){
+            countb += 1;
+            errorb += -guessb*Math.sin(sample[i][0]*3.1416/180) + sample[i][2];
+        }
+
+        if(counth > 2000 && countb > 2000) break; // should be enough
+    }
+    errorh /= counth;
+    errorb /= countb;
+
+    return [errorh,errorb];
+}
+
+
