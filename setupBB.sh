@@ -160,6 +160,7 @@ After=network.target
 [Service]
 User=root
 Type=forking
+ExecStartPre=/usr/bin/sh -c "/srv/http/powermonitor.sh &"
 ExecStart=/usr/bin/screen -S wrad -d -m sh -c "(/srv/http/websocketd --port=80 --staticdir=/srv/http/ /srv/http/bb_dcmimu 200 500 2 2>&1) | tee -a /var/log/bellboy.log"
 ExecStop=/usr/bin/screen -S wrad -X wrad
 KillMode = control-group

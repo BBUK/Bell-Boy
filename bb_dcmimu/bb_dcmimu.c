@@ -170,6 +170,9 @@ int main(int argc, char const *argv[]){
     char oscommand[90];
     float start_angle = 0.0;
     int entries;
+    float shutdowncount = 0.0;
+    FILE *shutdowncheck;
+
     
     struct sigaction sig_action;
     memset(&sig_action, 0, sizeof(struct sigaction));
@@ -236,9 +239,19 @@ int main(int argc, char const *argv[]){
         fclose(fd_read_cal);
     }
     
-    
     while(!sig_exit){
         usleep(LOOPSLEEP);
+        
+        shutdowncount += LOOPSLEEP/1000;
+        if(shutdowncount >= 20000){ // check every 20 seconds
+            shutdowncheck = fopen("/run/nologin","r");  // 5 minute warning
+            if(shutdowncheck != NULL){
+                puts("Low battery warning.\n");
+                fclose(shutdowncheck);
+            }
+            shutdowncount = 0.0;
+        }
+        
         if(RUNNING) NXP_pull_data();
         while(fgets(linein, sizeof(linein), stdin ) != NULL) {
             entries = sscanf(linein, "%5s%[^\n]", command, details);

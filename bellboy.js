@@ -55,7 +55,7 @@ var canvasATt=document.getElementById("canvasATt");
 var ctxATt=canvasATt.getContext("2d");
 
 var currentATmargin = 0;
-var currentATpixels = 2;
+var currentATpixels = 1;
 var ATbottomMargin=20; // pixels at bottom of AT canvas for indexes
 
 var oldBellAngle = 0;
@@ -107,7 +107,7 @@ var swingStarts = [];
 var halfSwingStarts=[];
 var template = [];
 
-ws = new WebSocket("ws://" + wsHost + "/bell_boy");
+ws = new WebSocket("ws://" + wsHost);
 
 ////////////////////////////////////////////////////////////////
 //                SETUP SELECT BOX FUNCTIONS                  //
@@ -166,8 +166,8 @@ ws.onopen = function(){
 
 ws.onmessage = function (event) {
     var dataBack = event.data.split("\n");
-    for (var line of dataBack) {
-        if (line.length > 3) parseResult(line);
+    for (var i=0; i<dataBack.length; i++) {
+        if (dataBack[i].length > 3) parseResult(dataBack[i]);
     }
 }
 
@@ -688,6 +688,7 @@ fileOpenButton.onclick = function() {
     currentStatus &= ~SESSIONLOADED;
     currentSwingDisplayed = null;
     calibrationValue = null;
+    document.getElementById("calibrateButton").textContent= "Calibrate (None)";
     updateIcons();
 }
 
@@ -855,9 +856,36 @@ calibrateButton.onclick = function() {
     if ((currentStatus & LIVEVIEW) != 0) return;
     if ((currentStatus & RECORDINGSESSION) != 0) return
     calibrationValue = getWeighting();
-    document.getElementById("calibrateButton").value= "Calibrate (" + calibrationValue + ")";
+    document.getElementById("calibrateButton").textContent= "Calibrate (" + calibrationValue + ")";
  };
 
+
+/*
+ * https://stackoverflow.com/questions/7035842/how-to-change-the-buttons-text-using-javascript
+ * 
+ * function replaceButtonText(buttonId, text) {
+ * if (document.getElementById)
+ * {
+ *   var button=document.getElementById(buttonId);
+ *   if (button)
+ *   {
+ *     if (button.childNodes[0])
+ *     {
+ *       button.childNodes[0].nodeValue=text;
+ *     }
+ *     else if (button.value)
+ *     {
+ *       button.value=text;
+ *     }
+ *     else 
+ *     {
+ *       button.innerHTML=text;
+ *     }
+ *   }
+ * }
+ *}
+ * 
+ */
 
 liveIcon.onclick = function() {
     if (nonLive){
@@ -900,6 +928,10 @@ liveIcon.onclick = function() {
 // set templte displayed so we know to scale template
 
 powerIcon.onclick = function() {
+    if (nonLive){
+        alert("Not implemented for this demo");
+        return;
+    }
     if ((currentStatus & DOWNLOADINGFILE) != 0) return;
     if ((currentStatus & PLAYBACK) != 0) return;
     if ((currentStatus & RECORDINGSESSION) != 0) return;
