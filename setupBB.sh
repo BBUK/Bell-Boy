@@ -193,7 +193,8 @@ mv samples/* /data/samples/
 cd bb_dcmimu
 gcc bb_dcmimu.c -o bb_dcmimu -lm || { echo "Unable compile bb_dcmimu.  Exiting."; exit 1; }
 mv bb_dcmimu /srv/http
-
+gcc bb_calibrate.c -o bb_calibrate
+mv bb_calibrate /srv/http/
 
 #cd python
 #python2 setup.py build_ext --inplace || { echo "Unable to build dcmimu module"; exit 1; }
@@ -286,7 +287,7 @@ systemctl enable bellboy
 systemctl enable ap
 systemctl enable smbd nmbd
 
-#sync && reboot
+sync && sync && poweroff
 #systemctl disable serial-getty@ttyAMA0.service 
 
 
