@@ -29,7 +29,7 @@ int read_fifo_count(void);
 void calculate(float u0, float u1, float u2, float z0, float z1,float z2, float h);
 int NXP_start_fifos(int ODR, int gyro_fs, int accel_fs);
 void NXP_stop_fifos(void);
-void NXP_pull_data(void);
+void NXP_pull_data(int cleanUp);
 void NXP_read_gyro_data(float *values);
 void NXP_read_accel_data(float *values);
 void NXP_clear_fifos(void);
