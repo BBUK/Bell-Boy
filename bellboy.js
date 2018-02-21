@@ -829,7 +829,7 @@ recordIcon.onclick=function(){
 recordButton.onclick = function() {
     var fileName = document.getElementById("recordFileName").value;
     var patt = /^[a-z0-9_. ()-]+$/i;
-    if (patt.test(fileName) && fileName.length < 31) {
+    if ((patt.test(fileName) && fileName.length < 31) || fileName == "") {
         recordModal.style.display = "none";
         currentStatus |= RECORDINGSESSION;
         currentStatus &= ~SESSIONLOADED;
@@ -886,7 +886,7 @@ calibrateButton.onclick = function() {
  *}
  * 
  */
-
+/*
 liveIcon.onclick = function() {
     if (nonLive){
         alert("Not implemented for this demo");
@@ -924,6 +924,8 @@ liveIcon.onclick = function() {
         ws.send("STRT:");
     }
 };
+*/
+
 // to do, when PLAYED THEN stopped scaling does not work
 // set templte displayed so we know to scale template
 
@@ -935,7 +937,7 @@ powerIcon.onclick = function() {
     if ((currentStatus & DOWNLOADINGFILE) != 0) return;
     if ((currentStatus & PLAYBACK) != 0) return;
     if ((currentStatus & RECORDINGSESSION) != 0) return;
-    if (confirm("Are you sure you want to power off?  Please press Cancel for this demo.")) ws.send("SHDN:");
+    if (confirm("Are you sure you want to power off?")) ws.send("SHDN:");
     return;
 };
 
@@ -1148,7 +1150,7 @@ function updateIcons(){
         document.getElementById("settingsIcon").src = "settings-active.png";
     }
 
-
+/*
     //liveIcon
     if ((currentStatus & DOWNLOADINGFILE) != 0 ||
         (currentStatus & PLAYBACK) != 0 ||
@@ -1163,6 +1165,8 @@ function updateIcons(){
         }
 
     }
+
+*/
 
     //downloadIcon
     if ((currentStatus & DOWNLOADINGFILE) != 0 ||

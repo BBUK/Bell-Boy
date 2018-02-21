@@ -801,7 +801,7 @@ void NXP_pull_data(int cleanUp){
             newSmoothedAngle -= angleDiffFrom180;
             nudgeCount = 5;
         } else if (smoothedAccn < 0 && newSmoothedAccn > 0 && newSmoothedAngle > 170 && newSmoothedAngle < 190  && nudgeCount == 0){
-            float nudgeFactor = smoothedAccn/(newSmoothedAccn - smoothedAccn);
+            float nudgeFactor = smoothedAccn/(smoothedAccn - newSmoothedAccn);
             float angleDiffFrom180 =  (smoothedAngle - nudgeFactor*(smoothedAngle-newSmoothedAngle)) - 180.0;
             if(nudgeAngle != 0.0){
                 nudgeAngle = 0.75*nudgeAngle + 0.25*angleDiffFrom180; // apply a bit of smoothing
@@ -822,7 +822,7 @@ void NXP_pull_data(int cleanUp){
         }
         remote_count += sprintf(&remote_outbuf[remote_count],remote_outbuf_line);
  
-        sprintf(local_outbuf_line,"A:%+07.1f,R:%+07.1f,C:%+07.1f,RA:%+07.1f,RR:%+07.1f,RC:%+07.1f,AX:%+06.3f,AY:%+06.3f,AZ:%+06.3f,GX:%+07.1f,GY:%+07.1f,GZ:%+07.1f\n", smoothedAngle, smoothedRate, smoothedAccn, roll, (gyro_data[0] + last_x_gyro)/2.0, accTang, accel_data[0], accel_data[1], accel_data[2], gyro_data[0], gyro_data[1], gyro_data[2]);
+        sprintf(local_outbuf_line,"A:%+07.1f,R:%+07.1f,C:%+07.1f,NA:%+05.1f,RA:%+07.1f,RR:%+07.1f,RC:%+07.1f,AX:%+06.3f,AY:%+06.3f,AZ:%+06.3f,GX:%+07.1f,GY:%+07.1f,GZ:%+07.1f\n", smoothedAngle, smoothedRate, smoothedAccn, nudgeAngle, roll, (gyro_data[0] + last_x_gyro)/2.0, accTang, accel_data[0], accel_data[1], accel_data[2], gyro_data[0], gyro_data[1], gyro_data[2]);
         if (local_count + strlen(local_outbuf_line) > (sizeof local_outbuf -2)) {
             fputs(local_outbuf, fd_write_out);
             fflush(fd_write_out);
