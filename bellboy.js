@@ -442,7 +442,7 @@ function drawSamples(position,iterations){
         var dataEntryCurrent = sample[position + i].slice();
         var dataEntryNext = sample[position + i + 1].slice();
         if(calibrationValue != null){
-            dataEntryCurrent[2] -= calibrationValue*Math.sin(dataEntryCurrent[0]*3.142/180);
+            dataEntryCurrent[2] -= calibrationValue*Math.sin(dataEntryCurrent[0]*3.1416/180);
         }
         drawBell(180-dataEntryCurrent[0]);
         drawAT(dataEntryCurrent[2]);
@@ -586,7 +586,7 @@ function drawSamplesOnTemplate(){
         var dataEntryCurrent = template[i].slice();
         var dataEntryNext = template[i + 1].slice();
         if(calibrationValue != null){
-            dataEntryCurrent[2] -= calibrationValue*Math.sin(dataEntryCurrent[0]*3.142/180);
+            dataEntryCurrent[2] -= calibrationValue*Math.sin(dataEntryCurrent[0]*3.1416/180);
         }
         if (dataEntryCurrent[0] > ROIU && dataEntryCurrent[0] < ROIL && dataEntryCurrent[1] >= 0) { // within ROI for HS1
 
