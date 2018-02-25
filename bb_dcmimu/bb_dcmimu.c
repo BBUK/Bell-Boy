@@ -786,11 +786,11 @@ void NXP_pull_data(int cleanUp){
         }
 
         float newSmoothedAccn = smoothFactor*smoothedAccn + (1.0-smoothFactor)* accTang;
-        float newSmoothedAngle = (smoothFactor*smoothedAngle + (1.0-smoothFactor)*roll) - nudgeAngle;
+        float newSmoothedAngle = (smoothFactor*smoothedAngle + (1.0-smoothFactor)*roll);
         smoothedRate = smoothFactor*smoothedRate + (1.0-smoothFactor)*((gyro_data[0] + last_x_gyro)/2.0);
 
 // this section calculates a correction to the angle readings when the bell *should be* at BDC when the bell moves from acceleration to deceleration
-        if(smoothedAccn > 0 && newSmoothedAccn < 0 && newSmoothedAngle > 170 && newSmoothedAngle < 190  && nudgeCount == 0) {
+        if((smoothedAccn * newSmoothedAccn) < 0.0 && newSmoothedAngle > 170.0 && newSmoothedAngle < 190.0  && nudgeCount == 0) {
             float nudgeFactor = smoothedAccn/(smoothedAccn - newSmoothedAccn);
             float angleDiffFrom180 = (smoothedAngle + nudgeFactor*(newSmoothedAngle-smoothedAngle)) - 180.0;
             if(nudgeAngle != 0.0){
@@ -798,31 +798,20 @@ void NXP_pull_data(int cleanUp){
             } else {
                 nudgeAngle = angleDiffFrom180;
             }
-            newSmoothedAngle -= angleDiffFrom180;
             nudgeCount = 5;
-        } else if (smoothedAccn < 0 && newSmoothedAccn > 0 && newSmoothedAngle > 170 && newSmoothedAngle < 190  && nudgeCount == 0){
-            float nudgeFactor = smoothedAccn/(smoothedAccn - newSmoothedAccn);
-            float angleDiffFrom180 =  (smoothedAngle - nudgeFactor*(smoothedAngle-newSmoothedAngle)) - 180.0;
-            if(nudgeAngle != 0.0){
-                nudgeAngle = 0.75*nudgeAngle + 0.25*angleDiffFrom180; // apply a bit of smoothing
-            } else {
-                nudgeAngle = angleDiffFrom180;
-            }
-            newSmoothedAngle -= angleDiffFrom180;
-            nudgeCount = 5;
-        }
+        } 
         if(nudgeCount != 0) nudgeCount -= 1; // don't do this twice in one half stroke
         smoothedAngle = newSmoothedAngle;
         smoothedAccn = newSmoothedAccn;
 
-        sprintf(remote_outbuf_line, "LIVE:A:%+07.1f,R:%+07.1f,C:%+07.1f", smoothedAngle, smoothedRate, smoothedAccn);
+        sprintf(remote_outbuf_line, "LIVE:A:%+07.1f,R:%+07.1f,C:%+07.1f", smoothedAngle-nudgeAngle, smoothedRate, smoothedAccn);
         if (remote_count + strlen(remote_outbuf_line) > (sizeof remote_outbuf -2)) {
             printf("%s\n",remote_outbuf);
             remote_count = 0;
         }
         remote_count += sprintf(&remote_outbuf[remote_count],remote_outbuf_line);
  
-        sprintf(local_outbuf_line,"A:%+07.1f,R:%+07.1f,C:%+07.1f,NA:%+05.1f,RA:%+07.1f,RR:%+07.1f,RC:%+07.1f,AX:%+06.3f,AY:%+06.3f,AZ:%+06.3f,GX:%+07.1f,GY:%+07.1f,GZ:%+07.1f\n", smoothedAngle, smoothedRate, smoothedAccn, nudgeAngle, roll, (gyro_data[0] + last_x_gyro)/2.0, accTang, accel_data[0], accel_data[1], accel_data[2], gyro_data[0], gyro_data[1], gyro_data[2]);
+        sprintf(local_outbuf_line,"A:%+07.1f,R:%+07.1f,C:%+07.1f,NA:%+05.1f,RA:%+07.1f,RR:%+07.1f,RC:%+07.1f,AX:%+06.3f,AY:%+06.3f,AZ:%+06.3f,GX:%+07.1f,GY:%+07.1f,GZ:%+07.1f\n", smoothedAngle-nudgeAngle, smoothedRate, smoothedAccn, nudgeAngle, roll, (gyro_data[0] + last_x_gyro)/2.0, accTang, accel_data[0], accel_data[1], accel_data[2], gyro_data[0], gyro_data[1], gyro_data[2]);
         if (local_count + strlen(local_outbuf_line) > (sizeof local_outbuf -2)) {
             fputs(local_outbuf, fd_write_out);
             fflush(fd_write_out);
