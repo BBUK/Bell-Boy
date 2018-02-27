@@ -201,7 +201,7 @@ function parseResult(dataBack) {
     }
     
     if (dataBack.slice(0,5) == "LIVE:"){
-        if ((currentStatus & LIVEVIEW) == 0 && (currentStatus & RECORDINGSESSION) == 0) { return; }  // server may push data after stopping
+        if ((currentStatus & RECORDINGSESSION) == 0) { return; }  // server may push data after stopping
         var sampArray = dataBack.split("LIVE:");
         var arrayLength = sampArray.length;
         for (var i = 0; i < arrayLength; i++) {
@@ -215,8 +215,6 @@ function parseResult(dataBack) {
     if ((dataBack.slice(0,5) == "LFIN:") || (dataBack.slice(0,5) == "STPD:")) {
         if ((currentStatus & DOWNLOADINGFILE) !=0){
             currentStatus &= ~DOWNLOADINGFILE;
-        } else if ((currentStatus & LIVEVIEW) !=0) {
-            currentStatus &= ~LIVEVIEW;
         } else if ((currentStatus & RECORDINGSESSION) !=0) {
             currentStatus &= ~RECORDINGSESSION;
         }
@@ -304,8 +302,6 @@ function parseResult(dataBack) {
         setStatus("IMU not active.  Is one connected to device? Aborting");
         if ((currentStatus & RECORDINGSESSION) != 0) {
             document.getElementById("recordIcon").onclick()
-        } else if ((currentStatus & LIVEVIEW) != 0) {
-             document.getElementById("liveIcon").onclick()
         }
         currentStatus |= ABORTFLAG;
         return;
@@ -320,8 +316,6 @@ function parseResult(dataBack) {
         setStatus("Bell not at stand.  Aborting");
         if ((currentStatus & RECORDINGSESSION) != 0) {
             document.getElementById("recordIcon").onclick()
-        } else if ((currentStatus & LIVEVIEW) != 0) {
-             document.getElementById("liveIcon").onclick()
         }
         currentStatus |= ABORTFLAG;
         return;
@@ -330,8 +324,6 @@ function parseResult(dataBack) {
         setStatus("Bell moving.  Aborting");
         if ((currentStatus & RECORDINGSESSION) != 0) {
             document.getElementById("recordIcon").onclick()
-        } else if ((currentStatus & LIVEVIEW) != 0) {
-             document.getElementById("liveIcon").onclick()
         }
         currentStatus |= ABORTFLAG;
         return;
@@ -343,9 +335,8 @@ function parseResult(dataBack) {
 ws.onclose = function(event){
     wsOpened=false;
     setStatus("Error. Resetting device. Please press refresh.");
-    if ((currentStatus & RECORDINGSESSION) != 0  || (currentStatus & LIVEVIEW) != 0) {
+    if ((currentStatus & RECORDINGSESSION) != 0 ) {
         currentStatus &= ~RECORDINGSESSION;
-        currentStatus &= ~LIVEVIEW;
         updateIcons();
         if (liveintervalID != null) clearInterval(liveintervalID);
         liveintervalID=null;
@@ -777,6 +768,8 @@ fileOpenButton.onclick = function() {
     currentSwingDisplayed = null;
     calibrationValue = null;
     document.getElementById("calibrateButton").textContent= "Calibrate (None)";
+    clearBell();
+    ctxBD.clearRect(posCB+1, ctxBD.canvas.height-30, CBwidth-2, 20); // clear existing timers
     updateIcons();
 }
 
