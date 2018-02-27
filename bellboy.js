@@ -312,7 +312,7 @@ function parseResult(dataBack) {
     }
     if (dataBack.slice(0,5) == "SAMP:"){
         sampleInterval = parseFloat(dataBack.slice(5))*1000;
-        setStatus("Received sample period of " + sampleInterval.toString() + "ms");
+        setStatus("Received sample period of " + sampleInterval.toFixed(3) + "ms");
         return;
     }
 
@@ -398,7 +398,9 @@ function getWeighting(){
 
 function calculateError(guess){
     var count = 0.0, error = 0.0;
-    for(var i = 0; i < sample.length; i++){
+    var i = 0;
+    if(swingStarts.length > 1) i = swingStarts[1];
+    for(; i < sample.length; i++){
         if(sample[i][0] > 70 && sample[i][0] < 110 && sample[i][1] > 0){
             count += 1;
             error += guess*Math.sin(sample[i][0]*3.1416/180) - sample[i][2];
@@ -431,13 +433,13 @@ function drawTimer(position, templated){
         ctxBD.clearRect(posCB+1, ctxBD.canvas.height-20, CBwidth-2, 10);
         if (timeElapsed > 0.5) {
             ctxBD.textAlign = "center";
-            ctxBD.fillText("B " +timeElapsed.toFixed(2)+"s", posCB + CBwidth/2, ctxBD.canvas.height-10);
+            ctxBD.fillText("B " +timeElapsed.toFixed(2)+"s", 2*BDwidth + 32, ctxBD.canvas.height-10);
         }
     } else {
         ctxBD.clearRect(posCB+1, ctxBD.canvas.height-30, CBwidth-2, 10);
         if (timeElapsed > 0.5) {
             ctxBD.textAlign = "center";
-            ctxBD.fillText("H " + timeElapsed.toFixed(2)+"s", posCB + CBwidth/2, ctxBD.canvas.height-20);
+            ctxBD.fillText("H " + timeElapsed.toFixed(2)+"s", 2*BDwidth + 32, ctxBD.canvas.height-20);
         }
     }
     strokeTimer=position;
@@ -445,8 +447,9 @@ function drawTimer(position, templated){
 
 function drawStroke(){
     if (currentSwingDisplayed == null) return;
-    for (var startpoint = swingStarts[currentSwingDisplayed]; startpoint > 3; --startpoint){
-        if (sample[startpoint][0] > 90) break;
+    var startpoint = swingStarts[currentSwingDisplayed];
+    if (currentSwingDisplayed != 0) {
+        for(; startpoint > 3; --startpoint) if (sample[startpoint][0] > 90) break;
     }
     var endpoint = 0;
     if (currentSwingDisplayed > halfSwingStarts.length -1) {
@@ -457,15 +460,35 @@ function drawStroke(){
         }
     }
     drawSamples(startpoint,endpoint-startpoint);
-    currentStatus &= ~(LASTHS1 | LASTBS1 | LASTHS2 | LASTBS2);    
+    currentStatus &= ~(LASTHS1 | LASTBS1 | LASTHS2 | LASTBS2);
+
+    ctxBD.clearRect(posCB+1, ctxBD.canvas.height-30, CBwidth-2, 20);
+    ctxBD.textAlign = "center";
+    ctxBD.font = "12px sans serif";
+    ctxBD.fillStyle = "white";
+    var handstrokelength = 0.0;
+    var backstrokelength = 0.0;
+    if(currentSwingDisplayed < halfSwingStarts.length) {
+        handstrokelength = (halfSwingStarts[currentSwingDisplayed] - swingStarts[currentSwingDisplayed]) * (sampleInterval/1000.0);  
+    }
+    if((currentSwingDisplayed +1) < swingStarts.length &&
+      currentSwingDisplayed < halfSwingStarts.length) {
+        backstrokelength = (swingStarts[currentSwingDisplayed + 1] - halfSwingStarts[currentSwingDisplayed]) * (sampleInterval/1000.0);
+    } 
+    if(handstrokelength != 0.0){
+        ctxBD.fillText("H " + handstrokelength.toFixed(2)+"s", 2*BDwidth + 32, ctxBD.canvas.height-20);
+    }
+    if(backstrokelength != 0.0){
+        ctxBD.fillText("B " + backstrokelength.toFixed(2)+"s", 2*BDwidth + 32, ctxBD.canvas.height-10);
+    }
 }
 
 function TdrawStroke(){
     if (currentSwingDisplayed == null) return;
     if ((currentStatus & TEMPLATEDISPLAYED) == 0) return;
-
-    for (var startpoint = TswingStarts[TcurrentSwingDisplayed]; startpoint > 3; --startpoint){
-        if (template[startpoint][0] > 90) break;
+    var startpoint = TswingStarts[TcurrentSwingDisplayed];
+    if (TcurrentSwingDisplayed != 0) {
+        for(; startpoint > 3; --startpoint) if (template[startpoint][0] > 90) break;
     }
     var endpoint = 0;
     if (TcurrentSwingDisplayed > ThalfSwingStarts.length -1) {
@@ -476,9 +499,27 @@ function TdrawStroke(){
         }
     }
     drawSamplesOnTemplate(startpoint,endpoint-startpoint);
+
+    ctxBD.clearRect(posCB+1, ctxBD.canvas.height-60, CBwidth-2, 20);
+    ctxBD.font = "12px sans serif";
+    ctxBD.fillStyle = "rgba(240,240,0,1)";
+    ctxBD.textAlign = "center";
+    var handstrokelength = 0.0;
+    var backstrokelength = 0.0;
+    if(TcurrentSwingDisplayed < ThalfSwingStarts.length) {
+        handstrokelength = (ThalfSwingStarts[TcurrentSwingDisplayed] - TswingStarts[TcurrentSwingDisplayed]) * (sampleInterval/1000.0);  
+    }
+    if((TcurrentSwingDisplayed +1) < TswingStarts.length &&
+      TcurrentSwingDisplayed < ThalfSwingStarts.length) {
+        backstrokelength = (TswingStarts[TcurrentSwingDisplayed + 1] - ThalfSwingStarts[TcurrentSwingDisplayed]) * (sampleInterval/1000.0);
+    } 
+    if(handstrokelength != 0.0){
+        ctxBD.fillText("H " + handstrokelength.toFixed(2)+"s", posCB + CBwidth/2, ctxBD.canvas.height-50);
+    }
+    if(backstrokelength != 0.0){
+        ctxBD.fillText("B " + backstrokelength.toFixed(2)+"s", posCB + CBwidth/2, ctxBD.canvas.height-40);
+    }
 }
-
-
 
 function drawSamples(position,iterations){
     var stepSize = (BDwidth * 1.0)/(ROIL-ROIU);
@@ -489,7 +530,7 @@ function drawSamples(position,iterations){
         if(calibrationValue != null){
             dataEntryCurrent[2] -= calibrationValue*Math.sin(dataEntryCurrent[0]*3.1416/180);
         }
-        drawBell(180-dataEntryCurrent[0]);
+        if((currentStatus & RECORDINGSESSION) != 0 || (currentStatus & PLAYBACK) != 0 ) drawBell(180-dataEntryCurrent[0]);
         drawAT(dataEntryCurrent[2]);
         if (dataEntryCurrent[0] > ROIU && dataEntryCurrent[0] < ROIL && dataEntryCurrent[1] >= 0) { // within ROI for HS1
 
@@ -622,8 +663,6 @@ function drawAT(accn){
 function clearTemplates(){
     ctxBDt.clearRect(0, 0, ctxBDt.canvas.width, ctxBDt.canvas.height);
     ctxBD.clearRect(2*BDwidth , 36, 64, 16);
-
-
 }
 
 function drawSamplesOnTemplate(position,iterations){
@@ -872,6 +911,10 @@ calibrateButton.onclick = function() {
     if ((currentStatus & RECORDINGSESSION) != 0) return
     calibrationValue = getWeighting();
     document.getElementById("calibrateButton").textContent= "Calibrate (" + calibrationValue + ")";
+    if (currentSwingDisplayed != null) {
+        drawFrame();
+        drawStroke();
+    }
  };
 
 
@@ -942,6 +985,8 @@ playIcon.onclick=function(){
         if (playintervalID != null) clearInterval(playintervalID);
         playintervalID=setInterval(playbackSample,collectInterval);
         currentSwingDisplayed=null;
+        ctxBD.clearRect(posCB+1, ctxBD.canvas.height-30, CBwidth-2, 20); // clear existing timers
+
     }
 };
 
@@ -1077,7 +1122,9 @@ unstarIcon.onclick=function(){
     clearTemplates();
     currentStatus &= ~TEMPLATEDISPLAYED;
     currentStatus &= ~SKIPTEMPLATE;
+    currentStatus |= SKIPMAIN;
     drawTDCs();
+    ctxBD.clearRect(posCB+1, ctxBD.canvas.height-60, CBwidth-2, 20);  // clear timer displays
     updateIcons();
 };
 
@@ -1446,11 +1493,11 @@ function drawFrame(){
 }
 
 function textBell(){
-    ctxBD.clearRect(2*BDwidth , 0, 64, ctxBD.canvas.height);
+    ctxBD.clearRect(2*BDwidth , 0, 64, 64);
     ctxBD.font="bold 16px verdana, sans-serif";
     ctxBD.textAlign="center";
     if(TcurrentSwingDisplayed != null){
-        ctxBD.fillStyle = "rgba(240,240,0,0.6)";
+        ctxBD.fillStyle = "rgba(240,240,0,1)";
         ctxBD.fillText((TcurrentSwingDisplayed+1).toString(),2*BDwidth + 32,48);
     }
     if ((currentStatus & PAUSED) != 0) {
