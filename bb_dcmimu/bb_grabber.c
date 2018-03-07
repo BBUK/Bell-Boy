@@ -88,7 +88,7 @@ float smoothFactor = 0.92;
 float MPU6050_gyro_scale_factor = 0;
 float MPU6050_accel_scale_factor = 0;
 
-float ROTATIONS[3] = { 0.0, 0.0, -1.0 }; //set rotation values for mounting IMU device x y z
+float ROTATIONS[3] = { 1.0, -1.0, -1.0 }; //set rotation values for mounting IMU device x y z
 
 int ODR = 0;
 int FS_GYRO = 0;
@@ -110,8 +110,6 @@ float yoffset_2 = 0.0;
 float yscale_2 = 1.0;
 float zoffset_2 = 0.0;
 float zscale_2 = 1.0;
-
-
 
 char FILENAME[50];
 
@@ -204,7 +202,7 @@ int main(int argc, char const *argv[]){
         return -1;
     }
     sample_period = 1.0/ODR; // this is an initial estimate.  SAMP: command measures this directly and updates sample_period
-	
+    
     FS_GYRO = atoi(argv[2]);
     if (FS_GYRO != 500 && FS_GYRO != 1000) {
         printf("Incorrect FS gyro.  Expects 500 or 1000 as second argument.\n");
@@ -314,9 +312,9 @@ int main(int argc, char const *argv[]){
                     timenow = gmtime(&now);
                     strftime(FILENAME, sizeof(FILENAME), "/data/samples/Unnamed_%d-%m-%y_%H.%M", timenow);
                 }
-                ROTATIONS[0] = 0;   // reset rotations
-                ROTATIONS[1] = 0;
-                ROTATIONS[2] = -1;
+                ROTATIONS[0] = 1.0;   // reset rotations
+                ROTATIONS[1] = -1.0;
+                ROTATIONS[2] = -1.0;
                 start_angle = MPU6050_get_orientation(); // also sets gyro biasses
                 if(start_angle == -999) {
                     printf("ESTR:\n");
@@ -432,15 +430,15 @@ int main(int argc, char const *argv[]){
 
 int MPU6050_test(void){
     if (MPU6050_1_fd != -1) return -10;
-	if ((MPU6050_1_fd = open(I2CDEV, O_RDWR)) < 0) {
+    if ((MPU6050_1_fd = open(I2CDEV, O_RDWR)) < 0) {
         MPU6050_1_fd = -1;
         return -1;
     }
-  	if (ioctl(MPU6050_1_fd, I2C_SLAVE, MPU6050_1_I2C_ADDRESS) < 0) {
-	    close(MPU6050_1_fd);
+    if (ioctl(MPU6050_1_fd, I2C_SLAVE, MPU6050_1_I2C_ADDRESS) < 0) {
+        close(MPU6050_1_fd);
         MPU6050_1_fd = -1;
         return -2;
-	}
+    }
     if (i2c_smbus_read_byte_data(MPU6050_1_fd, MPU6050_RA_WHO_AM_I) != 104) {
         close(MPU6050_1_fd);
         MPU6050_1_fd = -1;
@@ -450,15 +448,15 @@ int MPU6050_test(void){
     MPU6050_1_fd = -1;
 
     if (MPU6050_2_fd != -1) return -11;
-	if ((MPU6050_2_fd = open(I2CDEV, O_RDWR)) < 0) {
+    if ((MPU6050_2_fd = open(I2CDEV, O_RDWR)) < 0) {
         MPU6050_2_fd = -1;
         return -4;
     }
-  	if (ioctl(MPU6050_2_fd, I2C_SLAVE, MPU6050_2_I2C_ADDRESS) < 0) {
-	    close(MPU6050_2_fd);
+    if (ioctl(MPU6050_2_fd, I2C_SLAVE, MPU6050_2_I2C_ADDRESS) < 0) {
+        close(MPU6050_2_fd);
         MPU6050_2_fd = -1;
         return -5;
-	}
+    }
     if (i2c_smbus_read_byte_data(MPU6050_2_fd, MPU6050_RA_WHO_AM_I) != 104){
         close(MPU6050_2_fd);
         MPU6050_2_fd = -1;
@@ -575,73 +573,73 @@ float MPU6050_get_orientation(void){
 
 int MPU6050_start_fifos(int ODR, int gyro_fs, int accel_fs){
     if (MPU6050_1_fd != -1) return -1;
-	if ((MPU6050_1_fd = open(I2CDEV, O_RDWR)) < 0) {
+    if ((MPU6050_1_fd = open(I2CDEV, O_RDWR)) < 0) {
         MPU6050_1_fd = -1;
         return -1;
     }
-  	if (ioctl(MPU6050_1_fd, I2C_SLAVE, MPU6050_1_I2C_ADDRESS) < 0) {
-	    close(MPU6050_1_fd);
+    if (ioctl(MPU6050_1_fd, I2C_SLAVE, MPU6050_1_I2C_ADDRESS) < 0) {
+        close(MPU6050_1_fd);
         MPU6050_1_fd = -1;
         return -1;
-	}
+    }
 
     if (MPU6050_2_fd != -1) return -1;
-	if ((MPU6050_2_fd = open(I2CDEV, O_RDWR)) < 0) {
+    if ((MPU6050_2_fd = open(I2CDEV, O_RDWR)) < 0) {
         MPU6050_2_fd = -1;
         return -1;
     }
-  	if (ioctl(MPU6050_2_fd, I2C_SLAVE, MPU6050_2_I2C_ADDRESS) < 0) {
-	    close(MPU6050_2_fd);
+    if (ioctl(MPU6050_2_fd, I2C_SLAVE, MPU6050_2_I2C_ADDRESS) < 0) {
+        close(MPU6050_2_fd);
         MPU6050_2_fd = -1;
         return -1;
-	}
+    }
 
-	// reset device
-	__u8 rtemp = i2c_smbus_read_byte_data(MPU6050_1_fd, MPU6050_RA_PWR_MGMT_1);
-	i2cWriteByteData(MPU6050_1_fd, MPU6050_RA_PWR_MGMT_1, rtemp | 0x80);
-	rtemp = i2c_smbus_read_byte_data(MPU6050_2_fd, MPU6050_RA_PWR_MGMT_1);
-	i2cWriteByteData(MPU6050_2_fd, MPU6050_RA_PWR_MGMT_1, rtemp | 0x80);
+    // reset device
+    __u8 rtemp = i2c_smbus_read_byte_data(MPU6050_1_fd, MPU6050_RA_PWR_MGMT_1);
+    i2cWriteByteData(MPU6050_1_fd, MPU6050_RA_PWR_MGMT_1, rtemp | 0x80);
+    rtemp = i2c_smbus_read_byte_data(MPU6050_2_fd, MPU6050_RA_PWR_MGMT_1);
+    i2cWriteByteData(MPU6050_2_fd, MPU6050_RA_PWR_MGMT_1, rtemp | 0x80);
     usleep(500000);
 
-	// take out of sleep
-	rtemp = i2c_smbus_read_byte_data(MPU6050_1_fd, MPU6050_RA_PWR_MGMT_1);
-	i2cWriteByteData(MPU6050_1_fd, MPU6050_RA_PWR_MGMT_1, rtemp & 0xBF);
-	rtemp = i2c_smbus_read_byte_data(MPU6050_2_fd, MPU6050_RA_PWR_MGMT_1);
-	i2cWriteByteData(MPU6050_2_fd, MPU6050_RA_PWR_MGMT_1, rtemp & 0xBF);
+    // take out of sleep
+    rtemp = i2c_smbus_read_byte_data(MPU6050_1_fd, MPU6050_RA_PWR_MGMT_1);
+    i2cWriteByteData(MPU6050_1_fd, MPU6050_RA_PWR_MGMT_1, rtemp & 0xBF);
+    rtemp = i2c_smbus_read_byte_data(MPU6050_2_fd, MPU6050_RA_PWR_MGMT_1);
+    i2cWriteByteData(MPU6050_2_fd, MPU6050_RA_PWR_MGMT_1, rtemp & 0xBF);
 
     // set clock source to xgyro
-	rtemp = i2c_smbus_read_byte_data(MPU6050_1_fd, MPU6050_RA_PWR_MGMT_1) & 0xF8;
-	i2cWriteByteData(MPU6050_1_fd, MPU6050_RA_PWR_MGMT_1, rtemp | 0x01);
-	rtemp = i2c_smbus_read_byte_data(MPU6050_2_fd, MPU6050_RA_PWR_MGMT_1) & 0xF8;
-	i2cWriteByteData(MPU6050_2_fd, MPU6050_RA_PWR_MGMT_1, rtemp | 0x01);
+    rtemp = i2c_smbus_read_byte_data(MPU6050_1_fd, MPU6050_RA_PWR_MGMT_1) & 0xF8;
+    i2cWriteByteData(MPU6050_1_fd, MPU6050_RA_PWR_MGMT_1, rtemp | 0x01);
+    rtemp = i2c_smbus_read_byte_data(MPU6050_2_fd, MPU6050_RA_PWR_MGMT_1) & 0xF8;
+    i2cWriteByteData(MPU6050_2_fd, MPU6050_RA_PWR_MGMT_1, rtemp | 0x01);
 
     switch(accel_fs){
         case 4:
-			i2cWriteByteData(MPU6050_1_fd,MPU6050_RA_ACCEL_CONFIG, 0x08);  
-			i2cWriteByteData(MPU6050_2_fd,MPU6050_RA_ACCEL_CONFIG, 0x08);
+            i2cWriteByteData(MPU6050_1_fd,MPU6050_RA_ACCEL_CONFIG, 0x08);  
+            i2cWriteByteData(MPU6050_2_fd,MPU6050_RA_ACCEL_CONFIG, 0x08);
             MPU6050_accel_scale_factor = MPU6050_ACCEL_SCALE_MODIFIER_4G;
             break;
         case 2:
-			i2cWriteByteData(MPU6050_1_fd,MPU6050_RA_ACCEL_CONFIG, 0x00);  
-			i2cWriteByteData(MPU6050_2_fd,MPU6050_RA_ACCEL_CONFIG, 0x00);
+            i2cWriteByteData(MPU6050_1_fd,MPU6050_RA_ACCEL_CONFIG, 0x00);  
+            i2cWriteByteData(MPU6050_2_fd,MPU6050_RA_ACCEL_CONFIG, 0x00);
             MPU6050_accel_scale_factor = MPU6050_ACCEL_SCALE_MODIFIER_2G;
     }
 
     switch(gyro_fs){
         case 1000:
-			i2cWriteByteData(MPU6050_1_fd,MPU6050_RA_GYRO_CONFIG, 0x10);  
-			i2cWriteByteData(MPU6050_2_fd,MPU6050_RA_GYRO_CONFIG, 0x10);
+            i2cWriteByteData(MPU6050_1_fd,MPU6050_RA_GYRO_CONFIG, 0x10);  
+            i2cWriteByteData(MPU6050_2_fd,MPU6050_RA_GYRO_CONFIG, 0x10);
             MPU6050_gyro_scale_factor = MPU6050_GYRO_SCALE_MODIFIER_1000DEG;
             break;
-		case 500:
-			i2cWriteByteData(MPU6050_1_fd,MPU6050_RA_GYRO_CONFIG, 0x08);  
-			i2cWriteByteData(MPU6050_2_fd,MPU6050_RA_GYRO_CONFIG, 0x08);
+        case 500:
+            i2cWriteByteData(MPU6050_1_fd,MPU6050_RA_GYRO_CONFIG, 0x08);  
+            i2cWriteByteData(MPU6050_2_fd,MPU6050_RA_GYRO_CONFIG, 0x08);
             MPU6050_gyro_scale_factor = MPU6050_GYRO_SCALE_MODIFIER_500DEG;
             break;
         }
 
     // LPF to 188Hz
-	i2cWriteByteData(MPU6050_1_fd, MPU6050_RA_CONFIG, 0x01);
+    i2cWriteByteData(MPU6050_1_fd, MPU6050_RA_CONFIG, 0x01);
     i2cWriteByteData(MPU6050_2_fd, MPU6050_RA_CONFIG, 0x01);
 
     switch(ODR){
@@ -667,8 +665,8 @@ int MPU6050_start_fifos(int ODR, int gyro_fs, int accel_fs){
     i2cWriteByteData(MPU6050_2_fd,MPU6050_RA_FIFO_EN, 0x78);
 
     // start FIFO
-	i2cWriteByteData(MPU6050_1_fd, MPU6050_RA_USER_CTRL, 0x40);
-	i2cWriteByteData(MPU6050_2_fd, MPU6050_RA_USER_CTRL, 0x40);
+    i2cWriteByteData(MPU6050_1_fd, MPU6050_RA_USER_CTRL, 0x40);
+    i2cWriteByteData(MPU6050_2_fd, MPU6050_RA_USER_CTRL, 0x40);
 
 
     return 0;
@@ -757,7 +755,7 @@ void MPU6050_pull_data(int cleanUp){
         MPU6050_read_fifo_data(MPU6050_2_fd, fifo_data_2);
         count_2 -= 12;
     }
-    OUT_COUNT += (count_1 > count_2) ? count_2 : count_1;
+    OUT_COUNT += (count_1 > count_2) ? (count_2 / 12) : (count_1 / 12);
     while(count_1 >=12 && count_2 >= 12){
         count_1 -= 12;
         count_2 -= 12;
@@ -859,9 +857,9 @@ void MPU6050_read_fifo_data(int dfd, float *values){
         values[i] /= MPU6050_gyro_scale_factor;
         values[i] *= ROTATIONS[i-3];
         if(dfd == MPU6050_1_fd){
-            values[i] -= GYRO_BIAS_1[i];
+            values[i] -= GYRO_BIAS_1[i-3];
         } else {
-            values[i] -= GYRO_BIAS_2[i];
+            values[i] -= GYRO_BIAS_2[i-3];
         }
     }
 }
@@ -1131,168 +1129,168 @@ void calculate(float u0, float u1, float u2, float z0, float z1,float z2, float 
 
 
 __s32 i2cReadInt(int fd, __u8 address) {
-	__s32 res = i2c_smbus_read_word_data(fd, address);
-	if (0 > res) {
-		close(fd);
-		exit(1);
-	}
-	res = ((res<<8) & 0xFF00) | ((res>>8) & 0xFF);
-	return res;
+    __s32 res = i2c_smbus_read_word_data(fd, address);
+    if (0 > res) {
+        close(fd);
+        exit(1);
+    }
+    res = ((res<<8) & 0xFF00) | ((res>>8) & 0xFF);
+    return res;
 }
 
 //Write a byte
 void i2cWriteByteData(int fd, __u8 address, __u8 value) {
-	if (0 > i2c_smbus_write_byte_data(fd, address, value)) {
-		close(fd);
-		exit(1);
-	}
+    if (0 > i2c_smbus_write_byte_data(fd, address, value)) {
+        close(fd);
+        exit(1);
+    }
 }
 
 // Read a block of data
 void i2cReadBlockData(int fd, __u8 address, __u8 length, __u8 *values) {
-	if (0 > i2c_smbus_read_i2c_block_data(fd, address,length,values)) {
-		close(fd);
-		exit(1);
-	}
+    if (0 > i2c_smbus_read_i2c_block_data(fd, address,length,values)) {
+        close(fd);
+        exit(1);
+    }
 }
     
 __s32 i2c_smbus_access(int file, char read_write, __u8 command, int size, union i2c_smbus_data *data) {
-	struct i2c_smbus_ioctl_data args;
-	__s32 err;
-	args.read_write = read_write;
-	args.command = command;
-	args.size = size;
-	args.data = data;
-	err = ioctl(file, I2C_SMBUS, &args);
-	if (err == -1)
-		err = -errno;
-	return err;
+    struct i2c_smbus_ioctl_data args;
+    __s32 err;
+    args.read_write = read_write;
+    args.command = command;
+    args.size = size;
+    args.data = data;
+    err = ioctl(file, I2C_SMBUS, &args);
+    if (err == -1)
+        err = -errno;
+    return err;
 }
 
 __s32 i2c_smbus_write_quick(int file, __u8 value) {
-	return i2c_smbus_access(file, value, 0, I2C_SMBUS_QUICK, NULL);
+    return i2c_smbus_access(file, value, 0, I2C_SMBUS_QUICK, NULL);
 }
 
 __s32 i2c_smbus_read_byte(int file) {
-	union i2c_smbus_data data;
-	int err;
-	err = i2c_smbus_access(file, I2C_SMBUS_READ, 0, I2C_SMBUS_BYTE, &data);
-	if (err < 0)
-		return err;
-	return 0x0FF & data.byte;
+    union i2c_smbus_data data;
+    int err;
+    err = i2c_smbus_access(file, I2C_SMBUS_READ, 0, I2C_SMBUS_BYTE, &data);
+    if (err < 0)
+        return err;
+    return 0x0FF & data.byte;
 }
 
 __s32 i2c_smbus_write_byte(int file, __u8 value) {
-	return i2c_smbus_access(file, I2C_SMBUS_WRITE, value, I2C_SMBUS_BYTE, NULL);
+    return i2c_smbus_access(file, I2C_SMBUS_WRITE, value, I2C_SMBUS_BYTE, NULL);
 }
 
 __s32 i2c_smbus_read_byte_data(int file, __u8 command) {
-	union i2c_smbus_data data;
-	int err;
-	err = i2c_smbus_access(file, I2C_SMBUS_READ, command, I2C_SMBUS_BYTE_DATA, &data);
-	if (err < 0)
-		return err;
-	return 0x0FF & data.byte;
+    union i2c_smbus_data data;
+    int err;
+    err = i2c_smbus_access(file, I2C_SMBUS_READ, command, I2C_SMBUS_BYTE_DATA, &data);
+    if (err < 0)
+        return err;
+    return 0x0FF & data.byte;
 }
 
 __s32 i2c_smbus_write_byte_data(int file, __u8 command, __u8 value) {
-	union i2c_smbus_data data;
-	data.byte = value;
-	return i2c_smbus_access(file, I2C_SMBUS_WRITE, command, I2C_SMBUS_BYTE_DATA, &data);
+    union i2c_smbus_data data;
+    data.byte = value;
+    return i2c_smbus_access(file, I2C_SMBUS_WRITE, command, I2C_SMBUS_BYTE_DATA, &data);
 }
 
 __s32 i2c_smbus_read_word_data(int file, __u8 command) {
-	union i2c_smbus_data data;
-	int err;
-	err = i2c_smbus_access(file, I2C_SMBUS_READ, command, I2C_SMBUS_WORD_DATA, &data);
-	if (err < 0)
-		return err;
-	return 0x0FFFF & data.word;
+    union i2c_smbus_data data;
+    int err;
+    err = i2c_smbus_access(file, I2C_SMBUS_READ, command, I2C_SMBUS_WORD_DATA, &data);
+    if (err < 0)
+        return err;
+    return 0x0FFFF & data.word;
 }
 
 __s32 i2c_smbus_write_word_data(int file, __u8 command, __u16 value){
-	union i2c_smbus_data data;
-	data.word = value;
-	return i2c_smbus_access(file, I2C_SMBUS_WRITE, command, I2C_SMBUS_WORD_DATA, &data);
+    union i2c_smbus_data data;
+    data.word = value;
+    return i2c_smbus_access(file, I2C_SMBUS_WRITE, command, I2C_SMBUS_WORD_DATA, &data);
 }
 
 __s32 i2c_smbus_process_call(int file, __u8 command, __u16 value) {
-	union i2c_smbus_data data;
-	data.word = value;
-	if (i2c_smbus_access(file, I2C_SMBUS_WRITE, command, I2C_SMBUS_PROC_CALL, &data))
-		return -1;
-	else
-		return 0x0FFFF & data.word;
+    union i2c_smbus_data data;
+    data.word = value;
+    if (i2c_smbus_access(file, I2C_SMBUS_WRITE, command, I2C_SMBUS_PROC_CALL, &data))
+        return -1;
+    else
+        return 0x0FFFF & data.word;
 }
 
 /* Returns the number of read bytes */
 __s32 i2c_smbus_read_block_data(int file, __u8 command, __u8 *values){
-	union i2c_smbus_data data;
-	int i, err;
-	err = i2c_smbus_access(file, I2C_SMBUS_READ, command, I2C_SMBUS_BLOCK_DATA, &data);
-	if (err < 0)
-		return err;
+    union i2c_smbus_data data;
+    int i, err;
+    err = i2c_smbus_access(file, I2C_SMBUS_READ, command, I2C_SMBUS_BLOCK_DATA, &data);
+    if (err < 0)
+        return err;
 
-	for (i = 1; i <= data.block[0]; i++)
-		values[i-1] = data.block[i];
-	return data.block[0];
+    for (i = 1; i <= data.block[0]; i++)
+        values[i-1] = data.block[i];
+    return data.block[0];
 }
 
 __s32 i2c_smbus_write_block_data(int file, __u8 command, __u8 length, const __u8 *values) {
-	union i2c_smbus_data data;
-	int i;
-	if (length > I2C_SMBUS_BLOCK_MAX)
-		length = I2C_SMBUS_BLOCK_MAX;
-	for (i = 1; i <= length; i++)
-		data.block[i] = values[i-1];
-	data.block[0] = length;
-	return i2c_smbus_access(file, I2C_SMBUS_WRITE, command,
-				I2C_SMBUS_BLOCK_DATA, &data);
+    union i2c_smbus_data data;
+    int i;
+    if (length > I2C_SMBUS_BLOCK_MAX)
+        length = I2C_SMBUS_BLOCK_MAX;
+    for (i = 1; i <= length; i++)
+        data.block[i] = values[i-1];
+    data.block[0] = length;
+    return i2c_smbus_access(file, I2C_SMBUS_WRITE, command,
+                I2C_SMBUS_BLOCK_DATA, &data);
 }
 
 /* Returns the number of read bytes */
 __s32 i2c_smbus_read_i2c_block_data(int file, __u8 command, __u8 length, __u8 *values) {
-	union i2c_smbus_data data;
-	int i, err;
-	if (length > I2C_SMBUS_BLOCK_MAX)
-		length = I2C_SMBUS_BLOCK_MAX;
-	data.block[0] = length;
-	err = i2c_smbus_access(file, I2C_SMBUS_READ, command,
-			       length == 32 ? I2C_SMBUS_I2C_BLOCK_BROKEN :
-				I2C_SMBUS_I2C_BLOCK_DATA, &data);
-	if (err < 0)
-		return err;
-	for (i = 1; i <= data.block[0]; i++)
-		values[i-1] = data.block[i];
-	return data.block[0];
+    union i2c_smbus_data data;
+    int i, err;
+    if (length > I2C_SMBUS_BLOCK_MAX)
+        length = I2C_SMBUS_BLOCK_MAX;
+    data.block[0] = length;
+    err = i2c_smbus_access(file, I2C_SMBUS_READ, command,
+                   length == 32 ? I2C_SMBUS_I2C_BLOCK_BROKEN :
+                I2C_SMBUS_I2C_BLOCK_DATA, &data);
+    if (err < 0)
+        return err;
+    for (i = 1; i <= data.block[0]; i++)
+        values[i-1] = data.block[i];
+    return data.block[0];
 }
 
 __s32 i2c_smbus_write_i2c_block_data(int file, __u8 command, __u8 length, const __u8 *values) {
-	union i2c_smbus_data data;
-	int i;
-	if (length > I2C_SMBUS_BLOCK_MAX)
-		length = I2C_SMBUS_BLOCK_MAX;
-	for (i = 1; i <= length; i++)
-		data.block[i] = values[i-1];
-	data.block[0] = length;
-	return i2c_smbus_access(file, I2C_SMBUS_WRITE, command,
-				I2C_SMBUS_I2C_BLOCK_BROKEN, &data);
+    union i2c_smbus_data data;
+    int i;
+    if (length > I2C_SMBUS_BLOCK_MAX)
+        length = I2C_SMBUS_BLOCK_MAX;
+    for (i = 1; i <= length; i++)
+        data.block[i] = values[i-1];
+    data.block[0] = length;
+    return i2c_smbus_access(file, I2C_SMBUS_WRITE, command,
+                I2C_SMBUS_I2C_BLOCK_BROKEN, &data);
 }
 
 /* Returns the number of read bytes */
 __s32 i2c_smbus_block_process_call(int file, __u8 command, __u8 length, __u8 *values) {
-	union i2c_smbus_data data;
-	int i, err;
-	if (length > I2C_SMBUS_BLOCK_MAX)
-		length = I2C_SMBUS_BLOCK_MAX;
-	for (i = 1; i <= length; i++)
-		data.block[i] = values[i-1];
-	data.block[0] = length;
-	err = i2c_smbus_access(file, I2C_SMBUS_WRITE, command,
-			       I2C_SMBUS_BLOCK_PROC_CALL, &data);
-	if (err < 0)
-		return err;
-	for (i = 1; i <= data.block[0]; i++)
-		values[i-1] = data.block[i];
-	return data.block[0];
+    union i2c_smbus_data data;
+    int i, err;
+    if (length > I2C_SMBUS_BLOCK_MAX)
+        length = I2C_SMBUS_BLOCK_MAX;
+    for (i = 1; i <= length; i++)
+        data.block[i] = values[i-1];
+    data.block[0] = length;
+    err = i2c_smbus_access(file, I2C_SMBUS_WRITE, command,
+                   I2C_SMBUS_BLOCK_PROC_CALL, &data);
+    if (err < 0)
+        return err;
+    for (i = 1; i <= data.block[0]; i++)
+        values[i-1] = data.block[i];
+    return data.block[0];
 }
