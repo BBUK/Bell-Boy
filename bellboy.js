@@ -253,7 +253,7 @@ function parseResult(dataBack) {
                 }
                 while (k > i) {
                     k--; // step back from healthily down point
-                    if (sample[k][1] <= 0.05){ // find point when bell is nearly stationary and define that as start of stroke
+                    if (sample[k][1] <= 0.05 || k == 1){ // find point when bell is nearly stationary and define that (or start of session) as start of stroke
                         swingStarts[swingStarts.length] = k+1;
                         break;
                     }

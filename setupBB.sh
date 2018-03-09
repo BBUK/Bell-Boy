@@ -94,15 +94,15 @@ echo -e '\nWIRELESS_REGDOM="GB"\n' >> /etc/conf.d/wireless-regdom
 
 tee /etc/dhcpd.conf << HDHD 
 ddns-update-style none;
-default-lease-time 600;
-max-lease-time 7200;
+default-lease-time 6000;
+max-lease-time 28800;
 authoritative;
 subnet 10.0.0.0 netmask 255.255.255.0 {
 range 10.0.0.2 10.0.0.10;
 option broadcast-address 10.0.0.255;
 option routers 10.0.0.1;
-default-lease-time 600;
-max-lease-time 7200;
+default-lease-time 6000;
+max-lease-time 28800;
 option domain-name "Bell-Boy";
 }
 HDHD
@@ -116,25 +116,76 @@ auth_algs=1
 wmm_enabled=0
 HDHD
 
-tee /etc/systemd/system/ap.service <<HDHD || { echo "Unable to write dhcpd4 service file - exiting"; exit 1; }
+tee /etc/systemd/system/ap0.service <<HDHD || { echo "Unable to write dhcpd4 service file - exiting"; exit 1; }
 [Unit]
 Description=IPv4 DHCP server
 After=network.target
+ConditionPathExists=!/sys/class/net/wlan1
 
 [Service]
 Type=forking
 PIDFile=/run/ap.pid
 ExecStartPre=-/usr/bin/tvservice -o
+ExecStartPre=-/usr/bin/sed -i s:wlan1:wlan0: /etc/hostapd.conf
 ExecStartPre=-/usr/bin/ip link set dev wlan0 down
-#ip addr flush dev wlan0
 ExecStartPre=-/usr/bin/ip link set dev wlan0 up
 ExecStartPre=-/usr/bin/iw dev wlan0 set power_save off
-ExecStartPre=/usr/bin/sh -c "sleep 5 && /usr/bin/ip addr add 10.0.0.1/24 broadcast 10.0.0.255 dev wlan0"
+ExecStartPre=/usr/bin/sh -c "/usr/bin/ip addr add 10.0.0.1/24 broadcast 10.0.0.255 dev wlan0"
 ExecStartPre=/usr/bin/systemctl start hostapd
 ExecStart=/usr/bin/dhcpd -4 -q -cf /etc/dhcpd.conf -pf /run/ap.pid
 ExecStopPost=/usr/bin/systemctl stop hostapd
 ExecStopPost=-/usr/bin/ip link set dev wlan0 down
 KillSignal=SIGINT
+
+[Install]
+WantedBy=multi-user.target
+HDHD
+
+tee /etc/systemd/system/ap0.timer <<HDHD || { echo "Unable to write dhcpd4 service file - exiting"; exit 1; }
+[Unit]
+Description=IPv4 DHCP server timer
+
+[Timer]
+OnBootSec=25
+
+[Install]
+WantedBy=multi-user.target
+HDHD
+
+## BindsTo=sys-subsystem-net-devices-wlp4s0.device
+## After=sys-subsystem-net-devices-wlp4s0.device
+
+tee /etc/systemd/system/ap1.service <<HDHD || { echo "Unable to write dhcpd4 service file - exiting"; exit 1; }
+[Unit]
+Description=IPv4 DHCP server
+After=network.target
+ConditionPathExists=/sys/class/net/wlan1
+
+[Service]
+Type=forking
+PIDFile=/run/ap.pid
+ExecStartPre=-/usr/bin/tvservice -o
+ExecStartPre=-/usr/bin/sed -i s:wlan0:wlan1: /etc/hostapd.conf
+ExecStartPre=-/usr/bin/ip link set dev wlan1 down
+ExecStartPre=-/usr/bin/ip link set dev wlan1 up
+ExecStartPre=-/usr/bin/iw dev wlan1 set power_save off
+ExecStartPre=/usr/bin/sh -c "/usr/bin/ip addr add 10.0.0.1/24 broadcast 10.0.0.255 dev wlan1"
+ExecStartPre=/usr/bin/systemctl start hostapd
+ExecStart=/usr/bin/dhcpd -4 -q -cf /etc/dhcpd.conf -pf /run/ap.pid
+ExecStopPost=/usr/bin/systemctl stop hostapd
+ExecStopPost=-/usr/bin/ip link set dev wlan1 down
+KillSignal=SIGINT
+
+[Install]
+WantedBy=multi-user.target
+HDHD
+
+tee /etc/systemd/system/ap1.timer <<HDHD || { echo "Unable to write dhcpd4 service file - exiting"; exit 1; }
+[Unit]
+Description=IPv4 DHCP server timer
+
+[Timer]
+OnBootSec=25
 
 [Install]
 WantedBy=multi-user.target
@@ -161,7 +212,7 @@ After=network.target
 User=root
 Type=forking
 ExecStartPre=/usr/bin/sh -c "/srv/http/powermonitor.sh &"
-ExecStart=/usr/bin/screen -S wrad -d -m sh -c "(/srv/http/websocketd --port=80 --staticdir=/srv/http/ /srv/http/bb_dcmimu 200 500 4 2>&1) | tee -a /var/log/bellboy.log"
+ExecStart=/usr/bin/screen -S wrad -d -m sh -c "(/srv/http/websocketd --port=80 --staticdir=/srv/http/ /srv/http/grabber 200 500 4 2>&1) | tee -a /var/log/bellboy.log"
 ExecStop=/usr/bin/screen -S wrad -X wrad
 KillMode = control-group
 TimeoutStopSec=0
@@ -171,16 +222,6 @@ RestartSec=5
 WantedBy=multi-user.target
 HDHD
 
-#cd ~
-#git clone https://github.com/RTIMULib/RTIMULib2.git
-#cd RTIMULib2/Linux/python
-#python2 setup.py build || { echo "Unable to install RTIMULib2 files"; exit 1; }
-#python2 setup.py install
-
-#cd ../RTIMULibCal
-#make || { echo "Unable to make RTIMULibCal"; exit 1; }
-#make install || { echo "Unable to install RTIMULibCal"; exit 1; }
-
 cd ~
 
 git clone https://github.com/BBUK/Bell-Boy.git || { echo "Unable to download Bell-Boy code"; exit 1; }
@@ -189,18 +230,17 @@ cp * /srv/http
 
 mkdir -p /data/samples
 mv samples/* /data/samples/
+chown -R nobody.nobody /data
+chmod -R 777 /data
 
-cd bb_dcmimu
-gcc bb_dcmimu.c -o bb_dcmimu -lm || { echo "Unable compile bb_dcmimu.  Exiting."; exit 1; }
-mv bb_dcmimu /srv/http
-gcc bb_calibrate.c -o bb_calibrate
-mv bb_calibrate /srv/http/
-
-#cd python
-#python2 setup.py build_ext --inplace || { echo "Unable to build dcmimu module"; exit 1; }
-#cp dcmimu.so /srv/http/
+cd grabber
+gcc grabber.c -o grabber -lm || { echo "Unable compile bb_dcmimu.  Exiting."; exit 1; }
+mv grabber /srv/http/
+gcc MPU6050_calibrate.c -o MPU6050_calibrate
+mv MPU6050_calibrate /srv/http/
 
 cd ~
+#the only reason I an creating this overlay is to save one resistor on the PCB
 tee gpio_pull-overlay.dts <<HDHD
 /*
 * Overlay for enabling gpio's to pull at boot time
@@ -284,7 +324,8 @@ public = yes
 HDHD
 
 systemctl enable bellboy
-systemctl enable ap
+systemctl enable ap0.timer
+systemctl enable ap1.timer
 systemctl enable smbd nmbd
 
 sync && sync && poweroff
