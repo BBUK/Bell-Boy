@@ -807,7 +807,7 @@ void MPU6050_pull_data(int cleanUp){
         }
         remote_count += sprintf(&remote_outbuf[remote_count],remote_outbuf_line);
  
-        sprintf(local_outbuf_line,"A:%+07.1f,R:%+07.1f,C:%+07.1f,NA:%+05.1f,RA:%+07.1f,RR:%+07.1f,RC:%+07.1f,AX:%+06.3f,AY:%+06.3f,AZ:%+06.3f,GX:%+07.1f,GY:%+07.1f,GZ:%+07.1f\n", smoothedAngle-nudgeAngle, smoothedRate, smoothedAccn, nudgeAngle, roll, (combined_data[3] + last_x_gyro)/2.0, accTang, combined_data[0], combined_data[1], combined_data[2], combined_data[3], combined_data[4], combined_data[5]);
+        sprintf(local_outbuf_line,"A:%+07.1f,R:%+07.1f,C:%+07.1f,NA:%+05.1f,A0:%+07.1f,A1:%+07.1f,A2:%+07.1f\n", smoothedAngle-nudgeAngle, smoothedRate, smoothedAccn, nudgeAngle, a[0]*1000, a[1]*1000, a[2]*1000);
         if (local_count + strlen(local_outbuf_line) > (sizeof local_outbuf -2)) {
             fputs(local_outbuf, fd_write_out);
             fflush(fd_write_out);

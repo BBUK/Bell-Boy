@@ -72,7 +72,7 @@ var playbackRanges = [200, 150, 100, 80, 50, 30, 10]; // available playback spee
 
 var currentPlaybackSpeed = 2;
 var targets = [ "none", "-10", "-7", "-5", "-2" , "0", "2", "5", "7" , "10" ]; // these are target balance angles
-var scales = [ 2000, 1000, 700, 500, 300, 200 ];
+var scales = [ 700, 500, 300, 200, 100, 50 ];
 
 var currentPlaybackPosition = 1;
 var playintervalID = null;
@@ -153,7 +153,7 @@ for (var i=0; i < scales.length; i++) {
     option.text=scales[i].toString()
     document.getElementById("scaleSelect").add(option);
 }
-document.getElementById("scaleSelect").selectedIndex = 4;  // start at 300
+document.getElementById("scaleSelect").selectedIndex = 3;  // start at 200
 scaleValue=parseFloat(scales[document.getElementById("scaleSelect").selectedIndex])
 
 ////////////////////////////////////////////////////////////////
@@ -260,6 +260,7 @@ function parseResult(dataBack) {
                 }
                 if (k == i) {
                     setStatus("Loaded: " + sample.length.toString() + " samples. Should Have: " + dataBack.slice(5) + " Funny swing found. Possible incorrect data. But " + swingStarts.length.toString() + " strokes found. " + swingStarts.toString());
+                    calibrationValue = getWeighting();
                     return;
                 }
                 while (j < arrayLength && sample[j][0] < 190) j++;  // move forward through sample past BDC
@@ -281,11 +282,13 @@ function parseResult(dataBack) {
                 }
                 if (k == i) {
                     setStatus("Loaded: " + sample.length.toString() + " samples. Should Have: " + dataBack.slice(5) + " Funny half swing found. Possible incorrect data. But " + swingStarts.length.toString() + " strokes found. " + swingStarts.toString());
+                    calibrationValue = getWeighting();
                     return;
                 }
                 while (j < arrayLength && sample[j][0] > 170) j++;
             }
         }
+        calibrationValue = getWeighting();
         setStatus("Loaded: " + sample.length.toString() + " samples. Should Have: " + dataBack.slice(5) + ". " + swingStarts.length.toString() + " strokes found.");
 //        setStatus("Loaded: " + halfSwingStarts);
 
@@ -767,7 +770,6 @@ fileOpenButton.onclick = function() {
     currentStatus &= ~SESSIONLOADED;
     currentSwingDisplayed = null;
     calibrationValue = null;
-    document.getElementById("calibrateButton").textContent= "Calibrate (None)";
     clearBell();
     ctxBD.clearRect(posCB+1, ctxBD.canvas.height-30, CBwidth-2, 20); // clear existing timers
     updateIcons();
@@ -894,49 +896,6 @@ recordButton.onclick = function() {
         document.getElementById("nameInvalid").style.visibility = "visible";
     }
 };
-
-calibrateButton.onclick = function() {
-    
-    if ((currentStatus & SESSIONLOADED) == 0) return;
-    if ((currentStatus & DOWNLOADINGFILE) != 0) return;
-    if ((currentStatus & PLAYBACK) != 0) return;
-    if ((currentStatus & HELPDISPLAYED) != 0) return;
-    if ((currentStatus & RECORDINGSESSION) != 0) return
-    calibrationValue = getWeighting();
-    document.getElementById("calibrateButton").textContent= "Calibrate (" + calibrationValue + ")";
-    if (currentSwingDisplayed != null) {
-        drawFrame();
-        drawStroke();
-    }
- };
-
-
-/*
- * https://stackoverflow.com/questions/7035842/how-to-change-the-buttons-text-using-javascript
- * 
- * function replaceButtonText(buttonId, text) {
- * if (document.getElementById)
- * {
- *   var button=document.getElementById(buttonId);
- *   if (button)
- *   {
- *     if (button.childNodes[0])
- *     {
- *       button.childNodes[0].nodeValue=text;
- *     }
- *     else if (button.value)
- *     {
- *       button.value=text;
- *     }
- *     else 
- *     {
- *       button.innerHTML=text;
- *     }
- *   }
- * }
- *}
- * 
- */
 
 // to do, when PLAYED THEN stopped scaling does not work
 // set templte displayed so we know to scale template
@@ -1172,6 +1131,7 @@ function updateIcons(){
     //downloadIcon
     if ((currentStatus & DOWNLOADINGFILE) != 0 ||
         (currentStatus & PLAYBACK) != 0 ||
+        (currentStatus & RECORDINGSESSION) != 0 ||
         (currentStatus & HELPDISPLAYED) != 0) {
         document.getElementById("downloadIcon").src = "cloud-download-inactive.png";
     } else {
