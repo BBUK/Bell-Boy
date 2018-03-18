@@ -1,3 +1,5 @@
+## THIS PROJECT HAS NOT YET REACHED ITS FIRST RELEASE AND IS CURRENTLY INCOMPLETE 
+
 # Bell-Boy
 This repository contains the code for the Bell-Boy Project.
 

@@ -126,7 +126,7 @@ ConditionPathExists=!/sys/class/net/wlan1
 Type=forking
 PIDFile=/run/ap.pid
 ExecStartPre=-/usr/bin/tvservice -o
-ExecStartPre=-/usr/bin/sed -i s:wlan1:wlan0: /etc/hostapd.conf
+ExecStartPre=-/usr/bin/sed -i s:wlan1:wlan0: /etc/hostapd/hostapd.conf
 ExecStartPre=-/usr/bin/ip link set dev wlan0 down
 ExecStartPre=-/usr/bin/ip link set dev wlan0 up
 ExecStartPre=-/usr/bin/iw dev wlan0 set power_save off
@@ -146,7 +146,7 @@ tee /etc/systemd/system/ap0.timer <<HDHD || { echo "Unable to write dhcpd4 servi
 Description=IPv4 DHCP server timer
 
 [Timer]
-OnBootSec=25
+OnBootSec=30
 
 [Install]
 WantedBy=multi-user.target
@@ -165,7 +165,7 @@ ConditionPathExists=/sys/class/net/wlan1
 Type=forking
 PIDFile=/run/ap.pid
 ExecStartPre=-/usr/bin/tvservice -o
-ExecStartPre=-/usr/bin/sed -i s:wlan0:wlan1: /etc/hostapd.conf
+ExecStartPre=-/usr/bin/sed -i s:wlan0:wlan1: /etc/hostapd/hostapd.conf
 ExecStartPre=-/usr/bin/ip link set dev wlan1 down
 ExecStartPre=-/usr/bin/ip link set dev wlan1 up
 ExecStartPre=-/usr/bin/iw dev wlan1 set power_save off
@@ -185,7 +185,7 @@ tee /etc/systemd/system/ap1.timer <<HDHD || { echo "Unable to write dhcpd4 servi
 Description=IPv4 DHCP server timer
 
 [Timer]
-OnBootSec=25
+OnBootSec=30
 
 [Install]
 WantedBy=multi-user.target

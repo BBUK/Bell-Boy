@@ -310,7 +310,7 @@ int main(int argc, char const *argv[]){
                     struct tm *timenow;
                     time_t now = time(NULL);
                     timenow = gmtime(&now);
-                    strftime(FILENAME, sizeof(FILENAME), "/data/samples/Unnamed_%d-%m-%y_%H.%M", timenow);
+                    strftime(FILENAME, sizeof(FILENAME), "/data/samples/Unnamed_%d-%m-%y_%H%M", timenow);
                 }
                 ROTATIONS[0] = 1.0;   // reset rotations
                 ROTATIONS[1] = -1.0;
