@@ -1,4 +1,4 @@
-//gcc MPU6050_calibrate.c -o MPU6050_calibrate
+//gcc MPU6050_testOrientation.c -o MPU6050_testOrientation -lm
 /*
 WARN=-Wfatal-errors -Wall -Wextra -Wconversion -Wunused -Wundef -Wcast-qual -Wredundant-decls -Wunreachable-code -Wwrite-strings -Warray-bounds -Wstrict-aliasing=3 -Wstrict-overflow=1 -Wstrict-prototypes -Winline -Wshadow -Wswitch -Wmissing-include-dirs -Woverlength-strings -Wpacked -Wdisabled-optimization -Wmissing-prototypes -Wformat=2 -Winit-self -Wmissing-declarations -Wunused-parameter -Wlogical-op -Wuninitialized -Wnested-externs -Wpointer-arith -Wdouble-promotion -Wunused-macros -Wunused-function -Wunsafe-loop-optimizations -Wnull-dereference -Wduplicated-cond -Wshift-overflow=2 -Wnonnull -Wcast-align -Warray-bounds=2
 */
@@ -24,48 +24,6 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
-/*
-* This program is a calibration routine for IMU accelerometer sensors.  
-* The program only needs to be run once after the Bell Boy device has been
-* constructed.  The calibration "should" remain valid for the life of the device.
-* There is, however, no harm in rerunning the calibration.
-*
-* This program works by using gravity measurements in the positive and negative
-* directions of the Y and Z axes.  The X axis is not used as its accelerometer
-* (and its calibration) is irrelevant for the Bell Boy application.
-* 
-* The result is an offset (which bb_dcmimu adds to the raw readings) 
-* and a scale (which bb_dcmimu multiplies the raw readings by).
-* 
-* To use this get a completely flat surface ready.  Test the "flatness" of the 
-* surface using a bulls eye spirit level.  Place one large flat side of the Bell Boy
-* device on the surface, switch it on, connect to its wifi and run the bb_calibrate
-* program over ssh. Note that you will be turning the device so that it is on
-* the other flat side and on each of the "long" edges.  I have called these four
-* orientations North, South, East and West.
-* The program starts by taking some gyroscope measurements (overall biasses).  These are 
-* not used in the calibration itself but are used to work out whether the devioe
-* is still enough to make an accurate accelerometer reading.
-* The program then takes the readings for the orientation it is in.  You will 
-* probably see something like "insufficiently still" a few times before a reading
-* is taken and reported.  Once this happens turn the device to one of the other
-* orientations and wait for a reading to be taken (and so on).
-* If you get a report "Not in the right position" this simply says that the device is still
-* but probably not oriented correctly.  Wait to see if the error clears and also check
-* the flatness of the surface you have placed the device on.
-* The program exits once it has taken all its measurements and saves the Y and Z offset
-* and scale values (four values) to /boot/bb_calibrations.
-* The saved file is read and used by bb_dcmimu (the main grabber program).  If, however,
-* bb_dcmimu does not see the file, it just uses uncalibrated values - you may
-* not notice any difference!
-*
-* Finally note that the offset and scale values are temperature dependent.  If you
-* wanted to do some scientific analysis then the values should be measured at different
-* temperatures and some form of linear regression analysis should take place so that
-* you would know what scale and offset values to apply.  That's why the IMUs have
-* a user accessible temperature reading on them.  Testing showed that the effect of
-* temperature was really small (to small to worry about really).  
-*/
 #include <math.h>
 #include <sys/time.h>
 #include <time.h>
@@ -99,6 +57,7 @@ SOFTWARE.
 #define I2C_FUNC_SMBUS_PEC I2C_FUNC_SMBUS_HWPEC_CALC
 #endif
 
+#define RADIANS_TO_DEGREES_MULTIPLIER 57.29578 
 #define I2CDEV "/dev/i2c-1"
 
 int MPU6050_1_fd = -1;
@@ -106,11 +65,18 @@ int MPU6050_2_fd = -1;
 
 float MPU6050_gyro_scale_factor = 0;
 float MPU6050_accel_scale_factor = 0;
-float threshold = 4.0;
 
 float GYRO_BIAS[3] = { 0.0, 0.0, 0.0 };
 
-FILE *fd_write_out;
+float yoffset_1 = 0.0;
+float yscale_1 = 1.0;
+float zoffset_1 = 0.0;
+float zscale_1 = 1.0;
+
+float yoffset_2 = 0.0;
+float yscale_2 = 1.0;
+float zoffset_2 = 0.0;
+float zscale_2 = 1.0;
 
 volatile sig_atomic_t sig_exit = 0;
 void sig_handler(int signum) {
@@ -122,16 +88,38 @@ void sig_handler(int signum) {
 int main(int argc, char const *argv[]){
     float gyro_values[3];
     float return_values[6];
-    float north_1,south_1,east_1,west_1;
-    float north_2,south_2,east_2,west_2;
-
-    int count = 0, nsew = 0;
     
     struct sigaction sig_action;
     memset(&sig_action, 0, sizeof(struct sigaction));
     sig_action.sa_handler = sig_handler;
     sigaction(SIGTERM, &sig_action, NULL);
     sigaction(SIGINT, &sig_action, NULL);
+
+    FILE *fd_read_cal;
+    fd_read_cal = fopen("/boot/bb_calibrations","r");
+    if(fd_read_cal == NULL) {
+        printf("Calibration file not found.\n");
+    } else {
+        if (fgets(READ_OUTBUF_LINE, sizeof(READ_OUTBUF_LINE), fd_read_cal) != NULL) {
+            char *p = strtok(READ_OUTBUF_LINE,",");
+            if(p!= NULL) yoffset_1 = atof(&p[4]);
+            p = strtok(NULL,",");
+            if(p!= NULL) yscale_1 = atof(&p[4]);
+            p = strtok(NULL,",");
+            if(p!= NULL) zoffset_1 = atof(&p[4]);
+            p = strtok(NULL,",");
+            if(p!= NULL) zscale_1 = atof(&p[4]);
+            p = strtok(NULL,",");
+            if(p!= NULL) yoffset_2 = atof(&p[4]);
+            p = strtok(NULL,",");
+            if(p!= NULL) yscale_2 = atof(&p[4]);
+            p = strtok(NULL,",");
+            if(p!= NULL) zoffset_2 = atof(&p[4]);
+            p = strtok(NULL,",");
+            if(p!= NULL) zscale_2 = atof(&p[4]);
+        }
+        fclose(fd_read_cal);
+    }
         
     if(MPU6050_setup() < 0) return -1;
     printf("Getting gyro biasses\n");
@@ -150,7 +138,6 @@ int main(int argc, char const *argv[]){
         GYRO_BIAS[1] = gyro_values[1];
         GYRO_BIAS[2] = gyro_values[2];
         printf("Biasses read OK\n");
-        threshold = 1.0;
         break;
     }
 
@@ -163,107 +150,8 @@ int main(int argc, char const *argv[]){
             usleep(500000);
             continue;
         }
-        if(return_values[4] > 0.90 && abs(return_values[5]) < 0.10  && abs(return_values[3]) < 0.10 && return_values[1] > 0.90){
-            if(nsew & 1){
-                printf("North already read, please flip to another face.\n");
-            } else {
-                nsew |= 1;
-                north_2 = return_values[4];
-                north_1 = return_values[1];
-                printf("North read\n");
-            }
-        } else if(return_values[4] < -0.90 && abs(return_values[5]) < 0.10  && abs(return_values[3]) < 0.10 && return_values[1] < -0.90) {
-            if(nsew & 2){
-                printf("South already read, please flip to another face.\n");
-            } else {
-                nsew |= 2;
-                south_2 = return_values[4];
-                south_1 = return_values[1];
-                printf("South read\n");
-            }
-        } else if(return_values[5] > 0.90 && abs(return_values[4]) < 0.10  && abs(return_values[3]) < 0.10 && return_values[2] < -0.90) {
-            if(nsew & 4){
-                printf("East already read, please flip to another face.\n");
-            } else {
-                nsew |= 4;
-                east_2 = return_values[5];
-                west_1 = return_values[2];
-                printf("East read\n");
-            }
-        } else if(return_values[5] < -0.90 && abs(return_values[4]) < 0.10  && abs(return_values[3]) < 0.10 && return_values[2] > 0.90) {
-            if(nsew & 8){
-                printf("West already read, please flip to another face.\n");
-            } else {
-                nsew |= 8;
-                west_2 = return_values[5];
-                east_1 = return_values[2];
-                printf("West read\n");
-            }
-        } else {
-            printf("Not in the right position... %f,%f,%f,%f\n",return_values[1],return_values[2],return_values[4],return_values[5]);
-        }
-        if(nsew == 15){
-            printf("Success!\n");
-            printf("MPU:1 North= %f, South= %f, East= %f and West= %f\n", north_1,south_1,east_1,west_1);
-            printf("MPU:2 North= %f, South= %f, East= %f and West= %f\n", north_2,south_2,east_2,west_2);
-
-            float nsoffset_1 = -((north_1+south_1)/2.0);
-            float nsoffset_2 = -((north_2+south_2)/2.0);
-
-//               float nsoffset = -((north+south)/(north-south));
-            float nsscale_1 = 2.0/(north_1-south_1);
-            float nsscale_2 = 2.0/(north_2-south_2);
-
-            north_1 += nsoffset_1;
-            south_1 += nsoffset_1;
-            north_1 *= nsscale_1;
-            south_1 *= nsscale_1;
-
-            north_2 += nsoffset_2;
-            south_2 += nsoffset_2;
-            north_2 *= nsscale_2;
-            south_2 *= nsscale_2;
-            
-            printf("MPU:1 Y offset = %f, Y scale = %f\n",nsoffset_1, nsscale_1);
-            printf("MPU:2 Y offset = %f, Y scale = %f\n",nsoffset_2, nsscale_2);
-
-            float ewoffset_1 = -((east_1+west_1)/2.0);
-            float ewoffset_2 = -((east_2+west_2)/2.0);
-            //                float ewoffset = -((east+west)/(east-west));
-            float ewscale_1 = 2.0/(east_1-west_1);
-            float ewscale_2 = 2.0/(east_2-west_2);
-
-            east_1 += ewoffset_1;
-            west_1 += ewoffset_1;
-            east_1 *= ewscale_1;
-            west_1 *= ewscale_1;
-
-            east_2 += ewoffset_2;
-            west_2 += ewoffset_2;
-            east_2 *= ewscale_2;
-            west_2 *= ewscale_2;
-           
-            printf("MPU:1 Z offset = %f, Z scale = %f\n",ewoffset_1, ewscale_1);
-            printf("MPU:2 Z offset = %f, Z scale = %f\n",ewoffset_2, ewscale_2);
-
-            printf("MPU:1 North= %f, South= %f, East= %f and West= %f\n", north_1,south_1,east_1,west_1);
-            printf("MPU:2 North= %f, South= %f, East= %f and West= %f\n", north_2,south_2,east_2,west_2);
-
-            close(MPU6050_1_fd);
-            MPU6050_1_fd = -1;
-            close(MPU6050_2_fd);
-            MPU6050_1_fd = -1;
-            fd_write_out = fopen("/boot/bb_calibrations","w");  // "w"
-            if(fd_write_out == NULL) {
-                fprintf(stderr, "Could not open file for writing\n");
-                return 1;
-            } else {
-                fprintf(fd_write_out,"YO1:%+07.4f,YS1:%+07.4f,ZO1:%+07.4f,ZS1:%+07.4f,YO2:%+07.4f,YS2:%+07.4f,ZO2:%+07.4f,ZS2:%+07.4f,\n", nsoffset_1,nsscale_1,ewoffset_1,ewscale_1,nsoffset_2,nsscale_2,ewoffset_2,ewscale_2);
-                fclose(fd_write_out);
-                fd_write_out = NULL;
-                return 0;
-            }
-        }
+        printf("X1:%+07.4f,Y1:%+07.4f,Z1:%+07.4f,X2:%+07.4f,Y2:%+07.4f,Z2:%+07.4f,R1:%+07.4f,R2:%+07.4f,\n", return_values[0],return_values[1],return_values[2],return_values[3],return_values[4],return_values[0],atan2(return_values[1], return_values[2]) * RADIANS_TO_DEGREES_MULTIPLIER,atan2(return_values[4], return_values[5]) * RADIANS_TO_DEGREES_MULTIPLIER);
+        break;
     }
     if (MPU6050_1_fd != -1) close(MPU6050_1_fd);
     if (MPU6050_2_fd != -1) close(MPU6050_2_fd);
@@ -409,12 +297,24 @@ void MPU6050_read_fifo_data(int dfd, float *values){
         if(values[i] >= 0x8000) values[i] -= 0x10000;
         values[i] /= MPU6050_accel_scale_factor;
     }
+    if(dfd == MPU6050_1_fd){
+        values[1] += yoffset_1;
+        values[1] *= yscale_1;
+        values[2] += zoffset_1;
+        values[2] *= zscale_1;
+    } else {
+        values[1] += yoffset_2;
+        values[1] *= yscale_2;
+        values[2] += zoffset_2;
+        values[2] *= zscale_2;
+    }
    
     for(int i=3; i<6; ++i){
         if(values[i] >= 0x8000) values[i] -= 0x10000;
         values[i] /= MPU6050_gyro_scale_factor;
         if(dfd == MPU6050_2_fd) values[i] -= GYRO_BIAS[i-3];
      }
+
 }
 
 int MPU6050_read_fifo_count(int dfd){

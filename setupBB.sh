@@ -328,8 +328,8 @@ systemctl enable ap0.timer
 systemctl enable ap1.timer
 systemctl enable smbd nmbd
 
-cd ~/Bell-Boy/images
-cp imagepack.zip /srv/http
+cp ~/Bell-Boy/images/imagepack.zip /srv/http
+cd /srv/http
 echo "Type password for the image pack.  If you don't have the password, just press enter (no images will be installed)"
 unzip -q imagepack.zip
 
