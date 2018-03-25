@@ -110,10 +110,12 @@ HDHD
 tee /etc/hostapd/hostapd.conf << HDHD || { echo "Unable to write hostapd config - exiting"; exit 1; }
 interface=wlan0
 ssid=Bell-Boy
+country_code=GB
+channel=11
 hw_mode=g
-channel=6
-auth_algs=1
-wmm_enabled=0
+wmm_enabled=1
+ieee80211d=1
+ieee80211n=1
 HDHD
 
 tee /etc/systemd/system/ap0.service <<HDHD || { echo "Unable to write dhcpd4 service file - exiting"; exit 1; }
@@ -234,10 +236,20 @@ chown -R nobody.nobody /data
 chmod -R 777 /data
 
 cd grabber
-gcc grabber.c -o grabber -lm || { echo "Unable compile bb_dcmimu.  Exiting."; exit 1; }
+gcc grabber.c -o grabber -lm || { echo "Unable compile grabber.  Exiting."; exit 1; }
 mv grabber /srv/http/
 gcc MPU6050_calibrate.c -o MPU6050_calibrate
 mv MPU6050_calibrate /srv/http/
+
+cd ..
+mv images/Mounting.png /srv/http/
+mv images/BBtaped.png /srv/http/
+mv images/MainScreenGuide.png /srv/http/
+mv images/Playback.png /srv/http/
+mv images/FileDownload.png /srv/http/
+mv images/StrokeByStroke.png /srv/http/
+mv images/StrokeComparison.png /srv/http/
+mv images/Settings.png /srv/http/
 
 cd ~
 #the only reason I an creating this overlay is to save one resistor on the PCB

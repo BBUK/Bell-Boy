@@ -5,44 +5,116 @@
 
 <body>
 <H1>Bell-Boy Help File</H1><BR>
-CONTENTS<BR>
-<A href="#1">Initial Setup and Calibration</A><BR>
-<A href="#2">Heading 2</A><BR>
-<A href="#3">Heading 3</A><BR>
-<A href="#4">Heading 4</A><BR>
-<A href="#5">Heading 5</A><BR>
-<A href="#6">Heading 6</A><BR>
-<A href="#7">Licences</A><BR>
-<A href="#8">Thanks</A><BR>
-<A name="1"></A><H2>Initial Setup and Calibration</H2><BR>
-Lorem ipsum dolor sit amet, consectetur adipiscing elit. Phasellus eros mi, facilisis eu varius sed, vestibulum ut ipsum. Curabitur quis magna nunc. Mauris lorem tortor, vulputate sit amet lobortis vitae, consectetur sit amet enim. Maecenas vitae laoreet turpis, in gravida turpis. Integer quis ligula ut dui facilisis rhoncus vitae sed orci. Etiam efficitur iaculis risus, eu iaculis nunc tempor vel. Mauris fermentum, dui vel condimentum venenatis, ex ex luctus arcu, in fermentum mauris sapien a tellus. Nullam id orci vel tellus vulputate accumsan vel eu neque. Sed scelerisque imperdiet maximus. Aenean tristique nibh eu finibus lobortis.<BR>
-Praesent a enim imperdiet purus varius venenatis eu nec tellus. Fusce porttitor placerat ligula sed fringilla. Curabitur elit erat, gravida sed arcu a, auctor pretium massa. Integer ac velit eros. Fusce viverra, urna a convallis consequat, quam felis iaculis enim, quis blandit risus sem eu dui. Quisque blandit ultrices tincidunt. Etiam non dui fermentum, dictum tortor ut, lacinia quam. Nulla ipsum velit, vehicula at nisl sit amet, tempor vestibulum nunc. Cras rhoncus tempor est. Cras congue sed arcu vitae tempus. Vivamus maximus nunc eget dapibus volutpat.<BR>
-Praesent rhoncus ante vitae mollis mattis. Ut eleifend vitae arcu ornare fringilla. Curabitur ut orci quis lectus ultricies malesuada eget a enim. Vivamus ultricies urna id mi ornare imperdiet. In ligula odio, luctus sit amet massa quis, lobortis pulvinar elit. Maecenas quam ligula, volutpat non viverra et, vestibulum ut nibh. Donec hendrerit, nisl id pellentesque pellentesque, tortor libero blandit ante, eu suscipit urna leo vel neque.<BR>
+<h1>
+Contents</h1>
+<ul>
+<li><a href="#attaching-the-device-to-a-bell">Attaching the device to a bell</a></li>
+<li><a href="#connecting-your-computer">Connecting your computer</a></li>
+<li><a href="#a-calibration-session">A calibration session</a></li>
+<li><a href="#recording-a-session">Recording a session</a></li>
+<li><a href="#downloading-saved-sessions">Downloading saved sessions</a></li>
+<li><a href="#playback-a-session">Playback a session</a></li>
+<li><a href="#skipping-through-a-session">Skipping through a session</a></li>
+<li><a href="#comparing-strokes">Comparing strokes</a></li>
+<li><a href="#settings">Settings</a></li>
+<li><a href="#shutdown">Shutdown</a></li>
+<li><a href="#power-and-battery">Power and battery</a></li>
+<li><a href="#updating-the-software-on-your-bell-boy">Updating the software on your Bell-Boy</a></li>
+</ul>
+<h2>
+<a name="attaching-the-device-to-a-bell"></a>Attaching the device to a bell</h2>
+<p>(Safety first - all bells must be down before entering the bell chamber.)
+Presently the Bell-Boy is designed to be mounted on the top of the headstock.  It can be mounted power button left or power button right (the software detects which orientation it is in and adjusts automatically).  See the two ticked pictures below.  Do not mount the Bell-Boy at an angle (the picture with the cross) but don't worry about getting the Bell-Boy sides exactly parallel with the sides of the headstock, just accurate by sight or by touch will be sufficient).</p>
+<p>I am aware that some headstocks have curved tops which won't suit the preferred mounting position.  There are, therefore, two planned alternative mounting positions, one on the side of the headstock and one on the bell wheel.  I have not yet written the code to enable the alternative mounting positions...</p>
+<p><img src="Mounting.png" alt="Where to mount the Bell-Boy"></p>
+<p>The Bell-Boy is secured by duct tape as illustrated below.  It just needs one or two thickness of tape all the way round.  Once taped onto the headstock, power on the device (press the button on the front for 5-6 seconds until the LED lights) and you can then leave the bell chamber.</p>
+<p><img src="BBtaped.png" alt="Stuck on the headstock"></p>
+<h2>
+<a name="connecting-your-computer"></a>Connecting your computer</h2>
+<p>Back in the ringing chamber, start up your computer or tablet.  Go to the wifi settings and connect to the Bell-Boy wifi network.  Accept any security warnings (the network does not have a passphrase associated with it so is completely open).</p>
+<p>Once connected to the network, open a browser window and in the address bar type 10.0.0.1 (or <a href="http://10.0.0.1" rel="nofollow">http://10.0.0.1</a>) and the home page should appear after a few seconds.  Here is what it should look like and details of the various areas of the screen and the various controls.</p>
+<p><img src="MainScreenGuide.png" alt="Main Screen Guide"></p>
+<p>Notes:</p>
+<p>(1) Wifi has limited range.  The Bell-Boy seems to work fine when separated from the bell chamber by about five metres or so.  I have not tried anything more than this.  Towers can, however, have much greater distances between ringer and bell so I would like some feedback as to range experienced by users.  If necessary, I can easily provide code and instructions to build a portable wifi repeater with a very sensitive receiver that can be mounted closer to the bell (the spider seems to be a good place for this...)</p>
+<p>(2) You will need a computer/tablet with a browser that is newer than (about) 2012 (it does not matter how old the computer or tablet is as long as it has or has been updated to broswer version released after this date).  The crucial elements are that the browser should support Javascript, HTML5 and websockets.   All mainstream browsers will do so but I know that there are some modern speciality browsers that won't.  The software running on the Bell-Boy device has been extensively tested on Chrome, Chromium, Firefox, Edge and the last version of Internet Explorer. If the page does not appear in full, it is possible that your computer may have Javascript disabled (quite common on some work tablets and many mobile phones).  See if you can try to enable Javascript on your device's settings menu.</p>
+<h2>
+<a name="a-calibration-session"></a>A calibration session</h2>
+<p>Once your browser has connected to the Bell-Boy device, it is time to start a calibration session.  This calibration does two things.  The first is to work out how gravity pulls the bell round (so that this effect can be subtracted from the readings presented on the screen).  The second is to use a known point of the bell's motion to calculate a correction value (I call it a nudge) to take account of any slight (less than 5 degrees or so) inaccuracies in the mounting of the device or the bell.</p>
+<p>First ring up the bell to which the Bell-Boy is attached.  The Bell-Boy assumes that all recordings start with the bell at stand at handstroke.  It will get terribly confused if you ring the bell up with a recording running or if you start a recording at stand at backstroke.  It won't break anything, you just won't get good results.</p>
+<p>To calibrate, get the ringer (or yourself) ready and push the record control - there is no need to enter a file name, just click "Start recording".  If the screen counts up the number of samples received (see the status line) then ring about 10 or so full strokes.  Once you have done these, press the stop control on the browser screen.</p>
+<p>You might note that the white lines at the top of the display are going "off-the-scale".  That's fine for the moment as the system does not yet know how gravity is affecting the bell so is not compensating for it.  When you press stop the calibration will run automatically (and silently).  You will not need to do anything more.  You can test this by pressing the skip forward button, that will show the first stroke and the "off-scale" displays should look far more sensible.</p>
+<p>There is no need for the calibration strokes to be particularly smooth or accurate and there is no need to rush in starting the calibration session or in stopping the recording once you have finished it.  Take your time.</p>
+<p>The calibration value will be retained for all future ringing sessions until the device is switched off or until the browser window is refreshed (refreshing the browser window works like a soft reset).  If you switch off the device or refresh the browser window and don't want to be bothered doing a calibration session again, you can reload the session by downloading the file generated when you first did it (if you recorded the calibration session without entering a filename in the record box it will be called Unnamed with the date and time of the original session appended).  To download this file, see the <a href="#downloading-saved-sessions">downloading saved sessions</a> section below.</p>
+<h2>
+<a name="recording-a-session"></a>Recording a session</h2>
+<p>With the bell at stand, press/click the record control.  Type an appropriate filename in the box that appears and then click the "Start Recording" button.</p>
+<p>You should see the status line at the bottom of the screen start counting.  If you see an error complaining about the bell not being at stand or moving, try again.  If the bell really is at stand and the device thinks it isn't let me know (it is possible that there are some very unusual bells out there with strange angles for standing the bell).</p>
+<p>Once you see the status line counting, the ringer can start ringing.</p>
+<p>There is a live view of what is happening on the bell.  Have a look at this screen:</p>
+<p><img src="Playback.png" alt="Recording session"></p>
+<p>The bell in the middle of the main part of the screen is animated and shows the live position of the bell.  Just under the bell are two numbers, one preceded by "H" and the other by "B".  These are the timings of the handstroke and backstroke halves of each stroke in seconds.  See the <a href="#comparing-strokes">comparing strokes</a> section later which describes the main usefulness of this facility.</p>
+<p>Once the session has finished press the stop button.  (It is easier if the session finishes with the bell at stand, just as it normally would).  The device then does some calculations on the session and the status line should report on the number of strokes found.  In these calculations, there are some assumptions made about how bells behave.  These should be sensible assumptions but if you regularly see something like "Funny swing found" then let me know.  Note that the device will work if you record a ringing down session but it will get a bit confused so don't expect it to properly count the number of strokes.</p>
+<p>Notes:
+(1) If you choose a filename that already exists on the device then the old file will be silently overwritten (i.e. without warning).
+(2) There are some forbidden characters for filenames and if you try to start a recording with any of these characters a warning will appear.<br>
+(3) I commonly use date, bell number, ringer and method for filename so it will be something like "2202-1-Peter-BobDoubles" but you can use anything you like.  There will be a lot of recordings on the device so some consistency might be useful.</p>
+<h2>
+<a name="downloading-saved-sessions"></a>Downloading saved sessions</h2>
+<p>Every session you record will be saved.  It will either be saved using the file name you give when starting the recording or (if no file name was provided) it will be given a "unnamed" filename with the date and time appended.</p>
+<p>To download a previously recorded session, press the cloud download button, select it from the pop up box that appears and then press open.</p>
+<p><img src="FileDownload.png" alt="File Screen Guide"></p>
+<p>The status bar at the bottom of the screen will start counting the samples that it has loaded and when it has stopped the number of full strokes found will be displayed (much as for a recorded session).</p>
+<p>Note that downloaded sessions will have calibration applied to them automatically after they have been downloaded.</p>
+<p>Note:
+It is possible to delete the recorded sessions or to upload sessions recorded on another Bell-Boy but this can not be done through the web interface and is instead done over "Windows Explorer" or another file browser with equivalent CIFS functionality.</p>
+<h2>
+<a name="playback-a-session"></a>Playback a session</h2>
+<p>With a session loaded it can be played back.  Just press the play control.  You can pause the session during playback by pressing the pause control.  Press the pause control again to resume playback.</p>
+<p>The playback speed can be adjusted. See the <a href="#settings">settings</a> section below.</p>
+<h2>
+<a name="skipping-through-a-session"></a>Skipping through a session</h2>
+<p>One a session has been recorded (see above) or loaded (see directly above), it can be analysed stroke by stroke.</p>
+<p>With a session loaded, press/click either of the skip forward or skip back buttons.  You should see a display like this:</p>
+<p><img src="StrokeByStroke.png" alt="Strokes"></p>
+<p>The number in the middle of the main part of the display is the stroke number (one being the first stroke in the session).  The "H" and "B" numbers beneath this are the timings for the handstroke and backstroke halves of the stroke.</p>
+<p>Note that in order to present the most useful information there is an interaction with the pull strength parts of the display and the stroke timings which may at first appear illogical.  I have defined each stroke as starting when the bell starts falling at handstroke.  The first stroke of any session, therefore, will have nothing in the backstroke check section of the display (the bell starts at stand).  Each stroke has four components which are (in order) handstroke pull, handstroke check, backstroke pull and backstroke check.</p>
+<p>Because ringers are used to feeling the backstroke check and handstroke pull as all part of the same thing (it is just a pull on the rope managing the rise of the bell and its subsequent falling), these are next to each other on the display. The possibly confusing bit is that when, say, stroke two of a session is being displayed (number "2" in the middle), the backstroke check on the leftmost side of the screen is the end of stroke 1 (remember the stroke starts at the start of handstroke pull).  Looked at another way the four main sections of the screen will show the backstroke check part of stroke 1 and the handstroke pull, handstroke check and backstroke pull sections of stroke 2.</p>
+<p>The stroke timings, however, operate differently when stroke 2 is displayed the handstroke timing (with the "H") is measured from the start of handstroke pull to the end of handstroke check of stroke 2 and the backstroke timing (with the "B") is measured from the start of backstroke pull to the end of backstroke check of stroke 2 (even though the backstroke check of stroke 2 is not displayed).</p>
+<h2>
+<a name="comparing-strokes"></a>Comparing strokes</h2>
+<p>The most important part of the Bell-Boy's software is the ability to compare sessions.  This works by overlaying the readings from one session onto another.  The overlaid session appears in yellow.</p>
+<p>A typical usage would be to either record a new session of a method or load a previously recorded session of a method, place it on the overlay and then record a ringer playing the same method.  See this picture:</p>
+<p><img src="StrokeComparison.png" alt="Stroke comparison"></p>
+<p>Of course, a method in a particular ringing session may not start at the same time as in another session in which the method is being rung.  The band could be settling down in rounds longer before the method is called.  This means that there should be a way of aligning the two sessions.  This is done using the pink skip selection control.</p>
+<p>This control has three settings main only (white), overlay only (yellow) and both (white and yellow).  The setting chosen here affects what the skip forward and skip backward controls do.</p>
+<p>Let's try this.</p>
+<p>Record a new session on the bell or load a previously recorded session.  Then press either of the skip forward or skip backward buttons to show a particular stroke.  Then press the yellow heart control.  You will see the yellow overlay appear.  This will be directly on top of the main (white) display, so you won't see any difference between the two strokes.  Now press the skip forward button again, the main (white) display should move forward a stroke but the yellow (overlaid) display should stay as it was.  You can keep track of which stroke is displayed using the numbers in the centre of the main display.</p>
+<p>Press the skip selection control (it should change from having a white "eye" to a yellow "eye").  Press the skip forward button again.  The main display should be where it was and the yellow overlay should change.</p>
+<p>Press the skip selection control (it should change to have a white and yellow "eyes") and press the skip backward control.  Both main (white) and overlay (yellow) strokes should change.</p>
+<p>Press the skip selection control again and it will change back to just having a white "eye".</p>
+<p>The general usage for this functionality is to load a session, push it onto the overlay, record or load another session and then compare the two stroke by stroke by first arranging the two sessions so that the relevant method starts are aligned (it might be stroke 6 for one session and stroke 8 for the other - it just depends on when the method start is called).</p>
+<h2>
+<a name="settings"></a>Settings</h2>
+<p>To open this pop-up, just press the settings control.  Let's look at some of the controls.</p>
+<p><img src="Settings.png" alt="Settings"></p>
+<p>Some ringers have a problem with letting the bell rise high enough, particularly at backstroke.  The target angles setting will put green lines on the display giving the ringer something to aim at.</p>
+<p>The angles section here selects the range of bell angles to display on the screen.</p>
+<p>The playback speed alters the speed of playback(!).</p>
+<p>The scale control decides the full scale range of the main display.  300 works well enough but others may be better.  The number is acceleration in degrees per second per second.</p>
+<h2>
+<a name="shutdown"></a>Shutdown</h2>
+<p>You can shutdown the Bell-Boy in two ways.  The first is by holding the power button on the front of the device down for five or six seconds (and the device should then shutdown within the next 30 seconds).  The second is to select the power control in the web interface and then press OK in the resulting pop-up.</p>
+<p>You should not power down the Bell-Boy by removing its batteries unless the other methods of powering down have not worked.  The software running on the Bell-Boy needs to be cleanly shut down and whilst removing the batteries might appear to be OK nine times out of ten, there is a possibility of corrupting the software on the devices SD card (resulting in a failure to start up and requiring a re image of the SD card or a replacement SD card).</p>
+<h2>
+<a name="power-and-battery"></a>Power and battery</h2>
+<p>Your Bell-Boy should only be powered with NiMH (nickel metal hydride) or NiCad (nickel cadmium) rechargeable batteries.  The higher voltage presented by non-rechargeable batteries could overstress or break certain components in the Bell-Boy.</p>
+<p>The batteries should last at least 5 hours.  If the battery power gets too low, then the Bell-Boy will automatically power down.  If you have the web interface open then you will see "Low battery warning" appearing in the status bar, this is a five minute warning of an impending automatic shutdown.</p>
+<h2>
+<a name="updating-the-software-on-your-bell-boy"></a></a>Updating the software on your Bell-Boy</h2>
+<p>[To follow - I need to provide a way of easily updating the software on the Bell-Boy, perhaps by detecting a connection over an Ethernet cable and then downloading and executing an update script from here]</p>
 
-<A name="2"></A><H2>Heading 2</H2><BR>
-Vestibulum ante ipsum primis in faucibus orci luctus et ultrices posuere cubilia Curae; Praesent malesuada nulla et leo tristique, eu ullamcorper dui rhoncus. Cras vel sapien ac ante auctor rutrum vitae non eros. Fusce diam massa, suscipit vitae rhoncus id, cursus id eros. Cras justo urna, interdum mollis odio in, consectetur vulputate felis. Aliquam quam urna, malesuada sit amet diam quis, efficitur eleifend tellus. Donec sodales nibh neque, tempor placerat nulla tincidunt nec. Morbi consectetur sapien lacus, vel convallis nisi accumsan et. Ut eu euismod urna. Curabitur quam nulla, elementum eget sollicitudin sed, consectetur tincidunt est. Duis eget dui neque. Praesent hendrerit, enim a mattis dignissim, nisl diam volutpat quam, id iaculis est arcu vel tellus. Fusce magna arcu, feugiat id facilisis ut, eleifend ut eros. Maecenas feugiat sagittis tortor, id efficitur nisi. In pharetra vestibulum eros, nec interdum arcu pretium quis. Cras ut nisl nunc.<BR>
-Nulla facilisi. Curabitur ullamcorper vel elit et pretium. Pellentesque convallis tempor velit ac commodo. Vestibulum at mi a dolor laoreet molestie vel vel metus. Aliquam quis sagittis erat. Aliquam non molestie libero. Sed hendrerit libero quis justo facilisis porta. Mauris elementum at nibh in euismod. Maecenas id orci suscipit tellus sagittis rutrum. Vivamus vulputate lectus neque, et interdum quam viverra sit amet. Nullam sit amet dapibus turpis. Cras vehicula magna eu neque porttitor tristique. Ut non orci volutpat metus feugiat tempor. Nam sodales feugiat viverra. Fusce nisi ipsum, porttitor a aliquam vel, mattis quis risus. <BR>
-
-<A name="3"></A><H2>Heading 3</H2><BR>
-Lorem ipsum dolor sit amet, consectetur adipiscing elit. Phasellus eros mi, facilisis eu varius sed, vestibulum ut ipsum. Curabitur quis magna nunc. Mauris lorem tortor, vulputate sit amet lobortis vitae, consectetur sit amet enim. Maecenas vitae laoreet turpis, in gravida turpis. Integer quis ligula ut dui facilisis rhoncus vitae sed orci. Etiam efficitur iaculis risus, eu iaculis nunc tempor vel. Mauris fermentum, dui vel condimentum venenatis, ex ex luctus arcu, in fermentum mauris sapien a tellus. Nullam id orci vel tellus vulputate accumsan vel eu neque. Sed scelerisque imperdiet maximus. Aenean tristique nibh eu finibus lobortis.<BR>
-Praesent a enim imperdiet purus varius venenatis eu nec tellus. Fusce porttitor placerat ligula sed fringilla. Curabitur elit erat, gravida sed arcu a, auctor pretium massa. Integer ac velit eros. Fusce viverra, urna a convallis consequat, quam felis iaculis enim, quis blandit risus sem eu dui. Quisque blandit ultrices tincidunt. Etiam non dui fermentum, dictum tortor ut, lacinia quam. Nulla ipsum velit, vehicula at nisl sit amet, tempor vestibulum nunc. Cras rhoncus tempor est. Cras congue sed arcu vitae tempus. Vivamus maximus nunc eget dapibus volutpat.<BR>
-Praesent rhoncus ante vitae mollis mattis. Ut eleifend vitae arcu ornare fringilla. Curabitur ut orci quis lectus ultricies malesuada eget a enim. Vivamus ultricies urna id mi ornare imperdiet. In ligula odio, luctus sit amet massa quis, lobortis pulvinar elit. Maecenas quam ligula, volutpat non viverra et, vestibulum ut nibh. Donec hendrerit, nisl id pellentesque pellentesque, tortor libero blandit ante, eu suscipit urna leo vel neque.<BR>
-Vestibulum ante ipsum primis in faucibus orci luctus et ultrices posuere cubilia Curae; Praesent malesuada nulla et leo tristique, eu ullamcorper dui rhoncus. Cras vel sapien ac ante auctor rutrum vitae non eros. Fusce diam massa, suscipit vitae rhoncus id, cursus id eros. Cras justo urna, interdum mollis odio in, consectetur vulputate felis. Aliquam quam urna, malesuada sit amet diam quis, efficitur eleifend tellus. Donec sodales nibh neque, tempor placerat nulla tincidunt nec. Morbi consectetur sapien lacus, vel convallis nisi accumsan et. Ut eu euismod urna. Curabitur quam nulla, elementum eget sollicitudin sed, consectetur tincidunt est. Duis eget dui neque. Praesent hendrerit, enim a mattis dignissim, nisl diam volutpat quam, id iaculis est arcu vel tellus. Fusce magna arcu, feugiat id facilisis ut, eleifend ut eros. Maecenas feugiat sagittis tortor, id efficitur nisi. In pharetra vestibulum eros, nec interdum arcu pretium quis. Cras ut nisl nunc.<BR>
-Nulla facilisi. Curabitur ullamcorper vel elit et pretium. Pellentesque convallis tempor velit ac commodo. Vestibulum at mi a dolor laoreet molestie vel vel metus. Aliquam quis sagittis erat. Aliquam non molestie libero. Sed hendrerit libero quis justo facilisis porta. Mauris elementum at nibh in euismod. Maecenas id orci suscipit tellus sagittis rutrum. Vivamus vulputate lectus neque, et interdum quam viverra sit amet. Nullam sit amet dapibus turpis. Cras vehicula magna eu neque porttitor tristique. Ut non orci volutpat metus feugiat tempor. Nam sodales feugiat viverra. Fusce nisi ipsum, porttitor a aliquam vel, mattis quis risus. <BR>
-
-<A name="4"></A><H2>Heading 4</H2><BR>
-Vestibulum ante ipsum primis in faucibus orci luctus et ultrices posuere cubilia Curae; Praesent malesuada nulla et leo tristique, eu ullamcorper dui rhoncus. Cras vel sapien ac ante auctor rutrum vitae non eros. Fusce diam massa, suscipit vitae rhoncus id, cursus id eros. Cras justo urna, interdum mollis odio in, consectetur vulputate felis. Aliquam quam urna, malesuada sit amet diam quis, efficitur eleifend tellus. Donec sodales nibh neque, tempor placerat nulla tincidunt nec. Morbi consectetur sapien lacus, vel convallis nisi accumsan et. Ut eu euismod urna. Curabitur quam nulla, elementum eget sollicitudin sed, consectetur tincidunt est. Duis eget dui neque. Praesent hendrerit, enim a mattis dignissim, nisl diam volutpat quam, id iaculis est arcu vel tellus. Fusce magna arcu, feugiat id facilisis ut, eleifend ut eros. Maecenas feugiat sagittis tortor, id efficitur nisi. In pharetra vestibulum eros, nec interdum arcu pretium quis. Cras ut nisl nunc.<BR>
-Nulla facilisi. Curabitur ullamcorper vel elit et pretium. Pellentesque convallis tempor velit ac commodo. Vestibulum at mi a dolor laoreet molestie vel vel metus. Aliquam quis sagittis erat. Aliquam non molestie libero. Sed hendrerit libero quis justo facilisis porta. Mauris elementum at nibh in euismod. Maecenas id orci suscipit tellus sagittis rutrum. Vivamus vulputate lectus neque, et interdum quam viverra sit amet. Nullam sit amet dapibus turpis. Cras vehicula magna eu neque porttitor tristique. Ut non orci volutpat metus feugiat tempor. Nam sodales feugiat viverra. Fusce nisi ipsum, porttitor a aliquam vel, mattis quis risus. <BR>
-
-<A name="5"></A><H2>Heading 5</H2><BR>
-Vestibulum ante ipsum primis in faucibus orci luctus et ultrices posuere cubilia Curae; Praesent malesuada nulla et leo tristique, eu ullamcorper dui rhoncus. Cras vel sapien ac ante auctor rutrum vitae non eros. Fusce diam massa, suscipit vitae rhoncus id, cursus id eros. Cras justo urna, interdum mollis odio in, consectetur vulputate felis. Aliquam quam urna, malesuada sit amet diam quis, efficitur eleifend tellus. Donec sodales nibh neque, tempor placerat nulla tincidunt nec. Morbi consectetur sapien lacus, vel convallis nisi accumsan et. Ut eu euismod urna. Curabitur quam nulla, elementum eget sollicitudin sed, consectetur tincidunt est. Duis eget dui neque. Praesent hendrerit, enim a mattis dignissim, nisl diam volutpat quam, id iaculis est arcu vel tellus. Fusce magna arcu, feugiat id facilisis ut, eleifend ut eros. Maecenas feugiat sagittis tortor, id efficitur nisi. In pharetra vestibulum eros, nec interdum arcu pretium quis. Cras ut nisl nunc.<BR>
-Nulla facilisi. Curabitur ullamcorper vel elit et pretium. Pellentesque convallis tempor velit ac commodo. Vestibulum at mi a dolor laoreet molestie vel vel metus. Aliquam quis sagittis erat. Aliquam non molestie libero. Sed hendrerit libero quis justo facilisis porta. Mauris elementum at nibh in euismod. Maecenas id orci suscipit tellus sagittis rutrum. Vivamus vulputate lectus neque, et interdum quam viverra sit amet. Nullam sit amet dapibus turpis. Cras vehicula magna eu neque porttitor tristique. Ut non orci volutpat metus feugiat tempor. Nam sodales feugiat viverra. Fusce nisi ipsum, porttitor a aliquam vel, mattis quis risus. <BR>
-
-<A name="6"></A><H2>Heading 6</H2><BR>
-Lorem ipsum dolor sit amet, consectetur adipiscing elit. Phasellus eros mi, facilisis eu varius sed, vestibulum ut ipsum. Curabitur quis magna nunc. Mauris lorem tortor, vulputate sit amet lobortis vitae, consectetur sit amet enim. Maecenas vitae laoreet turpis, in gravida turpis. Integer quis ligula ut dui facilisis rhoncus vitae sed orci. Etiam efficitur iaculis risus, eu iaculis nunc tempor vel. Mauris fermentum, dui vel condimentum venenatis, ex ex luctus arcu, in fermentum mauris sapien a tellus. Nullam id orci vel tellus vulputate accumsan vel eu neque. Sed scelerisque imperdiet maximus. Aenean tristique nibh eu finibus lobortis.<BR>
-
-<A name="7"></A><H2>Licences</H2><BR>
-The software running on this device uses<A href="https://github.com/joewalnes/websocketd">websocketd.</A>    Its ownership and licence terms are as follows:<BR>
+<H2>Licences</H2><BR>
+The software running on this device uses <A href="https://github.com/joewalnes/websocketd">websocketd</A>.    Its ownership and licence terms are as follows:<BR>
 Copyright (c) 2014, Joe Walnes and the websocketd authors.<BR>
 All rights reserved.<BR>
 <BR>
@@ -87,7 +159,7 @@ LIABILITY FOR WHICH MAY NOT BE LAWFULLY LIMITED OR EXCLUDED UNDER ENGLISH LAW<BR
 
 
 <A name="8"></A><H2>Thanks</H2><BR>
-Cheers Hamish, David, Graham and John for their help and support!  Thanks also to St Mary's Church in Bowdon for time on their bells to test the sensor and its software.
+Cheers Hamish, David and Graham for their help and support!  Thanks also to St Mary's Church in Bowdon for time on their bells to test the sensor and its software.
 </body>
 
 </html>
