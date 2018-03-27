@@ -50,6 +50,7 @@ SOFTWARE.
 #define I2C_FUNC_SMBUS_PEC I2C_FUNC_SMBUS_HWPEC_CALC
 #endif
 
+// these are used by the extended Kalman filter
 #define g0 9.8189
 #define g0_2 (g0*g0)
 #define q_dcm2 (0.1*0.1)
@@ -80,9 +81,13 @@ float GYRO_BIAS_2[3] = { 0.0, 0.0, 0.0 };
 int DEBUG = 0;
 float angle_correction = 0.0;
 
+// These are the smoothed results to report to the front end
 float smoothedAngle = 0.0;
 float smoothedRate = 0.0;
 float smoothedAccn = 0.0;
+
+// this is the smoothing factor (angle, rate and acceleration have a complementary
+// filter applied.  This is the default, can be changed on commant line
 float smoothFactor = 0.92;
 
 float MPU6050_gyro_scale_factor = 0;
@@ -799,7 +804,7 @@ void MPU6050_pull_data(int cleanUp){
         if(nudgeCount != 0) nudgeCount -= 1; // don't do this twice in one half stroke
         smoothedAngle = newSmoothedAngle;
         smoothedAccn = newSmoothedAccn;
-
+// TODO: make writes to stdout and SD card threaded
         sprintf(remote_outbuf_line, "LIVE:A:%+07.1f,R:%+07.1f,C:%+07.1f", smoothedAngle-nudgeAngle, smoothedRate, smoothedAccn);
         if (remote_count + strlen(remote_outbuf_line) > (sizeof remote_outbuf -2)) {
             printf("%s\n",remote_outbuf);
@@ -807,7 +812,7 @@ void MPU6050_pull_data(int cleanUp){
         }
         remote_count += sprintf(&remote_outbuf[remote_count],remote_outbuf_line);
  
-        sprintf(local_outbuf_line,"A:%+07.1f,R:%+07.1f,C:%+07.1f,NA:%+05.1f,A0:%+07.1f,A1:%+07.1f,A2:%+07.1f\n", smoothedAngle-nudgeAngle, smoothedRate, smoothedAccn, nudgeAngle, a[0]*1000, a[1]*1000, a[2]*1000);
+        sprintf(local_outbuf_line,"A:%+07.1f,R:%+07.1f,C:%+07.1f,NA:%+05.1f\n", smoothedAngle-nudgeAngle, smoothedRate, smoothedAccn, nudgeAngle);
         if (local_count + strlen(local_outbuf_line) > (sizeof local_outbuf -2)) {
             fputs(local_outbuf, fd_write_out);
             fflush(fd_write_out);
