@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Copyright (c) 2017 Peter Budd. All rights reserved
+# Copyright (c) 2017,2018 Peter Budd. All rights reserved
 # Permission is hereby granted, free of charge, to any person obtaining a copy of this software and 
 # associated documentation files (the "Software"), to deal in the Software without restriction, 
 # including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, 
@@ -23,7 +23,7 @@
 #    (c)    Pop the SD card into your Raspberry Pi and boot it up with an internet connection (usb/ethernet adapter)
 #    (d)    SSH into the Pi hostname alarmpi (or use IP address set up by your router), log in
 #           (username alarm, password alarm), change to root user (su root, password root) 
-#    (e)    run this script - /boot/setup.sh (assuming you placed the script into the FAT partition.
+#    (e)    run this script - /boot/setupBB.sh (assuming you placed the script into the FAT partition.
 
 # This script also configures some GPIO pins of the Pi.  GPIO 17 (pulled down by the DTS compiled below)
 # is used to detect whether the power button has been pressed on the device (i.e. when it has been switched on)
@@ -50,10 +50,6 @@ if [ $(cat /boot/config.txt | grep 'dtoverlay=pi3-disable-bt' | wc -l) -eq 0 ]; 
   echo -e "\ndtoverlay=pi3-disable-bt\n" | tee -a /boot/config.txt
 fi
 
-#if [ $(cat /boot/config.txt | grep 'dtoverlay=pi3-miniuart-bt' | wc -l) -eq 0 ]; then
-#  echo -e "\ndtoverlay=pi3-miniuart-bt\n" | tee -a /boot/config.txt
-#fi
-
 #if [ $(cat /boot/config.txt | grep 'dtoverlay=i2c-gpio' | wc -l) -eq 0 ]; then
 #  echo -e "\ndtoverlay=i2c-gpio,i2c_gpio_sda=2,i2c_gpio_scl=3,i2c_gpio_delay_us=0\n" | tee -a /boot/config.txt
 #fi
@@ -61,6 +57,11 @@ fi
 if [ $(cat /boot/config.txt | grep 'dtoverlay=gpio-poweroff' | wc -l) -eq 0 ]; then
   echo -e "\ndtoverlay=gpio-poweroff,gpiopin=18,active_low\n" | tee -a /boot/config.txt
 fi
+
+# to be tested in favour of the custom dt overlay below
+#if [ $(cat /boot/config.txt | grep 'gpio=17=pd' | wc -l) -eq 0 ]; then
+#  echo -e "\ngpio=17=pd\n" | tee -a /boot/config.txt
+#fi
 
 if [ $(cat /etc/modules-load.d/raspberrypi.conf | grep 'i2c-dev' | wc -l) -eq 0 ]; then
   echo -e "\ni2c-dev\n" | tee -a /etc/modules-load.d/raspberrypi.conf
@@ -75,21 +76,14 @@ if [ $(cat /etc/ssh/sshd_config | grep 'PermitRootLogin yes' | wc -l) -eq 0 ]; t
   echo -e "\nPermitRootLogin yes\n" | tee -a /etc/ssh/sshd_config
 fi
 
-#cp /etc/netctl/examples/wireless-wpa /etc/netctl/
-#sed -i "s/MyNetwork/${MAINWIFINETWORK}/" /etc/netctl/wireless-wpa
-#sed -i "s/'WirelessKey'/${MAINWIFIPASSWORD}/" /etc/netctl/wireless-wpa
-
 timedatectl set-timezone Europe/London
 hostnamectl set-hostname ${HOSTNAME}
-
-#netctl start wireless-wpa
 
 pacman-key --init
 pacman -Syu --noconfirm || { echo "Failed pacman -Syu.  Exiting"; exit 1; }
 sync
 pacman -S --noconfirm --needed wget dtc samba bzip2 screen tmux hostapd crda samba base-devel i2c-tools unzip dhcp git || { echo "Failed downloading packages.  Exiting"; exit 1; }
 
-#Load up CRDA, makes wifi more reliable in the first min or two
 echo -e '\nWIRELESS_REGDOM="GB"\n' >> /etc/conf.d/wireless-regdom
 
 tee /etc/dhcpd.conf << HDHD 
@@ -148,7 +142,7 @@ tee /etc/systemd/system/ap0.timer <<HDHD || { echo "Unable to write dhcpd4 servi
 Description=IPv4 DHCP server timer
 
 [Timer]
-OnBootSec=30
+OnBootSec=40
 
 [Install]
 WantedBy=multi-user.target
@@ -187,7 +181,7 @@ tee /etc/systemd/system/ap1.timer <<HDHD || { echo "Unable to write dhcpd4 servi
 Description=IPv4 DHCP server timer
 
 [Timer]
-OnBootSec=30
+OnBootSec=40
 
 [Install]
 WantedBy=multi-user.target
@@ -196,15 +190,6 @@ HDHD
 wget https://github.com/joewalnes/websocketd/releases/download/v0.3.0/websocketd-0.3.0-linux_arm.zip
 unzip websocketd-0.3.0-linux_arm.zip || { echo "Unable to extract websocketd executable. Exiting"; exit 1; }
 mv ./websocketd /srv/http/ || { echo "Could not find websocketd executable. Exiting"; exit 1; }
-
-#git clone https://github.com/google/pywebsocket.git || { echo "Unable to download pywebsocket.  Exiting"; exit 1; }
-
-#cd pywebsocket
-
-#python2 setup.py build
-#python2 setup.py install || { echo "Unable to install Pywebsocket.  Exiting"; exit 1; }
-
-#cp build/lib/mod_pywebsocket/standalone.py /srv/http/ || { echo "Could not find standalone.py.  Exiting"; exit 1; }
 
 tee /etc/systemd/system/bellboy.service <<HDHD
 [Unit]
@@ -252,7 +237,9 @@ mv images/StrokeComparison.png /srv/http/
 mv images/Settings.png /srv/http/
 
 cd ~
-#the only reason I an creating this overlay is to save one resistor on the PCB
+# The only reason I an creating this overlay is to save one resistor on the PCB
+# Since this was written there is a new gpio config.txt command which is far
+# easier.  Let's do that instead
 tee gpio_pull-overlay.dts <<HDHD
 /*
 * Overlay for enabling gpio's to pull at boot time
