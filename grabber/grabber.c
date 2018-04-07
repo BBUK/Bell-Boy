@@ -1,4 +1,4 @@
-//gcc bb_grabber.c -o bb_grabber -lm -funsigned-char
+//gcc bb_grabber.c -o bb_grabber
 
 /*
 Permission is hereby granted, free of charge, to any person obtaining a copy
