@@ -1429,9 +1429,9 @@ function drawFrame(){
     ctxBD.fillStyle = "white";
     ctxBD.textAlign = "center";
     ctxBD.fillText("Handstroke Pull", posHS1+ BDwidth/2, 10);
-    ctxBD.fillText("Handstroke Check", posHS2 + BDwidth/2, 10);
+    ctxBD.fillText("Backstroke Check", posHS2 + BDwidth/2, 10);
     ctxBD.fillText("Backstroke Pull", posBS1 + BDwidth/2, 10);
-    ctxBD.fillText("Backstroke Check", BDwidth/2, 10);
+    ctxBD.fillText("Handstroke Check", BDwidth/2, 10);
 
     ctxBD.beginPath();
     ctxBD.strokeStyle="rgba(240,240,240,0.6)";

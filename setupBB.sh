@@ -121,7 +121,7 @@ ConditionPathExists=!/sys/class/net/wlan1
 [Service]
 Type=forking
 PIDFile=/run/ap.pid
-ExecStartPre=-/usr/bin/tvservice -o
+ExecStartPre=-/opt/vc/bin/tvservice -o
 ExecStartPre=-/usr/bin/sed -i s:wlan1:wlan0: /etc/hostapd/hostapd.conf
 ExecStartPre=-/usr/bin/ip link set dev wlan0 down
 ExecStartPre=-/usr/bin/ip link set dev wlan0 up
@@ -325,7 +325,7 @@ HDHD
 systemctl enable bellboy
 systemctl enable ap0.timer
 systemctl enable ap1.timer
-systemctl enable smbd nmbd
+systemctl enable smb nmb
 
 cp ~/Bell-Boy/images/imagepack.zip /srv/http
 cd /srv/http

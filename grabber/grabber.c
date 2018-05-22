@@ -1,4 +1,4 @@
-//gcc bb_grabber.c -o bb_grabber
+//gcc grabber.c -o grabber -lm
 
 /*
 Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -228,10 +228,10 @@ int main(int argc, char const *argv[]){
         }
     }
         
-    if(MPU6050_test() != 0){
-        printf("EIMU:\n");
-        return -1;
-    }
+//    if(MPU6050_test() != 0){
+//        printf("EIMU:\n");
+//        return -1;
+//    }
     
     FILE *fd_read_cal;
     fd_read_cal = fopen("/boot/bb_calibrations","r");
@@ -322,8 +322,9 @@ int main(int argc, char const *argv[]){
                 ROTATIONS[2] = -1.0;
                 start_angle = MPU6050_get_orientation(); // also sets gyro biasses
                 if(start_angle == -999) {
-                    printf("ESTR:\n");
+                    printf("ESTD:\n");
                     fprintf(stderr, "Can't calculate start angle\n");
+                    continue;
                 }
                 if(start_angle < 2.0 && start_angle > -2.0) {
                     printf("ESTD:\n"); // bell out of range for stand
