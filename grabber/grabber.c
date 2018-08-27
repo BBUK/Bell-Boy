@@ -79,7 +79,7 @@ float sample_period = 0.0;
 float GYRO_BIAS_1[3] = { 0.0, 0.0, 0.0 };
 float GYRO_BIAS_2[3] = { 0.0, 0.0, 0.0 };
 int DEBUG = 0;
-float angle_correction = 0.0;
+//float angle_correction = 0.0;
 
 // These are the smoothed results to report to the front end
 float smoothedAngle = 0.0;
@@ -94,6 +94,8 @@ float MPU6050_gyro_scale_factor = 0;
 float MPU6050_accel_scale_factor = 0;
 
 float ROTATIONS[3] = { 1.0, -1.0, -1.0 }; //set rotation values for mounting IMU device x y z
+
+float SIDEMOUNT = 0.0;
 
 int ODR = 0;
 int FS_GYRO = 0;
@@ -127,7 +129,7 @@ void sig_handler(int signum) {
     sig_exit = 1;
 }
 /*
-# There are eight possible command sent by the user's browser:
+# There are nine possible command sent by the user's browser:
 # (a)   STRT:[filename] Start recording a session with a bell.  The bell
 #       must be at stand and (reasonably) stationary otherwise this
 #       will return ESTD: or EMOV: either of which signals the browser 
@@ -144,6 +146,7 @@ void sig_handler(int signum) {
 #             string is unixtime (microsecs since 1/1/70)
 # (g)   SAMP: requests the current sample period
 # (h)   SHDN: tells the device to shutdown
+# (i)   TEST: returns the current basic orientation (for testing)
 # 
 # There are the following responses back to the user's browser:
 # (i)   STPD: tells the browser that the device has sucessfully stopped sampling
@@ -158,12 +161,13 @@ void sig_handler(int signum) {
 # (vii) ESTD: bell not at stand (aborts started session)
 # (viii)EMOV: bell moving when session started (the bell has to be stationary at start)
 # (ix)  ESAM: sample period needs to be measured first (deprecated)
-# (x)  ESTR: internal error related to data / filenames (shouldn't happen)!
-# (xi) DATA:[string]  chunk of data from a previously stored file.  In same format as LIVE:
-# (xii)EOVF: (sent by dcmimu) fifo overflow flagged.
+# (x)   ESTR: internal error related to data / filenames (shouldn't happen)!
+# (xi)  DATA:[string]  chunk of data from a previously stored file.  In same format as LIVE:
+# (xii) EOVF: (sent by dcmimu) fifo overflow flagged.
 # (xiii)FILE:[filename] in response to FILE: a list of the previous recordings in /data/samples
 # (xiv) STRT: in response to STRT: indicates a sucessful start.
 # (xv)  LFIN:[number] indicates the end of a file download and the number of samples sent
+* (xvi) TEST:[number] current orientation
 */
 
 /*
@@ -308,6 +312,14 @@ int main(int argc, char const *argv[]){
                 }
                 continue;
             }
+            if(strcmp("TEST:", command) == 0) {
+                ROTATIONS[0] = 1.0;   // reset rotations
+                ROTATIONS[1] = -1.0;
+                ROTATIONS[2] = -1.0;
+				printf("TEST:%f\n",MPU6050_get_orientation());
+                continue;
+            }
+
             if(strcmp("STRT:", command) == 0) {
                 if(entries == 2  && strlen(details) < 34){
                     sprintf(FILENAME, "/data/samples/%s", details);
@@ -317,6 +329,7 @@ int main(int argc, char const *argv[]){
                     timenow = gmtime(&now);
                     strftime(FILENAME, sizeof(FILENAME), "/data/samples/Unnamed_%d-%m-%y_%H%M", timenow);
                 }
+                SIDEMOUNT = 0.0;
                 ROTATIONS[0] = 1.0;   // reset rotations
                 ROTATIONS[1] = -1.0;
                 ROTATIONS[2] = -1.0;
@@ -326,6 +339,15 @@ int main(int argc, char const *argv[]){
                     fprintf(stderr, "Can't calculate start angle\n");
                     continue;
                 }
+                if(start_angle > 70.0 && start_angle < 110.0){ // appears to be mounted on the side of the headstock
+                    SIDEMOUNT = 90.0;
+                    start_angle -= SIDEMOUNT;
+                }
+                if(start_angle > -110.0 && start_angle < -90.0){ // appears to be mounted on the side of the headstock
+                    SIDEMOUNT = -90.0;
+                    start_angle -= SIDEMOUNT;
+                }
+
                 if(start_angle < 2.0 && start_angle > -2.0) {
                     printf("ESTD:\n"); // bell out of range for stand
                     continue;
@@ -334,6 +356,7 @@ int main(int argc, char const *argv[]){
                     ROTATIONS[0] = -ROTATIONS[0];   // about which way to mount the sensor
                     ROTATIONS[1] = -ROTATIONS[1];   // it just flips things around as if the sensor
                     start_angle = -start_angle;     // was mounted the other way round
+                    SIDEMOUNT = -SIDEMOUNT;
                     GYRO_BIAS_1[0] = -GYRO_BIAS_1[0];
                     GYRO_BIAS_1[1] = -GYRO_BIAS_1[1];
                     GYRO_BIAS_2[0] = -GYRO_BIAS_2[0];
@@ -358,11 +381,16 @@ int main(int argc, char const *argv[]){
                         LOOPSLEEP = 4000000/ODR;
                         RUNNING = 1;
                         OUT_COUNT = 0;
-                        angle_correction = 0.0;
+//                        angle_correction = 0.0;
                         smoothedAccn = 0.0;
                         smoothedAngle = start_angle;
                         smoothedRate = 0.0;
                         printf("STRT:\n");
+                        //stabilise EKF
+                        for(int stab=0;stab<100;stab++){
+							usleep(LOOPSLEEP);
+							MPU6050_pull_data(2);
+						}
                     } else {
                         printf("EFIF:\n");
                         printf("STPD:\n");
@@ -537,7 +565,7 @@ float MPU6050_get_orientation(void){
     GYRO_BIAS_2[1] = 0.0;
     GYRO_BIAS_2[2] = 0.0;
  
-    for(count = 0; count < 50; ++count){
+    for(count = 0; count < 100; ++count){
         while (MPU6050_read_fifo_count(MPU6050_2_fd) == 0) usleep(5000);
         MPU6050_read_fifo_data(MPU6050_2_fd, fifo_returns);
 
@@ -555,20 +583,20 @@ float MPU6050_get_orientation(void){
         GYRO_BIAS_1[2] += fifo_returns[5];
 
     }
-    u0 /= 50.0;
-    u1 /= 50.0;
-    u2 /= 50.0;
-    z0 /= 50.0;
-    z1 /= 50.0;
-    z2 /= 50.0;
+    u0 /= 100.0;
+    u1 /= 100.0;
+    u2 /= 100.0;
+    z0 /= 100.0;
+    z1 /= 100.0;
+    z2 /= 100.0;
     
     GYRO_BIAS_2[0] = u0;
     GYRO_BIAS_2[1] = u1;
     GYRO_BIAS_2[2] = u2;
     
-    GYRO_BIAS_1[0] /= 50.0;
-    GYRO_BIAS_1[1] /= 50.0;
-    GYRO_BIAS_1[2] /= 50.0;
+    GYRO_BIAS_1[0] /= 100.0;
+    GYRO_BIAS_1[1] /= 100.0;
+    GYRO_BIAS_1[2] /= 100.0;
     
     
  //   printf("GXB:%+07.1f GYB:%+07.1f GZB:%+07.1f\n", u0,u1,u2); 
@@ -697,8 +725,8 @@ void MPU6050_stop_fifos(){
     }
 
 }
-
-void MPU6050_pull_data(int cleanUp){
+// arugument (command) =0 normal running =1 cleanup =2 stabilise (don't write anything)
+void MPU6050_pull_data(int command){
     float fifo_data_1[6];
     float fifo_data_2[6];
     float combined_data[6];
@@ -716,7 +744,7 @@ void MPU6050_pull_data(int cleanUp){
     static int local_count = 0;
     int remote_count = 0;
 
-    if(cleanUp){
+    if(command == 1){
         if(local_count != 0) fputs(local_outbuf, fd_write_out);
         fflush(fd_write_out);
         local_count = 0;
@@ -778,14 +806,15 @@ void MPU6050_pull_data(int cleanUp){
                
         calculate(combined_data[3],combined_data[4],combined_data[5], combined_data[0],combined_data[1],combined_data[2],sample_period);
         accTang = (combined_data[3] - last_x_gyro)/sample_period;         // assumes rotation of bell is around x axis
-        roll += angle_correction;                                     // need to correct reported angles to match
-        if ((last_angle - roll) > 250 && angle_correction != 360){    // the system we are using 0 degrees = bell at
-            angle_correction = 360;                                   // balance at handstroke, 360 degrees = bell at
-            roll += 360.0;                                            // balance at backstroke. 180 degrees = BDC. 
-        } else if ((last_angle - roll) < -250 && angle_correction != 0) {                                                 
-            angle_correction = 0;
-            roll -= 360.0;
-        }
+        roll -= SIDEMOUNT;
+//        roll += angle_correction;                                     // need to correct reported angles to match
+//        if ((last_angle - roll) > 250 && angle_correction != 360){    // the system we are using 0 degrees = bell at
+//            angle_correction = 360;                                   // balance at handstroke, 360 degrees = bell at
+//            roll += 360.0;                                            // balance at backstroke. 180 degrees = BDC. 
+//        } else if ((last_angle - roll) < -250 && angle_correction != 0) {                                                 
+//            angle_correction = 0;
+//            roll -= 360.0;
+//        }
 
         float newSmoothedAccn = smoothFactor*smoothedAccn + (1.0-smoothFactor)* accTang;
         float newSmoothedAngle = (smoothFactor*smoothedAngle + (1.0-smoothFactor)*roll);
@@ -806,26 +835,27 @@ void MPU6050_pull_data(int cleanUp){
         smoothedAngle = newSmoothedAngle;
         smoothedAccn = newSmoothedAccn;
 // TODO: make writes to stdout and SD card threaded
-        sprintf(remote_outbuf_line, "LIVE:A:%+07.1f,R:%+07.1f,C:%+07.1f", smoothedAngle-nudgeAngle, smoothedRate, smoothedAccn);
-        if (remote_count + strlen(remote_outbuf_line) > (sizeof remote_outbuf -2)) {
-            printf("%s\n",remote_outbuf);
-            remote_count = 0;
-        }
-        remote_count += sprintf(&remote_outbuf[remote_count],remote_outbuf_line);
- 
-        sprintf(local_outbuf_line,"A:%+07.1f,R:%+07.1f,C:%+07.1f,NA:%+05.1f\n", smoothedAngle-nudgeAngle, smoothedRate, smoothedAccn, nudgeAngle);
-        if (local_count + strlen(local_outbuf_line) > (sizeof local_outbuf -2)) {
-            fputs(local_outbuf, fd_write_out);
-            fflush(fd_write_out);
-            local_count = 0;
-        }
-        local_count += sprintf(&local_outbuf[local_count],local_outbuf_line);
-       
+        if(command != 2){
+            sprintf(remote_outbuf_line, "LIVE:A:%+07.1f,R:%+07.1f,C:%+07.1f\n", smoothedAngle-nudgeAngle, smoothedRate, smoothedAccn);
+            if (remote_count + strlen(remote_outbuf_line) > (sizeof remote_outbuf -2)) {
+                printf("%s",remote_outbuf);
+                remote_count = 0;
+            }
+            remote_count += sprintf(&remote_outbuf[remote_count],remote_outbuf_line);
+     
+            sprintf(local_outbuf_line,"A:%+07.1f,R:%+07.1f,C:%+07.1f,NA:%+05.1f\n", smoothedAngle-nudgeAngle, smoothedRate, smoothedAccn, nudgeAngle);
+            if (local_count + strlen(local_outbuf_line) > (sizeof local_outbuf -2)) {
+                fputs(local_outbuf, fd_write_out);
+                fflush(fd_write_out);
+                local_count = 0;
+            }
+            local_count += sprintf(&local_outbuf[local_count],local_outbuf_line);
+       }
 //        fprintf(fd_write_out,"A:%+07.1f,R:%+07.1f,C:%+07.1f,P:%+07.1f,Y:%+07.1f,AX:%+06.3f,AY:%+06.3f,AZ:%+06.3f,GX:%+07.1f,GY:%+07.1f,GZ:%+07.1f,X:%+06.3f,Y:%+06.3f,Z:%+06.3f\n", roll, (gyro_data[0] + last_x_gyro)/2.0, accTang, pitch, yaw, accel_data[0], accel_data[1], accel_data[2], gyro_data[0], gyro_data[1], gyro_data[2],a[0],a[1],a[2]);
         last_x_gyro = combined_data[3];
         last_angle = roll;
     }
-    if(remote_count != 0) printf("%s\n",remote_outbuf);
+    if(remote_count != 0) printf("%s",remote_outbuf);
 //    if(local_count != 0) fputs(local_outbuf, fd_write_out);
    
 }
@@ -1120,7 +1150,20 @@ void calculate(float u0, float u1, float u2, float z0, float z1,float z2, float 
 
     // compute new pitch and roll angles from a posteriori states
     pitch = asin(-x[0]) * RADIANS_TO_DEGREES_MULTIPLIER;
-    roll = atan2(x[1],x[2]) * RADIANS_TO_DEGREES_MULTIPLIER;
+    
+    
+    // need to correct reported angles to match
+    // the system we are using 0 degrees = bell at
+    // balance at handstroke, 360 degrees = bell at
+    // balance at backstroke. 180 degrees = BDC. 
+    
+    float rolldiff = (atan2(x[1],x[2]) * RADIANS_TO_DEGREES_MULTIPLIER) - roll;
+    if(rolldiff > 250.0) {
+        rolldiff -= 360.0;
+    } else if (rolldiff < -250.0) {
+        rolldiff += 360.0;
+    }    
+    roll = roll + rolldiff;
 
     // save the estimated non-gravitational acceleration
     a[0] = z0-x[0]*g0;
