@@ -56,7 +56,12 @@ var ctxATt=canvasATt.getContext("2d");
 
 var currentATmargin = 0;
 var currentATpixels = 1;
-var ATbottomMargin=20; // pixels at bottom of AT canvas for indexes
+var ATbottomMargin=25; // pixels at bottom of AT canvas for indexes
+var ATtopMargin = 0; // pixels at top for force guide
+//var forceColours = [ "#0000FF","#0A0AFF","#1414FF","#1F1FFF","#2929FF","#3333FF","#3D3DFF","#4747FF","#5252FF","#5C5CFF","#6666FF","#7070FF","#7A7AFF","#8585FF","#8F8FFF","#9999FF","#A3A3FF"];
+var angleColours = [ "#E01F1F","#E22C2C","#E43A3A","#E64747","#E85454","#EA6262","#EB6F6F","#ED7D7D","#EF8A8A","#F19898","#9898F1","#8A8AEF","#7D7DED","#6F6FEB","#6262EA","#5454E8","#4747E6","#3A3AE4","#2c2cE2","#1F1FE0"];
+var ATstepWidth = 80;
+var ATbarWidth = 30;
 
 var oldBellAngle = 0;
 var wsOpened = false;
@@ -72,7 +77,7 @@ var playbackRanges = [200, 150, 100, 80, 50, 30, 10]; // available playback spee
 
 var currentPlaybackSpeed = 2;
 var targets = [ "none", "-10", "-7", "-5", "-2" , "0", "2", "5", "7" , "10" ]; // these are target balance angles
-var scales = [ 700, 500, 300, 200, 100, 50 ];
+var scales = [ 600, 500, 300, 200, 100, 60 ];
 
 var currentPlaybackPosition = 1;
 var playintervalID = null;
@@ -107,12 +112,20 @@ var currentSwingDisplayed=null;
 var TcurrentSwingDisplayed=null;
 
 var sample = [];
+var template = [];
+
 var swingStarts = [];
 var halfSwingStarts=[];
 var TswingStarts = [];
 var ThalfSwingStarts=[];
 
-var template = [];
+var averagePullStrength=[];
+var halfAveragePullStrength=[];
+var TaveragePullStrength=[];
+var ThalfAveragePullStrength=[];
+
+
+
 
 ws = new WebSocket("ws://" + wsHost);
 
@@ -166,9 +179,12 @@ ws.onopen = function(){
     document.getElementById("openSelect").options.length = 0;
     ws.send("FILE:");
     var d = new Date();
-    ws.send("DATE:" + parseInt(d.getTime()/1000));
-    if (!nonLive) ws.send("SAMP:");
-    
+
+    if (!nonLive){
+        ws.send("DATE:" + parseInt(d.getTime()/1000));
+        ws.send("SAMP:");
+        
+    }
 };
 
 ws.onmessage = function (event) {
@@ -176,7 +192,7 @@ ws.onmessage = function (event) {
     for (var i=0; i<dataBack.length; i++) {
         if (dataBack[i].length > 3) parseResult(dataBack[i]);
     }
-}
+};
 
 function parseResult(dataBack) {
     if (dataBack.slice(0,5) == "FILE:"){
@@ -261,6 +277,7 @@ function parseResult(dataBack) {
                 if (k == i) {
                     setStatus("Loaded: " + sample.length.toString() + " samples. Should Have: " + dataBack.slice(5) + " Funny swing found. Possible incorrect data. But " + swingStarts.length.toString() + " strokes found. " + swingStarts.toString());
                     calibrationValue = getWeighting();
+                    getAveragePullStrengths();
                     return;
                 }
                 while (j < arrayLength && sample[j][0] < 190) j++;  // move forward through sample past BDC
@@ -283,12 +300,15 @@ function parseResult(dataBack) {
                 if (k == i) {
                     setStatus("Loaded: " + sample.length.toString() + " samples. Should Have: " + dataBack.slice(5) + " Funny half swing found. Possible incorrect data. But " + swingStarts.length.toString() + " strokes found. " + swingStarts.toString());
                     calibrationValue = getWeighting();
+                    getAveragePullStrengths();
                     return;
                 }
                 while (j < arrayLength && sample[j][0] > 170) j++;
             }
         }
+                
         calibrationValue = getWeighting();
+        getAveragePullStrengths();
         setStatus("Loaded: " + sample.length.toString() + " samples. Should Have: " + dataBack.slice(5) + ". " + swingStarts.length.toString() + " strokes found.");
 //        setStatus("Loaded: " + halfSwingStarts);
 
@@ -390,6 +410,36 @@ function getWeighting(){
     return result;
 }
 
+function getAveragePullStrengths(){
+    if(calibrationValue == null) {
+        getWeighting(); // should not happen as getweighting should always be called first - untidy getweighting should do this as well
+    }
+    averagePullStrength=[];
+    halfAveragePullStrength=[];
+    var totalPull = null;
+    var i = null, j=null, k=null,m = null;
+    for (j=0; j<swingStarts.length; j++){
+        i=sample[swingStarts[j]][0]; // angle at direction change
+        for (k=swingStarts[j]; k>0 && (sample[k][0]-i) < 5 ;k--); // find point 5 degrees back from direction change
+        k++;
+        totalPull=0;
+        for (m=0;(k+m)<sample.length && (sample[k+m][0]-i) < 5; m++){ // add up accns to point 5 degrees forward from direction change
+            totalPull += sample[k+m][2] - calibrationValue*Math.sin(sample[k+m][0]*3.1416/180);
+        }
+        averagePullStrength[averagePullStrength.length] = totalPull/m;
+    }
+    for (j=0; j<halfSwingStarts.length; j++){
+        i=sample[halfSwingStarts[j]][0]; // angle at direction change
+        for (k=halfSwingStarts[j]; k>0 && (i-sample[k][0]) < 5 ;k--); // find point 5 degrees back from direction change
+        k++;
+        totalPull=0;
+        for (m=0;(k+m)<sample.length && (i-sample[k+m][0]) < 5; m++){ // add up accns to point 5 degrees forward from direction change
+            totalPull += sample[k+m][2]- calibrationValue*Math.sin(sample[k+m][0]*3.1416/180);
+        }
+        halfAveragePullStrength[halfAveragePullStrength.length] = -totalPull/m;
+    }
+}
+
 function calculateError(guess){
     var count = 0.0, error = 0.0;
     var i = 0;
@@ -475,7 +525,49 @@ function drawStroke(){
     if(backstrokelength != 0.0){
         ctxBD.fillText("B " + backstrokelength.toFixed(2)+"s", 2*BDwidth + 32, ctxBD.canvas.height-10);
     }
+ 
+    clearAT();
+    var numberOnATdisplay = Math.ceil((1.0*ctxATt.canvas.width)/ATstepWidth)+2;
+    var offset = ATstepWidth + (ctxATt.canvas.width/2.0 - ATstepWidth/2.0) - (numberOnATdisplay-1)*ATstepWidth/2.0
+    var startSwing = Math.ceil(currentSwingDisplayed - (numberOnATdisplay-1)/2.0);
+//    var offset = (ctxATt.canvas.width - (numberOnATdisplay * ATstepWidth))/2.0;
+    if (startSwing < 0) {
+        numberOnATdisplay += startSwing;
+        offset += -startSwing*ATstepWidth;
+        startSwing = 0;
+    }
+    ctxAT.font = "12px sans serif";
+    ctxAT.textAlign = "start";
+    ctxAT.textBaseline="bottom";
+    var pixelsPerUnit = (ctxAT.canvas.height-ATbottomMargin-ATtopMargin)/scaleValue;
+    var angleColour = 0;
+    var powerHeight = 0;
+    var totalHeight = ctxAT.canvas.height-ATbottomMargin-ATtopMargin;
+    
+    for (var i=0; i<numberOnATdisplay; i++){
+        if ((startSwing + i > swingStarts.length -1) || (startSwing + i > halfSwingStarts.length -1) || startSwing + 1 > averagePullStrength.length -1 || startSwing + i > halfAveragePullStrength -1) break;
+        ctxAT.fillStyle = "rgb(255,255,255)";
+        ctxAT.fillText((startSwing+i+1).toString(), i*ATstepWidth+offset, ctxAT.canvas.height-8);
+
+        powerHeight = Math.round(pixelsPerUnit*averagePullStrength[startSwing + i]);
+        if (powerHeight > totalHeight) powerHeight=totalHeight;
+        angleColour = Math.round(sample[swingStarts[startSwing + i]][0] + angleColours.length/2.0);
+        if (angleColour > (angleColours.length-1)) angleColour = angleColours.length-1; 
+        if (angleColour < 0) angleColour = 0;
+        ctxAT.fillStyle=angleColours[angleColour];
+        ctxAT.fillRect(offset + i*ATstepWidth, ctxAT.canvas.height-ATbottomMargin-powerHeight, ATbarWidth, powerHeight);
+
+        powerHeight = Math.round(pixelsPerUnit*halfAveragePullStrength[startSwing + i]);
+        if (powerHeight > totalHeight) powerHeight=totalHeight;
+        angleColour = Math.round(360-sample[halfSwingStarts[startSwing + i]][0] + angleColours.length/2.0);
+        if (angleColour > (angleColours.length-1)) angleColour = angleColours.length-1; 
+        if (angleColour < 0) angleColour = 0;
+        ctxAT.fillStyle=angleColours[angleColour];
+        ctxAT.fillRect(offset + i*ATstepWidth+ATbarWidth+4, ctxAT.canvas.height-ATbottomMargin-powerHeight, ATbarWidth, powerHeight);
+
+    }
 }
+
 
 function TdrawStroke(){
     if (currentSwingDisplayed == null) return;
@@ -525,7 +617,7 @@ function drawSamples(position,iterations){
             dataEntryCurrent[2] -= calibrationValue*Math.sin(dataEntryCurrent[0]*3.1416/180);
         }
         if((currentStatus & RECORDINGSESSION) != 0 || (currentStatus & PLAYBACK) != 0 ) drawBell(180-dataEntryCurrent[0]);
-        drawAT(dataEntryCurrent[2]);
+//        drawAT(dataEntryCurrent[2]);
         if (dataEntryCurrent[0] > ROIU && dataEntryCurrent[0] < ROIL && dataEntryCurrent[1] >= 0) { // within ROI for HS1
 
             if (dataEntryNext[0] >= ROIL) {
@@ -537,6 +629,7 @@ function drawSamples(position,iterations){
                 continue; // for moment don't swap, just do nothing
             }
             if ((currentStatus & LASTHS1) == 0 ) { // clear highest part of this and previous ROI if this is the first time
+                drawHSpower(dataEntryCurrent[2],dataEntryCurrent[0]); // and also draw power indicator
                 var pixelsFromROIL = (ROIL - startAngle) * stepSize;
                 ctxBD.clearRect(posBS2 + pixelsFromROIL, 14, 2 * (BDwidth - pixelsFromROIL), ctxBD.canvas.height - 14 - 25);
                 if ((currentStatus & LASTBS2) != 0 ) {
@@ -587,6 +680,7 @@ function drawSamples(position,iterations){
                 continue; // for moment don't swap, just do nothing
             }
             if ((currentStatus & LASTBS1) == 0 ) { // clear highest part of this and previous ROI if this is the first time
+                drawBSpower(dataEntryCurrent[2]*-1,360-dataEntryCurrent[0]);// and also draw power indicator
                 var pixelsFromROIL = (ROIL - startAngle) * stepSize;
                 ctxBD.clearRect(posHS2 + pixelsFromROIL, 14, 2 * (BDwidth - pixelsFromROIL), ctxBD.canvas.height - 14 - 25);
                 if ((currentStatus & LASTHS2) != 0 ) {
@@ -652,6 +746,51 @@ function drawAT(accn){
     ctxAT.lineWidth=2;
     ctxAT.stroke();
     document.getElementById("canvasAT").style.marginLeft = (currentATmargin * -1) + "px";
+}
+
+function drawHSpower(accn,angle){
+    var totalHeight = ctxAT.canvas.height-ATbottomMargin-ATtopMargin;
+    var pixelsPerUnit = totalHeight/scaleValue;
+
+//    var ypos = halfHeight + (halfHeight*(accn/scaleValue)/2);
+//    if (ypos < 0) ypos=0;
+//    if (ypos > halfHeight *2) ypos = halfHeight*2;
+
+    currentATmargin += ATstepWidth;
+    if (currentATmargin >= ctxAT.canvas.width/2) currentATmargin = 0;
+
+    ctxAT.clearRect(currentATmargin-10-ATstepWidth,0,ATstepWidth+20,ctxAT.canvas.height,0);
+    ctxAT.clearRect(currentATmargin-10-ATstepWidth+ctxAT.canvas.width/2,0,ATstepWidth+20,ctxAT.canvas.height);
+ 
+    var angleColour = Math.round(angle + angleColours.length/2.0);
+    
+    if (angleColour > (angleColours.length-1)) angleColour = angleColours.length-1; 
+    if (angleColour < 0) angleColour = 0;
+    ctxAT.fillStyle=angleColours[angleColour];
+    
+    var powerHeight = Math.round(pixelsPerUnit*accn);
+    if (powerHeight > totalHeight) powerHeight=totalHeight;
+
+    ctxAT.fillRect(currentATmargin-ATstepWidth, ctxAT.canvas.height-ATbottomMargin-powerHeight, ATbarWidth, powerHeight);
+    ctxAT.fillRect(currentATmargin-ATstepWidth+ctxAT.canvas.width/2, ctxAT.canvas.height-ATbottomMargin-powerHeight, ATbarWidth, powerHeight);
+
+    document.getElementById("canvasAT").style.marginLeft = (currentATmargin * -1) + "px";
+}
+
+function drawBSpower(accn,angle){
+    var totalHeight = ctxAT.canvas.height-ATbottomMargin-ATtopMargin;
+    var pixelsPerUnit = totalHeight/scaleValue;
+    var angleColour = Math.round(angle + angleColours.length/2.0);
+    
+    if (angleColour > (angleColours.length-1)) angleColour = angleColours.length-1; 
+    if (angleColour < 0) angleColour = 0;
+    
+    ctxAT.fillStyle=angleColours[angleColour];
+    
+    var powerHeight = Math.round(pixelsPerUnit*accn);
+    if (powerHeight > totalHeight) powerHeight = totalHeight;
+    ctxAT.fillRect(currentATmargin-ATstepWidth+ATbarWidth+4,ctxAT.canvas.height-ATbottomMargin-powerHeight,ATbarWidth,powerHeight);
+    ctxAT.fillRect(currentATmargin-ATstepWidth+ATbarWidth+4+ctxAT.canvas.width/2,ctxAT.canvas.height-ATbottomMargin-powerHeight,ATbarWidth,powerHeight);
 }
 
 function clearTemplates(){
@@ -1374,11 +1513,11 @@ function recalculateSize() {
     posBS1 = canvasWidth - BDwidth;
     radius = canvasHeight;
 
-    canvasAT.width=rightWidth * 2;
+    canvasAT.width=rightWidth * 2;  // scrolling display
     canvasAT.height=Math.min(canvasHeight,rightHeight-canvasHeight-20);
     canvasAT.style.top=(canvasHeight + 20) + (rightHeight - canvasAT.height - canvasBD.height)/2;
     canvasAT.style.left=0;
-    canvasATt.width=rightWidth * 2;
+    canvasATt.width=rightWidth;
     canvasATt.height=Math.min(canvasHeight,rightHeight-canvasHeight-20);
     canvasATt.style.top=(canvasHeight + 20) + (rightHeight - canvasAT.height - canvasBD.height)/2;
     canvasATt.style.left=0;
@@ -1473,17 +1612,47 @@ function clearBell(){
 function clearAT(){
     ctxAT.clearRect(0, 0, ctxAT.canvas.width, ctxAT.canvas.height);
     ctxATt.clearRect(0, 0, ctxATt.canvas.width, ctxATt.canvas.height);
+    var totalHeight = ctxAT.canvas.height-ATbottomMargin-ATtopMargin;
+    
     ctxATt.fillStyle="rgba(204,204,230,0.1)";
     ctxATt.fillRect(0,0,canvasATt.width,canvasATt.height);
     currentATmargin=0;
-    document.getElementById("canvasAT").style.marginLeft = (currentATmargin * -1) + "px";
+    document.getElementById("canvasAT").style.marginLeft = "0 px";
+//    ctxATt.beginPath();
+//    ctxATt.rect(1,1,(ctxATt.canvas.width/2)-1, ctxATt.canvas.height-ATbottomMargin);
+//    var halfHeight = (ctxATt.canvas.height-ATbottomMargin)/2;
+//    ctxATt.moveTo(0,halfHeight);
+//    ctxATt.lineTo(ctxATt.canvas.width,halfHeight);
+//    ctxATt.lineWidth=1;
+//    ctxATt.strokeStyle="rgba(240,240,240,0.6)";
+//    ctxATt.stroke();
+    
+    ctxATt.font = "14px sans serif";
+    ctxATt.fillStyle = "rgb(255,100,100)";
+    ctxATt.textAlign = "start";
+    ctxATt.textBaseline="top";
+
+    ctxATt.fillText(scaleValue.toString(), 2, ATtopMargin+2);
+    ctxATt.fillText((scaleValue*0.75).toString(), 2, ATtopMargin+totalHeight*0.25+2);
+    ctxATt.fillText((scaleValue*0.5).toString(), 2, ATtopMargin+totalHeight*0.5+2);
+    ctxATt.fillText((scaleValue*0.25).toString(), 2, ATtopMargin+totalHeight*0.75+2);
+//    ctxATt.fillText("0", 0, ATtopMargin+totalHeight);
+
     ctxATt.beginPath();
-    ctxATt.rect(1,1,(ctxATt.canvas.width/2)-1, ctxATt.canvas.height-ATbottomMargin);
-    var halfHeight = (ctxATt.canvas.height-ATbottomMargin)/2;
-    ctxATt.moveTo(0,halfHeight);
-    ctxATt.lineTo(ctxATt.canvas.width,halfHeight);
-    ctxATt.lineWidth=1;
-    ctxATt.strokeStyle="rgba(240,240,240,0.6)";
+    ctxATt.strokeStyle = "rgb(255,100,100)";
+    ctxATt.moveTo(1, ATtopMargin);
+    ctxATt.lineTo(ctxATt.canvas.width, ATtopMargin);
+    ctxATt.moveTo(0, ATtopMargin+totalHeight*0.25);
+    ctxATt.lineTo(ctxATt.canvas.width, ATtopMargin+totalHeight*0.25);
+    ctxATt.moveTo(0, ATtopMargin+totalHeight*0.5);
+    ctxATt.lineTo(ctxATt.canvas.width, ATtopMargin+totalHeight*0.5);
+    ctxATt.moveTo(0, ATtopMargin+totalHeight*0.75);
+    ctxATt.lineTo(ctxATt.canvas.width, ATtopMargin+totalHeight*0.75);
+    ctxATt.moveTo(0, ATtopMargin+totalHeight);
+    ctxATt.lineTo(ctxATt.canvas.width, ATtopMargin+totalHeight);
+
+
+
     ctxATt.stroke();
 }
 
@@ -1508,122 +1677,8 @@ function drawBell(angle) {
     ctxBD.moveTo(2*BDwidth + 32, 32);
     ctxBD.bezierCurveTo(ex, ey, fx, fy, gx, gy);
     ctxBD.lineWidth = 4;
-//    ctxCB.strokeStyle = "#303030";
     ctxBD.strokeStyle = "white";
     ctxBD.stroke();
-}
-
-function drawAccel(ctx, pos1, pos2, length, clearonly) {
-
-    var scaleSize = 120/(ROIL-ROIU); // this is how much the position needs to be scaled
-    var starta, enda, hand
-    if (pos1 <= 180) pos1=-30+((pos1-ROIU)*scaleSize);
-    if (pos2 <= 180) pos2=-30+((pos2-ROIU)*scaleSize);
-    if (pos1 > 180) pos1=270+((pos1-(360-ROIL))*scaleSize);
-    if (pos2 > 180) pos2=270+((pos2-(360-ROIL))*scaleSize);
-
-    if (ctx === ctxHS1){ // handstroke down
-        pos1=(pos1+180)*Math.PI/180;
-        pos2=(pos2+180)*Math.PI/180;
-        starta=0;
-        enda=240*Math.PI/180;
-        hand=true;
-
-    } else if (ctx === ctxHS2) { // handstroke up
-        pos1=(pos1-180)*Math.PI/180;
-        pos2=(pos2-180)*Math.PI/180;
-        starta= 180*Math.PI/180;
-        enda = 300*Math.PI/180;
-        hand=false;
-
-    } else if (ctx === ctxBS1) { // backstroke down
-        pos1=(180-pos1)*Math.PI/180;
-        pos2=(180-pos2)*Math.PI/180;
-        starta=0;
-        enda=240*Math.PI/180;
-        hand= true;
-
-    } else if (ctx === ctxBS2) { // backstroke up
-        pos1=(180-pos1)*Math.PI/180;
-        pos2=(180-pos2)*Math.PI/180;
-        starta= 180*Math.PI/180;
-        enda = 300*Math.PI/180;
-        hand=false;
-    }
-//clear section
-    ctx.beginPath();
-    ctx.moveTo(0,0);
-    ctx.rotate(pos1);
-    ctx.moveTo(0, 0.15*radius);
-    ctx.lineTo(0, 0.92*radius);
-    ctx.rotate(pos2-pos1+0.03);//0.03 is 3 degrees over for clear
-    ctx.arc(0,0,0.92*radius,(0.5*Math.PI)-(pos2-pos1),(0.5*Math.PI),false);
-//    ctx.lineTo(0, length);
-    ctx.lineTo(0, 0.15*radius);
-    ctx.rotate(-pos2-0.03);
-    ctx.fillStyle= BGCOLOUR;
-    ctx.fill();
-
-    if (clearonly == false){
-        ctx.beginPath();
-        ctx.moveTo(0,0);
-        ctx.rotate(pos1);
-        ctx.moveTo(0, 0.15*radius);
-        ctx.lineTo(0, (0.15*radius)+length);
-        ctx.rotate(pos2-pos1);
-        ctx.arc(0,0,(0.15*radius)+length,(0.5*Math.PI)-(pos2-pos1),(0.5*Math.PI),false);
-    //    ctx.lineTo(0, length);
-        ctx.lineTo(0, 0.15*radius);
-        ctx.rotate(-pos2);
-        ctx.fillStyle= "white";
-        ctx.fill();
-    }
-    ctx.beginPath(); // redraw centre axles
-    ctx.arc(0, 0, 0.05*radius, 0, 2*Math.PI);
-    ctx.fillStyle = "white";
-    ctx.fill();
-    ctx.beginPath();
-    ctx.arc(0, 0, 0.1*radius, starta, enda, hand);
-    ctx.strokeStyle = "white";
-    ctx.stroke();
-}
-
-function drawAccelT(ctx, pos1, pos2, length) {
-    var scaleSize = 120/(ROIL-ROIU); // this is how much the position needs to be scaled
-    if (pos1 <= 180) pos1=-30+((pos1-ROIU)*scaleSize);
-    if (pos2 <= 180) pos2=-30+((pos2-ROIU)*scaleSize);
-    if (pos1 > 180) pos1=270+((pos1-(360-ROIL))*scaleSize);
-    if (pos2 > 180) pos2=270+((pos2-(360-ROIL))*scaleSize);
-
-    if (ctx === ctxHS1t){ // handstroke down
-        pos1=(pos1+180)*Math.PI/180;
-        pos2=(pos2+180)*Math.PI/180;
-
-    } else if (ctx === ctxHS2t) { // handstroke up
-        pos1=(pos1-180)*Math.PI/180;
-        pos2=(pos2-180)*Math.PI/180;
-
-    } else if (ctx === ctxBS1t) { // backstroke down
-        pos1=(180-pos1)*Math.PI/180;
-        pos2=(180-pos2)*Math.PI/180;
-
-    } else if (ctx === ctxBS2t) { // backstroke up
-        pos1=(180-pos1)*Math.PI/180;
-        pos2=(180-pos2)*Math.PI/180;
-    }
-    ctx.beginPath();
-    ctx.moveTo(0,0);
-    ctx.rotate(pos1);
-    ctx.moveTo(0, 0.15*radius);
-    ctx.lineTo(0, (0.15*radius)+length);
-    ctx.rotate(pos2-pos1);
-    ctx.arc(0,0,(0.15*radius)+length,(0.5*Math.PI)-(pos2-pos1),(0.5*Math.PI),false);
-//    ctx.lineTo(0, length);
-    ctx.lineTo(0, 0.15*radius);
-    ctx.rotate(-pos2);
-    ctx.fillStyle="rgba(240,240,0,0.6)";
-    ctx.fill();
-
 }
 
 function drawTDCs(){
