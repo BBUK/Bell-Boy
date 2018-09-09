@@ -1699,7 +1699,7 @@ function clearAT(){
     ctxATt.fillStyle="rgba(204,204,230,0.1)";
     ctxATt.fillRect(0,0,canvasATt.width,canvasATt.height);
     currentATmargin=0;
-    document.getElementById("canvasAT").style.marginLeft = "0 px";
+    document.getElementById("canvasAT").style.marginLeft = (currentATmargin * -1) + "px";
 //    ctxATt.beginPath();
 //    ctxATt.rect(1,1,(ctxATt.canvas.width/2)-1, ctxATt.canvas.height-ATbottomMargin);
 //    var halfHeight = (ctxATt.canvas.height-ATbottomMargin)/2;
