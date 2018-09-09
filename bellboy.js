@@ -527,15 +527,9 @@ function drawStroke(){
     }
  
     clearAT();
-    var numberOnATdisplay = Math.ceil((1.0*ctxATt.canvas.width)/ATstepWidth)+2;
-    var offset = ATstepWidth + (ctxATt.canvas.width/2.0 - ATstepWidth/2.0) - (numberOnATdisplay-1)*ATstepWidth/2.0
-    var startSwing = Math.ceil(currentSwingDisplayed - (numberOnATdisplay-1)/2.0);
-//    var offset = (ctxATt.canvas.width - (numberOnATdisplay * ATstepWidth))/2.0;
-    if (startSwing < 0) {
-        numberOnATdisplay += startSwing;
-        offset += -startSwing*ATstepWidth;
-        startSwing = 0;
-    }
+    var numberOnATdisplay = Math.ceil((1.0*ctxATt.canvas.width)/ATstepWidth);
+    var offset = ((ctxATt.canvas.width/2.0 - ATstepWidth/2.0) % ATstepWidth) - ATstepWidth;
+    var startSwing = Math.ceil(currentSwingDisplayed - numberOnATdisplay/2.0);
     ctxAT.font = "12px sans serif";
     ctxAT.textAlign = "start";
     ctxAT.textBaseline="bottom";
@@ -546,6 +540,7 @@ function drawStroke(){
     
     for (var i=0; i<numberOnATdisplay; i++){
         if ((startSwing + i > swingStarts.length -1) || (startSwing + i > halfSwingStarts.length -1) || startSwing + 1 > averagePullStrength.length -1 || startSwing + i > halfAveragePullStrength -1) break;
+        if ((startSwing + i) < 0) continue;
         ctxAT.fillStyle = "rgb(255,255,255)";
         ctxAT.fillText((startSwing+i+1).toString(), i*ATstepWidth+offset, ctxAT.canvas.height-8);
 
@@ -567,17 +562,13 @@ function drawStroke(){
     }
     if ((currentStatus & TEMPLATEDISPLAYED) == 0) return;
 // do template on staves
-    numberOnATdisplay = Math.ceil((1.0*ctxATt.canvas.width)/ATstepWidth)+2;
-    offset = ATstepWidth + (ctxATt.canvas.width/2.0 - ATstepWidth/2.0) - (numberOnATdisplay-1)*ATstepWidth/2.0
-    startSwing = Math.ceil(TcurrentSwingDisplayed - (numberOnATdisplay-1)/2.0);
-    if (startSwing < 0) {
-        numberOnATdisplay += startSwing;
-        offset += -startSwing*ATstepWidth;
-        startSwing = 0;
-    }
+    numberOnATdisplay = Math.ceil((1.0*ctxATt.canvas.width)/ATstepWidth);
+    offset = ((ctxATt.canvas.width/2.0 - ATstepWidth/2.0) % ATstepWidth) - ATstepWidth;
+    startSwing = Math.ceil(TcurrentSwingDisplayed - numberOnATdisplay/2.0);
     ctxAT.strokeStyle = "rgb(240,240,0)";
     for (var i=0; i<numberOnATdisplay; i++){
         if ((startSwing + i > swingStarts.length -1) || (startSwing + i > halfSwingStarts.length -1) || startSwing + 1 > averagePullStrength.length -1 || startSwing + i > halfAveragePullStrength -1) break;
+        if ((startSwing + i) < 0) continue;
         ctxAT.fillStyle = "rgba(240,240,0,1)";
         ctxAT.fillText((startSwing+i+1).toString(), i*ATstepWidth+offset+ATbarWidth+4, ctxAT.canvas.height-8);
 
@@ -759,31 +750,6 @@ function drawSamples(position,iterations){
     }
 }
 
-function drawAT(accn){
-    var halfHeight = (ctxAT.canvas.height-ATbottomMargin)/2;
-    var ypos = halfHeight + (halfHeight*(accn/scaleValue)/2);
-    if (ypos < 0) ypos=0;
-    if (ypos > halfHeight *2) ypos = halfHeight*2;
-    if (currentATmargin >= ctxAT.canvas.width/2) currentATmargin = 0;
-    currentATmargin += currentATpixels;
-    ctxAT.clearRect(currentATmargin-currentATpixels,0,currentATpixels,ctxAT.canvas.height);
-    ctxAT.clearRect(currentATmargin-currentATpixels+ctxAT.canvas.width/2,0,currentATpixels,ctxAT.canvas.height);
-    ctxAT.beginPath();
-    ctxAT.moveTo(currentATmargin-currentATpixels,ypos);
-    ctxAT.lineTo(currentATmargin,ypos);
-    ctxAT.moveTo(currentATmargin-currentATpixels+ctxAT.canvas.width/2,ypos);
-    ctxAT.lineTo(currentATmargin+ctxAT.canvas.width/2,ypos);
-    if ((currentStatus & LASTHS1) != 0 ||
-        (currentStatus & LASTHS2) != 0) {
-        ctxAT.strokeStyle="#FF8080";
-    } else {
-        ctxAT.strokeStyle="#80FF80";
-    }
-    ctxAT.lineWidth=2;
-    ctxAT.stroke();
-    document.getElementById("canvasAT").style.marginLeft = (currentATmargin * -1) + "px";
-}
-
 function drawHSpower(accn,angle){
     var totalHeight = ctxAT.canvas.height-ATbottomMargin-ATtopMargin;
     var pixelsPerUnit = totalHeight/scaleValue;
@@ -793,7 +759,7 @@ function drawHSpower(accn,angle){
 //    if (ypos > halfHeight *2) ypos = halfHeight*2;
 
     currentATmargin += ATstepWidth;
-    if (currentATmargin >= ctxAT.canvas.width/2) currentATmargin = 0;
+    if (currentATmargin >= ctxAT.canvas.width/2) currentATmargin -= ctxAT.canvas.width/2;
 
     ctxAT.clearRect(currentATmargin-10-ATstepWidth,0,ATstepWidth+20,ctxAT.canvas.height,0);
     ctxAT.clearRect(currentATmargin-10-ATstepWidth+ctxAT.canvas.width/2,0,ATstepWidth+20,ctxAT.canvas.height);
@@ -1523,15 +1489,11 @@ window.onclick = function(event) {
 //addEvent(window, "resize", recalculateSize());
 window.addEventListener("resize", function(event){
   recalculateSize();
-  if ((currentStatus & TEMPLATEDISPLAYED) !=0) {
-      TdrawStroke();
-  } else {
-    drawTDCs();
-  }
+  if ((currentStatus & TEMPLATEDISPLAYED) !=0) TdrawStroke();
+  drawTDCs();
 
   if ((currentStatus & SESSIONLOADED) !=0) drawStroke();
 
-  
 });
 
 window.addEventListener("load", function(event){
