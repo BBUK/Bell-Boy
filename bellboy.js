@@ -564,8 +564,43 @@ function drawStroke(){
         if (angleColour < 0) angleColour = 0;
         ctxAT.fillStyle=angleColours[angleColour];
         ctxAT.fillRect(offset + i*ATstepWidth+ATbarWidth+4, ctxAT.canvas.height-ATbottomMargin-powerHeight, ATbarWidth, powerHeight);
-
     }
+    if ((currentStatus & TEMPLATEDISPLAYED) == 0) return;
+// do template on staves
+    numberOnATdisplay = Math.ceil((1.0*ctxATt.canvas.width)/ATstepWidth)+2;
+    offset = ATstepWidth + (ctxATt.canvas.width/2.0 - ATstepWidth/2.0) - (numberOnATdisplay-1)*ATstepWidth/2.0
+    startSwing = Math.ceil(TcurrentSwingDisplayed - (numberOnATdisplay-1)/2.0);
+    if (startSwing < 0) {
+        numberOnATdisplay += startSwing;
+        offset += -startSwing*ATstepWidth;
+        startSwing = 0;
+    }
+    ctxAT.strokeStyle = "rgb(240,240,0)";
+    for (var i=0; i<numberOnATdisplay; i++){
+        if ((startSwing + i > swingStarts.length -1) || (startSwing + i > halfSwingStarts.length -1) || startSwing + 1 > averagePullStrength.length -1 || startSwing + i > halfAveragePullStrength -1) break;
+        ctxAT.fillStyle = "rgba(240,240,0,1)";
+        ctxAT.fillText((startSwing+i+1).toString(), i*ATstepWidth+offset+ATbarWidth+4, ctxAT.canvas.height-8);
+
+        powerHeight = Math.round(pixelsPerUnit*averagePullStrength[startSwing + i]);
+        if (powerHeight > totalHeight) powerHeight=totalHeight;
+        angleColour = Math.round(sample[swingStarts[startSwing + i]][0] + angleColours.length/2.0);
+        if (angleColour > (angleColours.length-1)) angleColour = angleColours.length-1; 
+        if (angleColour < 0) angleColour = 0;
+        ctxAT.strokeRect(offset + (i+0.25)*ATstepWidth -10, ctxAT.canvas.height-ATbottomMargin-powerHeight-1, 10, powerHeight);
+        ctxAT.fillStyle=angleColours[angleColour];
+        ctxAT.fillRect(offset + (i+0.25)*ATstepWidth -9, ctxAT.canvas.height-ATbottomMargin-powerHeight, 8, powerHeight);
+        
+
+        powerHeight = Math.round(pixelsPerUnit*halfAveragePullStrength[startSwing + i]);
+        if (powerHeight > totalHeight) powerHeight=totalHeight;
+        angleColour = Math.round(360-sample[halfSwingStarts[startSwing + i]][0] + angleColours.length/2.0);
+        if (angleColour > (angleColours.length-1)) angleColour = angleColours.length-1; 
+        if (angleColour < 0) angleColour = 0;
+        ctxAT.strokeRect(offset + (i+0.25)*ATstepWidth +ATbarWidth -6, ctxAT.canvas.height-ATbottomMargin-powerHeight-1, 10, powerHeight);
+        ctxAT.fillStyle=angleColours[angleColour];
+        ctxAT.fillRect(offset + (i+0.25)*ATstepWidth+ATbarWidth-5, ctxAT.canvas.height-ATbottomMargin-powerHeight, 8, powerHeight);
+    }
+
 }
 
 
@@ -605,6 +640,7 @@ function TdrawStroke(){
     if(backstrokelength != 0.0){
         ctxBD.fillText("B " + backstrokelength.toFixed(2)+"s", posCB + CBwidth/2, ctxBD.canvas.height-40);
     }
+    
 }
 
 function drawSamples(position,iterations){
@@ -1135,20 +1171,28 @@ backIcon.onclick=function(){
     if ((currentStatus & HELPDISPLAYED) != 0) return;
     if ((currentStatus & PLAYBACK) != 0) return;
 
+    backclick();
+};
+
+function backclick(){
+    if ((currentStatus & TEMPLATEDISPLAYED) != 0 && (TcurrentSwingDisplayed == 0 || currentSwingDisplayed == 0)) return;
+
+    if ((currentStatus & TEMPLATEDISPLAYED) != 0 && (currentStatus & SKIPTEMPLATE) != 0  && TcurrentSwingDisplayed != 0 && currentSwingDisplayed != 0) {
+        if (TcurrentSwingDisplayed == null) TcurrentSwingDisplayed=1;
+        TcurrentSwingDisplayed -= 1;
+        TdrawStroke();
+    }
+
     if ((currentStatus & SESSIONLOADED) != 0 && (currentStatus & SKIPMAIN) != 0  && currentSwingDisplayed != 0) {
         if (currentSwingDisplayed == null) currentSwingDisplayed=1;
         currentSwingDisplayed -= 1;
         drawFrame();
         drawStroke();
     }
-    if ((currentStatus & TEMPLATEDISPLAYED) != 0 && (currentStatus & SKIPTEMPLATE) != 0  && TcurrentSwingDisplayed != 0) {
-        if (TcurrentSwingDisplayed == null) TcurrentSwingDisplayed=1;
-        TcurrentSwingDisplayed -= 1;
-        TdrawStroke();
-    }
     textBell();
     updateIcons();
-};
+}
+
 
 forwardIcon.addEventListener("touchstart", preventZoom);
 
@@ -1158,20 +1202,29 @@ forwardIcon.onclick=function(){
     if ((currentStatus & HELPDISPLAYED) != 0) return;
     if ((currentStatus & PLAYBACK) != 0) return;
 
+    foreclick();
+};
+
+function foreclick() {
+    if ((currentStatus & TEMPLATEDISPLAYED) != 0 && (TcurrentSwingDisplayed == TswingStarts.length -1 || currentSwingDisplayed == swingStarts.length - 1)) return;
+
+    if ((currentStatus & TEMPLATEDISPLAYED) != 0 && (currentStatus & SKIPTEMPLATE) != 0 && TcurrentSwingDisplayed != TswingStarts.length -1 && currentSwingDisplayed != swingStarts.length - 1) {
+        if (TcurrentSwingDisplayed == null) TcurrentSwingDisplayed=-1;
+        TcurrentSwingDisplayed += 1;
+        TdrawStroke();
+    }
+
     if ((currentStatus & SESSIONLOADED) != 0 && (currentStatus & SKIPMAIN) != 0  && currentSwingDisplayed != swingStarts.length - 1) {
         if (currentSwingDisplayed == null) currentSwingDisplayed=-1;
         currentSwingDisplayed += 1;
         drawFrame();
         drawStroke();
     }
-    if ((currentStatus & TEMPLATEDISPLAYED) != 0 && (currentStatus & SKIPTEMPLATE) != 0 && TcurrentSwingDisplayed != TswingStarts.length -1) {
-        if (TcurrentSwingDisplayed == null) TcurrentSwingDisplayed=-1;
-        TcurrentSwingDisplayed += 1;
-        TdrawStroke();
-    }
+
     textBell();
     updateIcons();
-};
+
+}
 
 favIcon.onclick=function(){
     if ((currentStatus & DOWNLOADINGFILE) != 0) return;
@@ -1184,15 +1237,20 @@ favIcon.onclick=function(){
     template=[];
     TswingStarts=[];
     ThalfSwingStarts=[];
+    TaveragePullStrength=[];
+    ThalfAveragePullStrength=[]
     clearTemplates();
     drawTDCs();
     var i = 0;
     for (i = 0; i<sample.length; ++i) template[template.length]=sample[i].slice();
     for (i = 0; i<halfSwingStarts.length; ++i) ThalfSwingStarts[ThalfSwingStarts.length]=halfSwingStarts[i];
     for (i = 0; i<swingStarts.length; ++i) TswingStarts[TswingStarts.length]=swingStarts[i];
+    for (i = 0; i<averagePullStrength.length; ++i) TaveragePullStrength[TaveragePullStrength.length]=averagePullStrength[i];
+    for (i = 0; i<halfAveragePullStrength.length; ++i) ThalfAveragePullStrength[ThalfAveragePullStrength.length]=halfAveragePullStrength[i];
     TcalibrationValue = calibrationValue;
     TcurrentSwingDisplayed=currentSwingDisplayed;
     currentStatus |= TEMPLATEDISPLAYED;
+    drawStroke();
     TdrawStroke();
     textBell();    
     updateIcons();
@@ -1216,6 +1274,7 @@ unstarIcon.onclick=function(){
     currentStatus |= SKIPMAIN;
     drawTDCs();
     ctxBD.clearRect(posCB+1, ctxBD.canvas.height-60, CBwidth-2, 20);  // clear timer displays
+    drawStroke();
     updateIcons();
 };
 
@@ -1457,7 +1516,7 @@ window.onclick = function(event) {
 };
 
 ////////////////////////////////////////////////////////////////
-//                   WINDOW RESIZE FUNCTIONS                  //
+//           WINDOW RESIZE / CANVAS CLICK FUNCTIONS           //
 ////////////////////////////////////////////////////////////////
 
 
@@ -1469,6 +1528,10 @@ window.addEventListener("resize", function(event){
   } else {
     drawTDCs();
   }
+
+  if ((currentStatus & SESSIONLOADED) !=0) drawStroke();
+
+  
 });
 
 window.addEventListener("load", function(event){
@@ -1478,6 +1541,25 @@ window.addEventListener("load", function(event){
     clearAT();
     document.body.addEventListener("touchstart", preventZoom); // doesn't appear to work
 });
+
+canvasATt.addEventListener("click", function(event){
+    if ((currentStatus & DOWNLOADINGFILE) != 0) return;
+    if ((currentStatus & RECORDINGSESSION) != 0) return;
+    if ((currentStatus & SESSIONLOADED) == 0) return;
+    if ((currentStatus & HELPDISPLAYED) != 0) return;
+    if (currentSwingDisplayed == null) return;
+    var dist = Math.round((event.pageX - ctxATt.canvas.width/2.0)/ATstepWidth);
+    while (dist > 0){
+        --dist;
+        foreclick();
+    }
+    while (dist < 0){
+        ++dist
+        backclick();
+    }
+
+},false);
+
 
 function recalculateSize() {
     var winWidth =  window.innerWidth;
