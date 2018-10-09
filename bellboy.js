@@ -1147,6 +1147,7 @@ function backclick(){
         if (TcurrentSwingDisplayed == null) TcurrentSwingDisplayed=1;
         TcurrentSwingDisplayed -= 1;
         TdrawStroke();
+        drawStroke();
     }
 
     if ((currentStatus & SESSIONLOADED) != 0 && (currentStatus & SKIPMAIN) != 0  && currentSwingDisplayed != 0) {
@@ -1178,6 +1179,7 @@ function foreclick() {
         if (TcurrentSwingDisplayed == null) TcurrentSwingDisplayed=-1;
         TcurrentSwingDisplayed += 1;
         TdrawStroke();
+        drawStroke();
     }
 
     if ((currentStatus & SESSIONLOADED) != 0 && (currentStatus & SKIPMAIN) != 0  && currentSwingDisplayed != swingStarts.length - 1) {
