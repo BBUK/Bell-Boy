@@ -22,13 +22,16 @@ void calibrationSetup(char accel, char gyro, char mag);
 void tareBNO080(void);
 int readFrsRecord(uint16_t recordType);
 int writeFrsWord(uint16_t recordType, uint32_t offset, uint32_t data);
-int readFrsWord(uint16_t recordType, uint32_t offset);
-int isStable(void);
+int readFrsWord(uint16_t recordType, uint32_t offset, uint32_t* result);
 void configureStability(uint32_t reportPeriod);
 void alignFIFOs(void);
 int configureFeatureReport(uint8_t report, uint32_t reportPeriod);
 void pushData(void);
 void clearPersistentTare(void);
+void parseGyroIntegratedRotationVector(void);
+void setupStabilityClassifierFrs(float threshold);
+int startRun(void);
+int eraseFrsRecord(uint16_t recordType);
 
 const uint8_t CHANNEL_COMMAND = 0;
 const uint8_t CHANNEL_EXECUTABLE = 1;
@@ -43,6 +46,7 @@ const uint8_t CHANNEL_GYRO = 5;
 #define SHTP_REPORT_COMMAND_REQUEST 0xF2
 #define SHTP_REPORT_FRS_READ_RESPONSE 0xF3
 #define SHTP_REPORT_FRS_READ_REQUEST 0xF4
+#define SHTP_REPORT_FRS_WRITE_RESPONSE 0XF5
 #define SHTP_REPORT_FRS_WRITE_REQUEST 0xF7
 #define SHTP_REPORT_FRS_WRITE_DATA_REQUEST 0xF6
 #define SHTP_REPORT_PRODUCT_ID_RESPONSE 0xF8
@@ -68,6 +72,8 @@ const uint8_t CHANNEL_GYRO = 5;
 #define SENSOR_REPORTID_PERSONAL_ACTIVITY_CLASSIFIER 0x1E
 #define SENSOR_REPORTID_ARVR_STABILIZED_ROTATION_VECTOR 0x28
 #define SENSOR_REPORTID_ARVR_STABILIZED_GAME_ROTATION_VECTOR 0x29
+#define SENSOR_REPORTID_GYRO_INTEGRATED_ROTATION_VECTOR 0x2A
+
 
 //Record IDs from figure 29, page 29 reference manual
 //These are used to read the metadata for each sensor type
