@@ -1,21 +1,23 @@
-//gcc BNO080.c -o BNO080 -lm -lbcm2835
+//gcc BNOgrabber.c -o BNOgrabber -lm -lbcm2835
+/*
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
 
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
 
-// Copyright (c) 2017,2018 Peter Budd. All rights reserved
-// Permission is hereby granted, free of charge, to any person obtaining a copy of this software and
-// associated documentation files (the "Software"), to deal in the Software without restriction,
-// including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense,
-// and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so,
-// subject to the following conditions:
-//     * The above copyright notice and this permission notice shall be included in all copies or substantial
-//       portions of the Software.
-//     * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING
-//       BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
-//       IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
-//       WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
-//       SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE. THE AUTHORS AND COPYRIGHT HOLDERS, HOWEVER,
-//       ACCEPT LIABILITY FOR DEATH OR PERSONAL INJURY CAUSED BY NEGLIGENCE AND FOR ALL MATTERS LIABILITY
-//       FOR WHICH MAY NOT BE LAWFULLY LIMITED OR EXCLUDED UNDER ENGLISH LAW
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+*/
 
 #include <math.h>
 #include <sys/time.h>
@@ -47,8 +49,77 @@
 #define WAKPS0PIN 25
 #define QP(n) (1.0 / (1 << n))  
 #define ODR 50
+struct timeval current;
+
+char READ_OUTBUF[1500];
+
+uint32_t FRS_READ_BUFFER[64];
+
+uint8_t SEQUENCENUMBER[7];
+unsigned int LOOPSLEEP = 2000;  // in microseconds
+unsigned int LOOPCOUNT = 0;
+char FILENAME[50];
+int RUNNING = 0;
+int OUT_COUNT = 0;
+
+char READ_OUTBUF[1500];
+char READ_OUTBUF_LINE[150];
+int READ_OUTBUF_COUNT;
 
 FILE *fd_write_out;
+
+/*
+# There are nine possible command sent by the user's browser:
+# (a)   STRT:[filename] Start recording a session with a bell.  The bell
+#       must be at stand and (reasonably) stationary otherwise this
+#       will return ESTD: or EMOV: either of which signals the browser 
+#       to stop expecting data.  If Filename is not provided then a
+#       default filename of "CurrentRecording [date]" is used.
+# (b)   STOP: stops a recording in progress.  This also saves off the
+#       collected data into a file in /data/samples/
+# (c)   LDAT: a request for data from the broswer, only works when there
+#       is a recording in progress - deprecated.  Does nothing.
+# (d)   FILE: get a listing of the previous recordings stored in
+#       /data/samples/ .  Used to display the selection box to the user.
+# (e)   LOAD:[filename] used to transmit a previous recording to the browser
+# (f)   DATE:[string] sets the date on the device to the date on the browser 
+#             string is unixtime (microsecs since 1/1/70)
+# (g)   SAMP: requests the current sample period
+# (h)   SHDN: tells the device to shutdown
+# (i)   CALI: tells the device to provide calibration and tare data
+# 
+# There are the following responses back to the user's browser:
+# (i)   STPD: tells the browser that the device has sucessfully stopped sampling
+# (ii)  ESTP: signals an error in the stop process (an attempt to stopped when not started)
+# (iii) LIVE:[string] the string contains the data recorded by the device in the format
+#             "A:[angle]R:[rate]C:[acceleration]".  Angle, rate and acceleration are 
+#             ordinary floating point numbers.  Angle is in degrees, rate is in degrees/sec
+#             and acceleration is in degrees/sec/sec.
+# (iv)  NDAT: indicates that there is no current data to send to the browser (deprecated)
+# (v)   SAMP: returns the sample period
+# (vi)  EIMU: IMU not detected or some IMU related failure
+# (vii) ESTD: bell not at stand (aborts started session)
+# (viii)EMOV: bell moving when session started (the bell has to be stationary at start)
+# (ix)  ESAM: sample period needs to be measured first (deprecated)
+# (x)   ESTR: internal error related to data / filenames (shouldn't happen)!
+# (xi)  DATA:[string]  chunk of data from a previously stored file.  In same format as LIVE:
+# (xii) EOVF: (sent by dcmimu) fifo overflow flagged.
+# (xiii)FILE:[filename] in response to FILE: a list of the previous recordings in /data/samples
+# (xiv) STRT: in response to STRT: indicates a sucessful start.
+# (xv)  LFIN:[number] indicates the end of a file download and the number of samples sent
+* (xvi) CALI:returns certain calibration/tare data
+*/
+
+/*
+* Command line arguments bb_grabber {1} {2} {3} {4}
+* {1} = Operational data rate (ODR). One of 500, 200, 100 and 50 samples per second.
+* {2} = gyro full scale range. One of 500 and 1000 (in degrees/second).
+* {3} = accelerometer full scale range.  One of 2 and 4 (g).
+* {4} = (optional) smooth factor.  If nothing entered here 0.92 is used
+* Example: bb_grabber 200 500 4 0.94
+* Commands (see above) are received on stdin and output is on stdout.
+* Will work standalone but intended to be interfaced with websocketd https://github.com/joewalnes/websocketd
+*/
 
 struct {
     unsigned char buffer[MAX_PACKET_SIZE];
@@ -81,8 +152,10 @@ struct {
     int head;
     int tail;
     unsigned int available;
-    float lastReportedAngle;
     float direction;
+    float lastYaw;
+    float lastPitch;
+    float lastRoll;
     unsigned int requestedInterval;
     unsigned int reportInterval;
     unsigned int lastReportTimestamp;
@@ -95,9 +168,11 @@ struct {
     int head;
     int tail;
     unsigned int available;
-    float lastReportedAngle;
     float direction;
     unsigned int status;
+    float lastYaw;
+    float lastPitch;
+    float lastRoll;
     unsigned int requestedInterval;
     unsigned int reportInterval;
     unsigned int lastReportTimestamp;
@@ -123,18 +198,6 @@ struct {
     unsigned int lastReportTimestamp;
 } stabilityData={ .lastReportTimestamp=0 };
 
-struct timeval current;
-
-char READ_OUTBUF[1500];
-
-uint32_t FRS_READ_BUFFER[64];
-
-uint8_t SEQUENCENUMBER[7];
-unsigned int LOOPSLEEP = 2000;  // in microseconds
-unsigned int LOOPCOUNT = 0;
-char FILENAME[50];
-int RUNNING = 0;
-
 
 volatile sig_atomic_t sig_exit = 0;
 void sig_handler(int signum) {
@@ -148,6 +211,8 @@ int main(int argc, char const *argv[]){
     char command[6];
     char details[42];
     char oscommand[90];
+    int entries;
+    int torn;
     float shutdowncount = 0.0;
     FILE *shutdowncheck;
 
@@ -158,24 +223,162 @@ int main(int argc, char const *argv[]){
     sig_action.sa_handler = sig_handler;
     sigaction(SIGTERM, &sig_action, NULL);
     sigaction(SIGINT, &sig_action, NULL);
+
+    setbuf(stdout, NULL);
+    setbuf(stdin, NULL);
+    fcntl(STDIN_FILENO, F_SETFL, fcntl(STDIN_FILENO, F_GETFL) | O_NONBLOCK);
     
-    setupBNO080();
+    setup();
     setupStabilityClassifierFrs(1.5);
-    configureBNO080();
-    
+    clearPersistentTare();
 //    reorient(0,0,0,0);
-//    clearPersistentTare();
+//    
 //    reorient(0.0,0.0,-1.0,0.0);
 
-    startBNO080(ODR);
-   
+    start(ODR);
+
     while(!sig_exit){
         usleep(LOOPSLEEP);
-        LOOPCOUNT += 1;
+        LOOPCOUNT += 1;        
         while(bcm2835_gpio_lev(INTPIN) == 0) handleEvent();
-        if(LOOPCOUNT == 5000) startRun();
+
+        if((LOOPCOUNT > 5000) && ((LOOPCOUNT % 6000) == 0)  && (torn == 0)){ // if we already haven't torn the device then try doing it now
+            if(stabilityData.status == 1 || stabilityData.status == 2) { // check if bell is stable
+                if(abs(gameRotationVectorData.lastPitch) < 10.0){
+                    if(abs(gameRotationVectorData.lastPitch) < 10.0) {  // device is mounted on top of headstock and roughly level  TODO: side mounting
+                        if(gameRotationVectorData.status == 3 && gyroData.status == 3){ // we have good calibrations
+                            printf("CALI:%d %d %d P:%+07.1f R:%+07.1f\n",torn,gameRotationVectorData.status,gyroData.status,gameRotationVectorData.lastPitch,gameRotationVectorData.lastRoll);
+                        }
+                    }
+                }
+            }
+        }
+
+        shutdowncount += LOOPSLEEP/1000;
+        if(shutdowncount >= 20000){ // check every 20 seconds
+            shutdowncheck = fopen("/run/nologin","r");  // 5 minute warning
+            if(shutdowncheck != NULL){
+                puts("Low battery warning.\n");
+                fclose(shutdowncheck);
+            }
+            shutdowncount = 0.0;
+        }
+        
+        while(fgets(linein, sizeof(linein), stdin ) != NULL) {
+            entries = sscanf(linein, "%5s%[^\n]", command, details);
+            if(entries < 1) {
+                fprintf( stderr, "\nError reading: %s \n", linein );
+                continue;
+            }
+            if(strcmp("DATE:", command) == 0 && entries == 2  && strlen(details) < 12){
+                sprintf(oscommand,"/usr/bin/date --set=\"$(date --date='@%s')\" && /usr/bin/touch /var/lib/systemd/clock", details);
+                system(oscommand);
+                continue;
+            }
+            if(strcmp("SAMP:", command) == 0) {
+                printf("SAMP:%f\n",1.0/ODR);
+                continue;
+            }
+            if(strcmp("CALI:", command) == 0) {
+                printf("CALI:%d %d %d\n",torn,gameRotationVectorData.status,gyroData.status);
+                continue;
+            }
+            
+            if(strcmp("TARE:", command) == 0) {
+                saveCalibration();
+                torn = 1;
+                tare();
+                start(ODR); // occasional hang found unless we did this
+                continue;
+            }
+            if(strcmp("FILE:", command) == 0) {
+                DIR *d;
+                struct dirent *dir;
+                d = opendir("/data/samples");
+                if(d){
+                    while ((dir = readdir(d)) != NULL) {
+                        if(dir->d_type == DT_REG) printf("FILE:%s\n", dir->d_name);
+                    }
+                closedir(d);
+                }
+                continue;
+            }
+            if(strcmp("STRT:", command) == 0) {
+                if(entries == 2  && strlen(details) < 34){
+                    sprintf(FILENAME, "/data/samples/%s", details);
+                } else {
+                    struct tm *timenow;
+                    time_t now = time(NULL);
+                    timenow = gmtime(&now);
+                    strftime(FILENAME, sizeof(FILENAME), "/data/samples/Unnamed_%d-%m-%y_%H%M", timenow);
+                }
+                if(!startRun()) continue;
+                fd_write_out = fopen(FILENAME,"w");
+                if(fd_write_out == NULL) {
+                    fprintf(stderr, "Could not open file for writing\n");
+                    printf("ESTR:\n");
+                    continue;
+                } else {
+                    printf("STRT:\n"); 
+                }
+                continue;
+            }
+            if(strcmp("STOP:", command) == 0) {
+                if(fd_write_out != NULL){
+                    fflush(fd_write_out);
+                    fclose(fd_write_out);
+                    fd_write_out = NULL;
+                }
+                RUNNING = 0;
+                printf("STPD:%d\n",OUT_COUNT);
+                continue;
+            }
+            if(strcmp("LOAD:", command) == 0 && RUNNING == 0) {
+                if(entries == 2  && strlen(details) < 34){
+                    sprintf(FILENAME, "/data/samples/%s", details);
+                } else {
+                    printf("ESTR:\n");
+                    continue;
+                }
+                FILE *fd_read_in;
+                fd_read_in = fopen(FILENAME,"r");
+                if(fd_read_in == NULL) {
+                    fprintf(stderr, "Could not open file for reading\n");
+                    printf("ESTR:\n");
+                    continue;
+                } else {
+                    int counter = 0;
+                    READ_OUTBUF_COUNT = 0;
+                    while(fgets(READ_OUTBUF_LINE, sizeof(READ_OUTBUF_LINE), fd_read_in ) != NULL) {
+                        size_t ln = strlen(READ_OUTBUF_LINE);
+                        if(ln > 0 && READ_OUTBUF_LINE[ln -1] == '\n') READ_OUTBUF_LINE[ln - 1] = '\0';   // get rid of /n
+//                        READ_OUTBUF_LINE[strcspn(READ_OUTBUF_LINE, "\n")] = 0;
+                        if (READ_OUTBUF_COUNT + strlen(READ_OUTBUF_LINE) + 7 > (sizeof(READ_OUTBUF) -2)) {
+                            printf("%s\n", READ_OUTBUF);
+                            READ_OUTBUF_COUNT = 0;
+                        }
+                        READ_OUTBUF_COUNT += sprintf(&READ_OUTBUF[READ_OUTBUF_COUNT],"DATA:%s",READ_OUTBUF_LINE);
+                        counter += 1;
+                    }
+                    if(READ_OUTBUF_COUNT != 0) printf("%s\n",READ_OUTBUF);
+                    printf("LFIN:%d\n", counter);
+                }
+                fclose(fd_read_in);
+                continue;
+            }
+            if(strcmp("SHDN:", command) == 0) {
+                system("/usr/bin/sync && /usr/bin/shutdown -P now");
+                continue;
+            }
+            printf("ESTR:\n");
+            fprintf(stderr, "Unrecognised command: %s \n", command);
+        }
     }
-    startBNO080(0);
+    if(fd_write_out != NULL) {
+        fflush(fd_write_out);
+        fclose(fd_write_out);
+    }
+    start(0);
     collectPacket();// collect the three feature status reports and dump them
     collectPacket();
     collectPacket();
@@ -201,19 +404,21 @@ int startRun(void){
     gyroData.available = 0;
     
     if(stabilityData.status != 1 && stabilityData.status != 2) {
-        printf("Bell is moving\n");
+        printf("EMOV:\n"); // bell is moving
         return(0);
     }
-    if(abs(gameRotationVectorData.lastReportedAngle) < 160 || abs(gameRotationVectorData.lastReportedAngle) > 178){
-        printf("Bell not at stand\n");
+    if(abs(gameRotationVectorData.lastRoll) < 160 || abs(gameRotationVectorData.lastRoll) > 178){
+        printf("ESTD:\n"); // bell not at stand
         return(0);
     }
-    if(gameRotationVectorData.lastReportedAngle < 0) {  // this bit works out which way the bell rose and adjusts accordingly
+    
+    calibrationSetup(0,0,0); // disable calibration
+    if(gameRotationVectorData.lastRoll < 0) {  // this bit works out which way the bell rose and adjusts accordingly
         gameRotationVectorData.direction = -1;
-        gameRotationVectorData.angleBuffer[0] = -180.0-gameRotationVectorData.lastReportedAngle;
+        gameRotationVectorData.angleBuffer[0] = -180.0-gameRotationVectorData.lastRoll;
     } else {
         gameRotationVectorData.direction = +1;
-        gameRotationVectorData.angleBuffer[0] = gameRotationVectorData.lastReportedAngle-180.0;
+        gameRotationVectorData.angleBuffer[0] = gameRotationVectorData.lastRoll-180.0;
     }
     RUNNING = 1;
     return(1);
@@ -259,6 +464,8 @@ void alignFIFOs(void){
 
 void pushData(void){
     uint16_t statuses = gyroData.status | (linearAccelerometerData.status << 4) | (gameRotationVectorData.status << 8);
+    char output[1024];
+    int outputCount = 0;
 
 //    if (gyroIntegratedRotationVectorData.available >=10){
 
@@ -266,7 +473,7 @@ void pushData(void){
 //        printf("Gyro: %d, LinAcc: %d, Angle: %d",gyroData.available, linearAccelerometerData.available, gameRotationVectorData.available);
         for(int counter = 0; counter < 10; ++counter){
 //            printf("A:%+07.1f,R:%+07.1f,C:%+07.1f\n", gyroIntegratedRotationVectorData.angleBuffer[gyroIntegratedRotationVectorData.tail], gyroIntegratedRotationVectorData.rateBuffer[gyroIntegratedRotationVectorData.tail], gyroIntegratedRotationVectorData.accnBuffer[gyroIntegratedRotationVectorData.tail]);
-            printf("A:%+07.1f,R:%+07.1f,C:%+07.1f,LA:%+07.1f,S:%04X\n", gameRotationVectorData.angleBuffer[gameRotationVectorData.tail], gyroData.rateBuffer[gyroData.tail], gyroData.accnBuffer[gyroData.tail], 25*linearAccelerometerData.YBuffer[linearAccelerometerData.tail],statuses);
+            outputCount += sprintf(&output[outputCount],"LIVE:A:%+07.1f,R:%+07.1f,C:%+07.1f,LA:%+07.1f,S:%04X\n", gameRotationVectorData.angleBuffer[gameRotationVectorData.tail], gyroData.rateBuffer[gyroData.tail]*gameRotationVectorData.direction, gyroData.accnBuffer[gyroData.tail]*gameRotationVectorData.direction, 25*linearAccelerometerData.YBuffer[linearAccelerometerData.tail]*gameRotationVectorData.direction,statuses);
 //            gyroIntegratedRotationVectorData.tail = (gyroIntegratedRotationVectorData + 1) & 0x0F
             gameRotationVectorData.tail = (gameRotationVectorData.tail + 1) & 0x0F;
             gyroData.tail = (gyroData.tail + 1) & 0x0F;
@@ -276,6 +483,11 @@ void pushData(void){
         gameRotationVectorData.available -= 10;
         gyroData.available -= 10;
         linearAccelerometerData.available -= 10;
+        OUT_COUNT += 10;
+        
+        printf("%s",output);
+        fputs(output,fd_write_out);
+        fflush(fd_write_out);
     }
 }
 
@@ -325,7 +537,7 @@ void reportFeatureResponse(void){
 void reportCommandResponse(void){
     switch(spiRead.buffer[2]){
         case 0x84: printf("Error: device has reinitialised!\n"); break;  // bit 7 set indicates autonomous response 0x04 = Initialisation.  Sometimes caused by too much data being pushed.
-        case 0x06: printf("Save DCD.  Success: %d", spiRead.buffer[5] ); break;
+        case 0x06: printf("Save DCD.  Success: %d\n", spiRead.buffer[5] ); break;
         case 0xFD: printf("FRS Write response\n"); break;  // is this correct???
         case COMMAND_ME_CALIBRATE: break;
         default: printf("Unhandled CR event: CHANNEL: %02X, SEQUENCE: %02X BYTES: %02X, %02X, %02X, %02X, %02X, %02X, %02X, %02X, %02X\n", spiRead.channel, spiRead.sequence, spiRead.buffer[0], spiRead.buffer[1], spiRead.buffer[2], spiRead.buffer[3], spiRead.buffer[4], spiRead.buffer[5], spiRead.buffer[6], spiRead.buffer[7], spiRead.buffer[8]);
@@ -368,14 +580,16 @@ void parseGyroIntegratedRotationVector(void){
     gettimeofday(&current, NULL);
     gyroIntegratedRotationVectorData.lastReportTimestamp= (unsigned int)((current.tv_sec)*1000 +(current.tv_usec)/1000);
  
-    float rolldiff = roll - gyroIntegratedRotationVectorData.lastReportedAngle;
+    float rolldiff = roll - gyroIntegratedRotationVectorData.lastRoll;
     if(rolldiff > 250.0) {
         rolldiff -= 360.0;
     } else if (rolldiff < -250.0) {
         rolldiff += 360.0;
     }
  
-    gyroIntegratedRotationVectorData.lastReportedAngle = roll;
+    gyroIntegratedRotationVectorData.lastRoll = roll;
+    gyroIntegratedRotationVectorData.lastPitch = pitch;
+    gyroIntegratedRotationVectorData.lastYaw = yaw;
 
     if(!RUNNING) return;  // only push data to fifo if we are on a run
 
@@ -451,13 +665,15 @@ void parseGameRotationVector(void){
     gettimeofday(&current, NULL);
     gameRotationVectorData.lastReportTimestamp= (unsigned int)((current.tv_sec)*1000 +(current.tv_usec)/1000);
 
-    float rolldiff = roll - gameRotationVectorData.lastReportedAngle;
+    float rolldiff = roll - gameRotationVectorData.lastRoll;
     if(rolldiff > 250.0) {
         rolldiff -= 360.0;
     } else if (rolldiff < -250.0) {
         rolldiff += 360.0;
     }    
-    gameRotationVectorData.lastReportedAngle = roll;
+    gameRotationVectorData.lastRoll = roll;
+
+
 
     if(!RUNNING) return;  // only push data to fifo if we are on a run
 
@@ -558,14 +774,16 @@ void parseStabilisedGameRotationVector(void){
 }
 
 void clearPersistentTare(void){
-    writeFrsWord(SYSTEM_ORIENTATION,0,0);
-    writeFrsWord(SYSTEM_ORIENTATION,1,0);
-    writeFrsWord(SYSTEM_ORIENTATION,2,0);
-    writeFrsWord(SYSTEM_ORIENTATION,3,0);
-//    eraseFrsRecord(SYSTEM_ORIENTATION);   
+//    writeFrsWord(SYSTEM_ORIENTATION,0,0);
+//    writeFrsWord(SYSTEM_ORIENTATION,1,0);
+//    writeFrsWord(SYSTEM_ORIENTATION,2,0);
+//    writeFrsWord(SYSTEM_ORIENTATION,3,0);
+    reorient(0,0,0,0);
+    eraseFrsRecord(SYSTEM_ORIENTATION);
+      
 }
 
-void tareBNO080(void){
+void tare(void){
     spiWrite.buffer[0] = SHTP_REPORT_COMMAND_REQUEST; // set feature
     spiWrite.buffer[1] = SEQUENCENUMBER[6]++; // 0x05=rotation vector, 0x08=game rotation vector, 0x28=ARVR-stabilized rotation vector, 0x29=ARVR-stabilised game rotation vector
     spiWrite.buffer[2] = 0x03; // Tare command
@@ -624,6 +842,20 @@ void saveCalibration(void){
     spiWrite.buffer[10]= 0x00;
     spiWrite.buffer[11]= 0x00;
     sendPacket(CHANNEL_CONTROL, 12);
+
+    int timeout = 0;
+    int counter = 0;
+    while(timeout < 1000){
+        timeout +=1;
+        usleep(50);
+        while(bcm2835_gpio_lev(INTPIN) == 0) {
+            collectPacket();
+            if(spiRead.buffer[2] != 0x06) {parseEvent(); break;}
+            if(spiRead.buffer[5] != 0) printf("Calibration save error\n");
+            return;
+        }
+    }
+    printf("Calibration save timeout\n");
 }
 
 int reorient(float w, float x, float y, float z){
@@ -693,9 +925,8 @@ int readFrsRecord(uint16_t recordType){
                 return(-1);
             }
             FRS_READ_BUFFER[counter] = (uint32_t)spiRead.buffer[7] << 24 | (uint32_t)spiRead.buffer[6] << 16 | (uint32_t)spiRead.buffer[5] << 8 | (uint32_t)spiRead.buffer[4];
-            counter += 1;
             FRS_READ_BUFFER[counter] = (uint32_t)spiRead.buffer[11] << 24 | (uint32_t)spiRead.buffer[10] << 16 | (uint32_t)spiRead.buffer[9] << 8 | (uint32_t)spiRead.buffer[8];
-            counter += 1;
+            counter += 2;
             if(((spiRead.buffer[1] & 0x0F) == 3) || ((spiRead.buffer[1] & 0x0F) == 6) || ((spiRead.buffer[1] & 0x0F) == 7)) return(counter);
         }
     }
@@ -738,16 +969,16 @@ int writeFrsWord(uint16_t recordType, uint32_t offset, uint32_t data){
     spiWrite.buffer[11]= 0x00;
     if(!sendPacket(CHANNEL_CONTROL, 12)) return(0);
 
-    for(int i = 0; i<1000; i++){
+    for(int i = 0; i<2000; i++){
         usleep(100);
         while(bcm2835_gpio_lev(INTPIN) == 0) {
             collectPacket();
             if(spiRead.buffer[0] != SHTP_REPORT_FRS_WRITE_RESPONSE) {parseEvent(); continue;}
             if(spiRead.buffer[1] != 3) {
-//                printf("FRS Write, %02X\n",spiRead.buffer[1]);
+                printf("FRS Write, %02X\n",spiRead.buffer[1]);
                 continue;
             } else {
-//                printf("Write OK\n");
+                printf("Write OK\n");
                 return(1);
             }
         }
@@ -788,13 +1019,28 @@ int readFrsWord(uint16_t recordType, uint32_t offset, uint32_t* result){
     return(0);
 }
 
-void startBNO080(uint32_t dataRate){ // set datarate to zero to stop sensors
+void start(uint32_t dataRate){ // set datarate to zero to stop sensors
 // setup rotation vector quaternion report
     uint32_t odrPeriodMicrosecs = 0;
     if(dataRate != 0) odrPeriodMicrosecs = 1000000/dataRate; 
 
-// disable calibration (we are about to start)
-    calibrationSetup(0,0,0);
+// we are going to arrange things so that calibration data is only persisted when we ask for it (saveCalibration() does this)
+    spiWrite.buffer[0] = SHTP_REPORT_COMMAND_REQUEST; // set feature
+    spiWrite.buffer[1] = SEQUENCENUMBER[6]++; 
+    spiWrite.buffer[2] = 0x09; // Periodic save DCD (calibration data)
+    spiWrite.buffer[3] = 0x00; // 0x00=disable 0x01=enable
+    spiWrite.buffer[4] = 0x00;  
+    spiWrite.buffer[5] = 0x00; 
+    spiWrite.buffer[6] = 0x00; 
+    spiWrite.buffer[7] = 0x00;
+    spiWrite.buffer[8] = 0x00;
+    spiWrite.buffer[9] = 0x00;
+    spiWrite.buffer[10]= 0x00;
+    spiWrite.buffer[11]= 0x00;
+    sendPacket(CHANNEL_CONTROL, 12);
+
+// enable calibration (we should be stationary)  // TODO: check stationary
+    calibrationSetup(1,1,1);
 
     configureFeatureReport(SENSOR_REPORTID_GAME_ROTATION_VECTOR, odrPeriodMicrosecs);
     gameRotationVectorData.requestedInterval=odrPeriodMicrosecs;
@@ -814,23 +1060,6 @@ void startBNO080(uint32_t dataRate){ // set datarate to zero to stop sensors
 //    gyroIntegratedRotationVectorData.direction = 0;
 }
 
-void configureBNO080(void){
-    spiWrite.buffer[0] = SHTP_REPORT_COMMAND_REQUEST; // set feature
-    spiWrite.buffer[1] = SEQUENCENUMBER[6]++; 
-    spiWrite.buffer[2] = 0x09; // Periodic save DCD (calibration data)
-    spiWrite.buffer[3] = 0x00; // 0x00=disable 0x01=enable
-    spiWrite.buffer[4] = 0x00;  
-    spiWrite.buffer[5] = 0x00; 
-    spiWrite.buffer[6] = 0x00; 
-    spiWrite.buffer[7] = 0x00;
-    spiWrite.buffer[8] = 0x00;
-    spiWrite.buffer[9] = 0x00;
-    spiWrite.buffer[10]= 0x00;
-    spiWrite.buffer[11]= 0x00;
-    sendPacket(CHANNEL_CONTROL, 12);
-
-}
-
 void setupStabilityClassifierFrs(float threshold){
     threshold /= QP(24);
     uint32_t result;
@@ -842,7 +1071,7 @@ void setupStabilityClassifierFrs(float threshold){
 //    if (duration != result) writeFrsWord(STABILITY_DETECTOR_CONFIG,1,duration);
 }
 
-void setupBNO080(void){
+void setup(void){
     if (!bcm2835_init()){
         printf("Unable to inititalise bcm2835\n");
         exit(1);

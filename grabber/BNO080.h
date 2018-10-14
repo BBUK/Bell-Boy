@@ -1,11 +1,27 @@
+// Copyright (c) 2017,2018 Peter Budd. All rights reserved
+// Permission is hereby granted, free of charge, to any person obtaining a copy of this software and
+// associated documentation files (the "Software"), to deal in the Software without restriction,
+// including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense,
+// and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so,
+// subject to the following conditions:
+//     * The above copyright notice and this permission notice shall be included in all copies or substantial
+//       portions of the Software.
+//     * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING
+//       BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+//       IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+//       WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+//       SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE. THE AUTHORS AND COPYRIGHT HOLDERS, HOWEVER,
+//       ACCEPT LIABILITY FOR DEATH OR PERSONAL INJURY CAUSED BY NEGLIGENCE AND FOR ALL MATTERS LIABILITY
+//       FOR WHICH MAY NOT BE LAWFULLY LIMITED OR EXCLUDED UNDER ENGLISH LAW
+
+
 #include <linux/types.h>
 #include <stdint.h>
 
-void setupBNO080(void);
+void setup(void);
 int32_t collectPacket(void);
 int32_t sendPacket(uint32_t channelNumber, uint32_t dataLength);
-void startBNO080(uint32_t dataRate);
-void configureBNO080(void);
+void start(uint32_t dataRate);
 void handleEvent(void);
 void parseGameRotationVector(void);
 void parseStabilisedRotationVector(void);
@@ -19,7 +35,7 @@ int reorient(float w, float x, float y, float z);
 void parseLinearAccelerometer(void);
 void parseEvent(void);
 void calibrationSetup(char accel, char gyro, char mag);
-void tareBNO080(void);
+void tare(void);
 int readFrsRecord(uint16_t recordType);
 int writeFrsWord(uint16_t recordType, uint32_t offset, uint32_t data);
 int readFrsWord(uint16_t recordType, uint32_t offset, uint32_t* result);

@@ -183,6 +183,7 @@ ws.onopen = function(){
     if (!nonLive){
         ws.send("DATE:" + parseInt(d.getTime()/1000));
         ws.send("SAMP:");
+        ws.send("CALI:");
         
     }
 };
@@ -334,6 +335,12 @@ function parseResult(dataBack) {
         setStatus("Received sample period of " + sampleInterval.toFixed(3) + "ms");
         return;
     }
+    
+    if (dataBack.slice(0,5) == "CALI:"){
+        setStatus("Calibration status " + dataBack.slice(5) + " (should be 133)");
+        return;
+    }
+
 
     if (dataBack.slice(0,5) == "ESTD:"){
         setStatus("Bell not at stand.  Aborting");
@@ -351,7 +358,6 @@ function parseResult(dataBack) {
         currentStatus |= ABORTFLAG;
         return;
     }
-
     setStatus(dataBack);
 };
 
@@ -915,6 +921,15 @@ fileOpenButton.onclick = function() {
     ctxBD.clearRect(posCB+1, ctxBD.canvas.height-30, CBwidth-2, 20); // clear existing timers
     updateIcons();
 }
+
+tareButton.onclick = function() {
+    if ((currentStatus & DOWNLOADINGFILE) != 0) return;
+    if ((currentStatus & PLAYBACK) != 0) return;
+    if ((currentStatus & HELPDISPLAYED) != 0) return;
+    if ((currentStatus & RECORDINGSESSION) != 0) return
+    ws.send("TARE:");
+ };
+
 
 targetSelectHand.onchange = function() {
     var h = document.getElementById("targetSelectHand");
