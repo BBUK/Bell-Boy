@@ -928,8 +928,15 @@ tareButton.onclick = function() {
     if ((currentStatus & HELPDISPLAYED) != 0) return;
     if ((currentStatus & RECORDINGSESSION) != 0) return
     ws.send("TARE:");
- };
+};
 
+clearTareButton.onclick = function() {
+    if ((currentStatus & DOWNLOADINGFILE) != 0) return;
+    if ((currentStatus & PLAYBACK) != 0) return;
+    if ((currentStatus & HELPDISPLAYED) != 0) return;
+    if ((currentStatus & RECORDINGSESSION) != 0) return
+    ws.send("CLTA:");
+};
 
 targetSelectHand.onchange = function() {
     var h = document.getElementById("targetSelectHand");

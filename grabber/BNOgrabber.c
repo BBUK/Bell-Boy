@@ -230,7 +230,7 @@ int main(int argc, char const *argv[]){
     
     setup();
     setupStabilityClassifierFrs(1.5);
-    clearPersistentTare();
+//    
 //    reorient(0,0,0,0);
 //    
 //    reorient(0.0,0.0,-1.0,0.0);
@@ -289,6 +289,10 @@ int main(int argc, char const *argv[]){
                 torn = 1;
                 tare();
                 start(ODR); // occasional hang found unless we did this
+                continue;
+            }
+            if(strcmp("CLTA:", command) == 0) {
+                clearPersistentTare();
                 continue;
             }
             if(strcmp("FILE:", command) == 0) {
@@ -598,10 +602,9 @@ void parseGyroIntegratedRotationVector(void){
         gyroIntegratedRotationVectorData.tail = (gyroIntegratedRotationVectorData.tail + 1) & 0x0F;
         gyroIntegratedRotationVectorData.available -= 1;
     }
-    
-        
+            
     gyroIntegratedRotationVectorData.rateBuffer[gyroIntegratedRotationVectorData.head] = Gx;
-    gyroIntegratedRotationVectorData.accnBuffer[gyroIntegratedRotationVectorData.head] = Gx-gyroIntegratedRotationVectorData.lastRate;
+    gyroIntegratedRotationVectorData.accnBuffer[gyroIntegratedRotationVectorData.head] = (Gx-gyroIntegratedRotationVectorData.lastRate)*ODR;
     gyroIntegratedRotationVectorData.lastRate = Gx;
     gyroIntegratedRotationVectorData.angleBuffer[gyroIntegratedRotationVectorData.head] = gameRotationVectorData.angleBuffer[(gyroIntegratedRotationVectorData.head -1) & 0x0F] + gyroIntegratedRotationVectorData.direction*rolldiff;
     gyroIntegratedRotationVectorData.head = (gyroIntegratedRotationVectorData.head + 1) & 0x0F;
@@ -672,8 +675,8 @@ void parseGameRotationVector(void){
         rolldiff += 360.0;
     }    
     gameRotationVectorData.lastRoll = roll;
-
-
+    gameRotationVectorData.lastPitch = pitch;
+    gameRotationVectorData.lastYaw = yaw;
 
     if(!RUNNING) return;  // only push data to fifo if we are on a run
 
@@ -683,7 +686,6 @@ void parseGameRotationVector(void){
         gameRotationVectorData.available -= 1;
     }
 
-    
     gameRotationVectorData.angleBuffer[gameRotationVectorData.head] =  gameRotationVectorData.angleBuffer[(gameRotationVectorData.head -1) & 0x0F] + gameRotationVectorData.direction*rolldiff;
     gameRotationVectorData.head = (gameRotationVectorData.head + 1) & 0x0F;
     gameRotationVectorData.available += 1;
@@ -753,7 +755,7 @@ void parseCalibratedGyroscope(void){
         gyroData.available -= 1;
     }
     gyroData.rateBuffer[gyroData.head] = Gx;
-    gyroData.accnBuffer[gyroData.head] = Gx-gyroData.lastRate;
+    gyroData.accnBuffer[gyroData.head] = (Gx-gyroData.lastRate)*ODR;
     gyroData.lastRate = Gx;
     gyroData.head = (gyroData.head + 1) & 0x0F;
     gyroData.available += 1;
