@@ -1,24 +1,36 @@
 //gcc BNOgrabber.c -o BNOgrabber -lm -lbcm2835
+
 /*
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+ * Copyright (c) 2017,2018 Peter Budd. All rights reserved
+ * Permission is hereby granted, free of charge, to any person obtaining a copy of this software and
+ * associated documentation files (the "Software"), to deal in the Software without restriction,
+ * including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense,
+ * and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so,
+ * subject to the following conditions:
+    * The above copyright notice and this permission notice shall be included in all copies or substantial
+      portions of the Software.
+    * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING
+      BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+      IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+      WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+      SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE. THE AUTHORS AND COPYRIGHT HOLDERS, HOWEVER,
+      ACCEPT LIABILITY FOR DEATH OR PERSONAL INJURY CAUSED BY NEGLIGENCE AND FOR ALL MATTERS LIABILITY
+      FOR WHICH MAY NOT BE LAWFULLY LIMITED OR EXCLUDED UNDER ENGLISH LAW
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+* This script forms part of the Bell-Boy project to measure the force applied by a bell ringer to a tower
+* bell rope.  The Bell-Boy uses rotational acceleration of the bell as a proxy for force applied.  The
+* hardware is currently a Pi Zero running Arch Linux.
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+* I pulled snippets of code from loads of places so if any of you recognise anything you wrote - thanks!
+
+* This program is a trial of a BNO080 device.  It pulls data from the device and pushes it
+* to the javascript running on the users browser
+* 
+* Will "work" standalone (from the command line) but just communicates with the terminal.  It is
+* intended to be interfaced with websocketd https://github.com/joewalnes/websocketd to connect to 
+* browsers
+
 */
-
 #include <math.h>
 #include <sys/time.h>
 #include <time.h>
@@ -47,8 +59,11 @@ SOFTWARE.
 #define INTPIN 23
 #define RESETPIN 24
 #define WAKPS0PIN 25
-#define QP(n) (1.0 / (1 << n))  
-#define ODR 50
+#define QP(n) (pow(2,-n)) 
+#define ODR 200
+#define BUFFERSIZE 32
+#define PUSHBATCH 20
+
 struct timeval current;
 
 char READ_OUTBUF[1500];
@@ -87,6 +102,11 @@ FILE *fd_write_out;
 # (g)   SAMP: requests the current sample period
 # (h)   SHDN: tells the device to shutdown
 # (i)   CALI: tells the device to provide calibration and tare data
+# (j)   TARE: tares the device in the current position (bell down)
+# (k)   CLTA: clears the current tare
+# (l)   DOTA: marks tare as already done - useful when tare was done but you need
+#               to reset things with the bell at stand
+# 
 # 
 # There are the following responses back to the user's browser:
 # (i)   STPD: tells the browser that the device has sucessfully stopped sampling
@@ -108,17 +128,8 @@ FILE *fd_write_out;
 # (xiv) STRT: in response to STRT: indicates a sucessful start.
 # (xv)  LFIN:[number] indicates the end of a file download and the number of samples sent
 * (xvi) CALI:returns certain calibration/tare data
-*/
 
-/*
-* Command line arguments bb_grabber {1} {2} {3} {4}
-* {1} = Operational data rate (ODR). One of 500, 200, 100 and 50 samples per second.
-* {2} = gyro full scale range. One of 500 and 1000 (in degrees/second).
-* {3} = accelerometer full scale range.  One of 2 and 4 (g).
-* {4} = (optional) smooth factor.  If nothing entered here 0.92 is used
-* Example: bb_grabber 200 500 4 0.94
 * Commands (see above) are received on stdin and output is on stdout.
-* Will work standalone but intended to be interfaced with websocketd https://github.com/joewalnes/websocketd
 */
 
 struct {
@@ -133,12 +144,13 @@ struct {
 } spiWrite;
 
 struct {
-    float rateBuffer[16];
-    float accnBuffer[16];
-    int head;
-    int tail;
+    float rateBuffer[BUFFERSIZE];
+    float accnBuffer[BUFFERSIZE];
+    unsigned int head;
+    unsigned int tail;
     unsigned int available;
     unsigned int status;
+    unsigned int lastSequence;
     unsigned int requestedInterval;
     unsigned int reportInterval;
     unsigned int lastReportTimestamp;
@@ -146,53 +158,70 @@ struct {
 } gyroData={ .head=0, .tail=0, .available=0, .lastReportTimestamp=0, .lastRate=0 };
 
 struct {
-    float angleBuffer[16];
-    float rateBuffer[16];
-    float accnBuffer[16];
-    int head;
-    int tail;
+    float angleBuffer[BUFFERSIZE];
+    float rateBuffer[BUFFERSIZE];
+    float accnBuffer[BUFFERSIZE];
+    unsigned int head;
+    unsigned int tail;
     unsigned int available;
     float direction;
     float lastYaw;
     float lastPitch;
     float lastRoll;
+    unsigned int lastSequence;
     unsigned int requestedInterval;
     unsigned int reportInterval;
     unsigned int lastReportTimestamp;
     float lastRate;
 } gyroIntegratedRotationVectorData ={ .head=0, .tail=0, .available=0, .lastReportTimestamp=0 };
 
-
 struct {
-    float angleBuffer[16];
-    int head;
-    int tail;
+    float angleBuffer[BUFFERSIZE];
+    unsigned int head;
+    unsigned int tail;
     unsigned int available;
     float direction;
     unsigned int status;
     float lastYaw;
     float lastPitch;
     float lastRoll;
+    unsigned int lastSequence;
     unsigned int requestedInterval;
     unsigned int reportInterval;
     unsigned int lastReportTimestamp;
 } gameRotationVectorData ={ .head=0, .tail=0, .available=0, .lastReportTimestamp=0 };
 
 struct {
-    float XBuffer[16];
-    float YBuffer[16];
-    float ZBuffer[16];
-    int head;
-    int tail;
+    float XBuffer[BUFFERSIZE];
+    float YBuffer[BUFFERSIZE];
+    float ZBuffer[BUFFERSIZE];
+    unsigned int head;
+    unsigned int tail;
     unsigned int available;
     unsigned int status;
+    unsigned int lastSequence;
     unsigned int requestedInterval;
     unsigned int reportInterval;
     unsigned int lastReportTimestamp;
 } linearAccelerometerData={ .head=0, .tail=0, .available=0, .lastReportTimestamp=0 };
 
 struct {
+    float XBuffer[BUFFERSIZE];
+    float YBuffer[BUFFERSIZE];
+    float ZBuffer[BUFFERSIZE];
+    unsigned int head;
+    unsigned int tail;
+    unsigned int available;
     unsigned int status;
+    unsigned int lastSequence;
+    unsigned int requestedInterval;
+    unsigned int reportInterval;
+    unsigned int lastReportTimestamp;
+} accelerometerData={ .head=0, .tail=0, .available=0, .lastReportTimestamp=0 };
+
+struct {
+    unsigned int status;
+    unsigned int lastSequence;
     unsigned int requestedInterval;
     unsigned int reportInterval;
     unsigned int lastReportTimestamp;
@@ -236,7 +265,6 @@ int main(int argc, char const *argv[]){
 //    reorient(0.0,0.0,-1.0,0.0);
 
     start(ODR);
-
     while(!sig_exit){
         usleep(LOOPSLEEP);
         LOOPCOUNT += 1;        
@@ -283,7 +311,6 @@ int main(int argc, char const *argv[]){
                 printf("CALI:%d %d %d\n",torn,gameRotationVectorData.status,gyroData.status);
                 continue;
             }
-            
             if(strcmp("TARE:", command) == 0) {
                 saveCalibration();
                 torn = 1;
@@ -295,6 +322,11 @@ int main(int argc, char const *argv[]){
                 clearPersistentTare();
                 continue;
             }
+
+            if(strcmp("DOTA:", command) == 0) {
+                torn=1;
+                continue;
+            }            
             if(strcmp("FILE:", command) == 0) {
                 DIR *d;
                 struct dirent *dir;
@@ -321,6 +353,7 @@ int main(int argc, char const *argv[]){
                 if(fd_write_out == NULL) {
                     fprintf(stderr, "Could not open file for writing\n");
                     printf("ESTR:\n");
+                    printf("STPD:\n");
                     continue;
                 } else {
                     printf("STRT:\n"); 
@@ -334,6 +367,7 @@ int main(int argc, char const *argv[]){
                     fd_write_out = NULL;
                 }
                 RUNNING = 0;
+//                calibrationSetup(1,1,1);
                 printf("STPD:%d\n",OUT_COUNT);
                 continue;
             }
@@ -395,17 +429,20 @@ int startRun(void){
 
 // reset fifos
     gameRotationVectorData.head = 1;
-    gameRotationVectorData.tail = 0;
-    gameRotationVectorData.available = 1;  // one is added by this routine
-//    gyroIntegratedRotationVectorData.head = 1;
-//    gyroIntegratedRotationVectorData.tail = 0;
-//    gyroIntegratedRotationVectorData.available = 1;
+    gameRotationVectorData.tail = 1;  // this function puts the starting angle in the fifo
+    gameRotationVectorData.available = 0;
+    gyroIntegratedRotationVectorData.head = 1;
+    gyroIntegratedRotationVectorData.tail = 1;
+    gyroIntegratedRotationVectorData.available = 0;
     linearAccelerometerData.head = 0;
     linearAccelerometerData.tail = 0;
     linearAccelerometerData.available = 0;
     gyroData.head = 0;
     gyroData.tail = 0;
     gyroData.available = 0;
+    accelerometerData.head = 0;
+    accelerometerData.tail = 0;
+    accelerometerData.available = 0;
     
     if(stabilityData.status != 1 && stabilityData.status != 2) {
         printf("EMOV:\n"); // bell is moving
@@ -416,14 +453,25 @@ int startRun(void){
         return(0);
     }
     
-    calibrationSetup(0,0,0); // disable calibration
+    calibrationSetup(0,0,0); // disable auto calibration
     if(gameRotationVectorData.lastRoll < 0) {  // this bit works out which way the bell rose and adjusts accordingly
         gameRotationVectorData.direction = -1;
         gameRotationVectorData.angleBuffer[0] = -180.0-gameRotationVectorData.lastRoll;
+        
     } else {
         gameRotationVectorData.direction = +1;
         gameRotationVectorData.angleBuffer[0] = gameRotationVectorData.lastRoll-180.0;
     }
+
+    if(gyroIntegratedRotationVectorData.lastRoll < 0) {  // this bit works out which way the bell rose and adjusts accordingly
+        gyroIntegratedRotationVectorData.direction = -1;
+        gyroIntegratedRotationVectorData.angleBuffer[0] = -180.0-gyroIntegratedRotationVectorData.lastRoll;
+    } else {
+        gyroIntegratedRotationVectorData.direction = +1;
+        gyroIntegratedRotationVectorData.angleBuffer[0] = gyroIntegratedRotationVectorData.lastRoll-180.0;
+    }
+    
+    
     RUNNING = 1;
     return(1);
 }
@@ -437,57 +485,101 @@ void handleEvent(void){
     }
 }
 
+// this may not be needed
 void alignFIFOs(void){
     if(gyroData.available >= 3){
-        if ((gyroData.available - 3) > gameRotationVectorData.available ||
-            (gyroData.available - 3) > linearAccelerometerData.available){
-                gyroData.tail = (gyroData.tail + 1) & 0x0F; // ditch a sample don't forget that there is a gyro accelerometer reading here too
+        if ((gyroData.available - 3) > gameRotationVectorData.available) {
+//            (gyroData.available - 3) > gyroIntegratedRotationVectorData.available ||
+            (gyroData.available - 3) > accelerometerData.available ||
+//            (gyroData.available - 3) > linearAccelerometerData.available){
+                gyroData.tail = (gyroData.tail + 1) % BUFFERSIZE; // ditch a sample don't forget that there is a gyro accelerometer reading here too
                 gyroData.available -= 1;
                 printf("Ditched rate sample\n");
         }
     }
 
     if(gameRotationVectorData.available >= 3){
-        if ((gameRotationVectorData.available - 3) > gyroData.available ||
-            (gameRotationVectorData.available - 3) > linearAccelerometerData.available){
-                gameRotationVectorData.tail = (gameRotationVectorData.tail + 1) & 0x0F; // ditch a sample
+        if ((gameRotationVectorData.available - 3) > gyroData.available) {
+//            (gameRotationVectorData.available - 3) > gyroIntegratedRotationVectorData.available ||
+            (gameRotationVectorData.available - 3) > accelerometerData.available ||
+//            (gameRotationVectorData.available - 3) > linearAccelerometerData.available){
+                gameRotationVectorData.tail = (gameRotationVectorData.tail + 1) % BUFFERSIZE; // ditch a sample
                 gameRotationVectorData.available -= 1;
                 printf("Ditched angle sample\n");
         }
     }
-    
+
+/*
+    if(gyroIntegratedRotationVectorData.available >= 3){
+        if ((gyroIntegratedRotationVectorData.available - 3) > gyroData.available ||
+            (gyroIntegratedRotationVectorData.available - 3) > gameRotationVectorData.available ||
+            (gyroIntegratedRotationVectorData.available - 3) > accelerometerData.available ||
+            (gyroIntegratedRotationVectorData.available - 3) > linearAccelerometerData.available){
+                gyroIntegratedRotationVectorData.tail = (gyroIntegratedRotationVectorData.tail + 1) % BUFFERSIZE; // ditch a sample
+                gyroIntegratedRotationVectorData.available -= 1;
+                printf("Ditched GI sample\n");
+        }
+    }
+
     if(linearAccelerometerData.available >= 3){
         if ((linearAccelerometerData.available - 3) > gyroData.available ||
+            (linearAccelerometerData.available - 3) > gyroIntegratedRotationVectorData.available ||
+            (linearAccelerometerData.available - 3) > accelerometerData.available ||
             (linearAccelerometerData.available - 3) > gameRotationVectorData.available){
-                linearAccelerometerData.tail = (linearAccelerometerData.tail + 1) & 0x0F; // ditch a sample
+                linearAccelerometerData.tail = (linearAccelerometerData.tail + 1) % BUFFERSIZE; // ditch a sample
                 linearAccelerometerData.available -= 1;
                 printf("Ditched linacc sample\n");
         }
     }
+*/
+    
+    if(accelerometerData.available >= 3){
+        if ((accelerometerData.available - 3) > gyroData.available ||
+//            (accelerometerData.available - 3) > gyroIntegratedRotationVectorData.available ||
+//            (accelerometerData.available - 3) > linearAccelerometerData.available ||
+            (accelerometerData.available - 3) > gameRotationVectorData.available){
+                accelerometerData.tail = (accelerometerData.tail + 1) % BUFFERSIZE; // ditch a sample
+                accelerometerData.available -= 1;
+                printf("Ditched acc sample\n"); // running at 16ms when the rest is at 20ms
+        }
+    }
+
 }
 
 void pushData(void){
-    uint16_t statuses = gyroData.status | (linearAccelerometerData.status << 4) | (gameRotationVectorData.status << 8);
-    char output[1024];
+//    uint16_t statuses = gyroData.status | (linearAccelerometerData.status << 4) | (gameRotationVectorData.status << 8);
+
+    uint16_t statuses = gyroData.status | (gameRotationVectorData.status << 4);
+
+    char output[2048];
     int outputCount = 0;
 
-//    if (gyroIntegratedRotationVectorData.available >=10){
+//    if (){
 
-    if (gyroData.available >=10 && linearAccelerometerData.available >=10 && gameRotationVectorData.available >=10){
+//    if (gyroData.available >=10 && linearAccelerometerData.available >=10 && gameRotationVectorData.available >=10 && gyroIntegratedRotationVectorData.available >=10  && accelerometerData.available >= 10){
 //        printf("Gyro: %d, LinAcc: %d, Angle: %d",gyroData.available, linearAccelerometerData.available, gameRotationVectorData.available);
-        for(int counter = 0; counter < 10; ++counter){
+    if (gyroData.available >= PUSHBATCH && gameRotationVectorData.available >= PUSHBATCH){
+        for(int counter = 0; counter < PUSHBATCH; ++counter){
 //            printf("A:%+07.1f,R:%+07.1f,C:%+07.1f\n", gyroIntegratedRotationVectorData.angleBuffer[gyroIntegratedRotationVectorData.tail], gyroIntegratedRotationVectorData.rateBuffer[gyroIntegratedRotationVectorData.tail], gyroIntegratedRotationVectorData.accnBuffer[gyroIntegratedRotationVectorData.tail]);
-            outputCount += sprintf(&output[outputCount],"LIVE:A:%+07.1f,R:%+07.1f,C:%+07.1f,LA:%+07.1f,S:%04X\n", gameRotationVectorData.angleBuffer[gameRotationVectorData.tail], gyroData.rateBuffer[gyroData.tail]*gameRotationVectorData.direction, gyroData.accnBuffer[gyroData.tail]*gameRotationVectorData.direction, 25*linearAccelerometerData.YBuffer[linearAccelerometerData.tail]*gameRotationVectorData.direction,statuses);
-//            gyroIntegratedRotationVectorData.tail = (gyroIntegratedRotationVectorData + 1) & 0x0F
-            gameRotationVectorData.tail = (gameRotationVectorData.tail + 1) & 0x0F;
-            gyroData.tail = (gyroData.tail + 1) & 0x0F;
-            linearAccelerometerData.tail = (linearAccelerometerData.tail + 1) & 0x0F;
+//            outputCount += sprintf(&output[outputCount],"LIVE:A:%+07.1f,R:%+07.1f,C:%+07.1f,LA:%+07.1f,AC:%+07.1f,GI:%+07.1f,S:%04X\n", gameRotationVectorData.angleBuffer[gameRotationVectorData.tail], gyroData.rateBuffer[gyroData.tail]*gameRotationVectorData.direction, gyroData.accnBuffer[gyroData.tail]*gameRotationVectorData.direction, linearAccelerometerData.YBuffer[linearAccelerometerData.tail],accelerometerData.YBuffer[accelerometerData.tail],gyroIntegratedRotationVectorData.angleBuffer[gyroIntegratedRotationVectorData.tail],statuses);
+            outputCount += sprintf(&output[outputCount],"LIVE:A:%+07.1f,R:%+07.1f,C:%+07.1f,AC:%+07.1f,S:%04X\n", gameRotationVectorData.angleBuffer[gameRotationVectorData.tail], gyroData.rateBuffer[gyroData.tail]*gameRotationVectorData.direction, gyroData.accnBuffer[gyroData.tail]*gameRotationVectorData.direction,accelerometerData.YBuffer[accelerometerData.tail]*gameRotationVectorData.direction,statuses);
+//            outputCount += sprintf(&output[outputCount],"LIVE:A:%+07.1f,R:%+07.1f,C:%+07.1f,S:%04X\n", gameRotationVectorData.angleBuffer[gameRotationVectorData.tail], gyroData.rateBuffer[gyroData.tail]*gameRotationVectorData.direction, gyroData.accnBuffer[gyroData.tail]*gameRotationVectorData.direction,statuses);
+
+
+
+//            gyroIntegratedRotationVectorData.tail = (gyroIntegratedRotationVectorData + 1) % BUFFERSIZE
+            gameRotationVectorData.tail = (gameRotationVectorData.tail + 1) % BUFFERSIZE;
+            gyroData.tail = (gyroData.tail + 1) % BUFFERSIZE;
+//            linearAccelerometerData.tail = (linearAccelerometerData.tail + 1) % BUFFERSIZE;
+//            gyroIntegratedRotationVectorData.tail = (gyroIntegratedRotationVectorData.tail + 1) % BUFFERSIZE;
+//            accelerometerData.tail = (accelerometerData.tail + 1) % BUFFERSIZE;
         }
 //        gyroIntegratedRotationVectorData.available -=10;
-        gameRotationVectorData.available -= 10;
-        gyroData.available -= 10;
-        linearAccelerometerData.available -= 10;
-        OUT_COUNT += 10;
+        gameRotationVectorData.available -= PUSHBATCH;
+        gyroData.available -= PUSHBATCH;
+//        linearAccelerometerData.available -= 10;
+//        accelerometerData.available -= 10;
+        OUT_COUNT += PUSHBATCH;
         
         printf("%s",output);
         fputs(output,fd_write_out);
@@ -503,12 +595,12 @@ void parseEvent(void){
             case SENSOR_REPORTID_ARVR_STABILIZED_ROTATION_VECTOR:       parseStabilisedRotationVector(); break;
             case SENSOR_REPORTID_ARVR_STABILIZED_GAME_ROTATION_VECTOR:  parseStabilisedGameRotationVector(); break;
             case SENSOR_REPORTID_GYROSCOPE_CALIBRATED:                  parseCalibratedGyroscope(); break;
-//            case SENSOR_REPORTID_ACCELEROMETER:                         parseAccelerometer(); break;
+            case SENSOR_REPORTID_ACCELEROMETER:                         parseAccelerometer(); break;
             case SENSOR_REPORTID_LINEAR_ACCELERATION:                   parseLinearAccelerometer(); break;
             case SENSOR_REPORTID_STABILITY_CLASSIFIER:                  parseStability(); break;
             default: printf("Unhandled report event: CHANNEL: %02X, SEQUENCE: %02X BYTES: %02X, %02X, %02X, %02X, %02X, %02X, %02X, %02X, %02X\n", spiRead.channel, spiRead.sequence, spiRead.buffer[0], spiRead.buffer[1], spiRead.buffer[2], spiRead.buffer[3], spiRead.buffer[4], spiRead.buffer[5], spiRead.buffer[6], spiRead.buffer[7], spiRead.buffer[8]);
-
         }
+        return;
     }
 
     if(spiRead.channel == CHANNEL_CONTROL) {
@@ -519,21 +611,40 @@ void parseEvent(void){
             case SHTP_REPORT_FRS_WRITE_RESPONSE:    break; // sometimes get a few of these for each write - ignore them
             default: printf("Unhandled control event: CHANNEL: %02X, SEQUENCE: %02X BYTES: %02X, %02X, %02X, %02X, %02X, %02X, %02X, %02X, %02X\n", spiRead.channel, spiRead.sequence, spiRead.buffer[0], spiRead.buffer[1], spiRead.buffer[2], spiRead.buffer[3], spiRead.buffer[4], spiRead.buffer[5], spiRead.buffer[6], spiRead.buffer[7], spiRead.buffer[8]);
         }
+        return;
     }
     
     if(spiRead.channel == CHANNEL_GYRO) parseGyroIntegratedRotationVector();
 }
 
 void reportFeatureResponse(void){
-    float reportInterval = (float)((spiRead.buffer[8 ] << 24) + (spiRead.buffer[7 ] << 16) + (spiRead.buffer[6 ] << 8) + spiRead.buffer[5])/1000.0;
-    float batchInterval =  (float)((spiRead.buffer[12] << 24) + (spiRead.buffer[11] << 16) + (spiRead.buffer[10] << 8) + spiRead.buffer[9])/1000.0;
+    float reportInterval = (spiRead.buffer[8 ] << 24) + (spiRead.buffer[7 ] << 16) + (spiRead.buffer[6 ] << 8) + spiRead.buffer[5];
+    float batchInterval =  (spiRead.buffer[12] << 24) + (spiRead.buffer[11] << 16) + (spiRead.buffer[10] << 8) + spiRead.buffer[9];
     switch(spiRead.buffer[1]){
-//        case SENSOR_REPORTID_ACCELEROMETER:         break;
-        case SENSOR_REPORTID_GAME_ROTATION_VECTOR:  gameRotationVectorData.reportInterval = reportInterval; break;
-        case SENSOR_REPORTID_GYROSCOPE_CALIBRATED:  gyroData.reportInterval = reportInterval; break;
-        case SENSOR_REPORTID_LINEAR_ACCELERATION:   linearAccelerometerData.reportInterval = reportInterval; break;
-        case SENSOR_REPORTID_STABILITY_CLASSIFIER:  stabilityData.reportInterval = reportInterval; break;
-        case SENSOR_REPORTID_GYRO_INTEGRATED_ROTATION_VECTOR: gyroIntegratedRotationVectorData.reportInterval = reportInterval; break;
+        case SENSOR_REPORTID_GAME_ROTATION_VECTOR:  
+            gameRotationVectorData.reportInterval = reportInterval; 
+            if(gameRotationVectorData.reportInterval != gameRotationVectorData.requestedInterval) printf("Warning: GRV data rate mismatch: %d\n",reportInterval);
+            break;
+        case SENSOR_REPORTID_GYROSCOPE_CALIBRATED:  
+            gyroData.reportInterval = reportInterval;
+            if(gyroData.reportInterval != gyroData.requestedInterval) printf("Warning: Gyro data rate mismatch: %d\n",reportInterval);
+            break;
+        case SENSOR_REPORTID_LINEAR_ACCELERATION:   
+            linearAccelerometerData.reportInterval = reportInterval;
+            if(linearAccelerometerData.reportInterval != linearAccelerometerData.requestedInterval) printf("Warning: LinAcc data rate mismatch: %d\n", reportInterval);
+            break;
+        case SENSOR_REPORTID_ACCELEROMETER:         
+            accelerometerData.reportInterval = reportInterval; 
+            if(accelerometerData.reportInterval != accelerometerData.requestedInterval) printf("Warning: Acc data rate mismatch: %d\n",reportInterval);
+            break;
+        case SENSOR_REPORTID_STABILITY_CLASSIFIER:  
+            stabilityData.reportInterval = reportInterval; 
+            if(stabilityData.reportInterval != stabilityData.requestedInterval) printf("Warning: Stability data rate mismatch: %d\n",reportInterval);
+            break;
+        case SENSOR_REPORTID_GYRO_INTEGRATED_ROTATION_VECTOR: 
+            gyroIntegratedRotationVectorData.reportInterval = reportInterval;
+            if(gyroIntegratedRotationVectorData.reportInterval != gyroIntegratedRotationVectorData.requestedInterval) printf("Warning: GIRV data rate mismatch: %d\n",reportInterval);
+            break;
         default: printf("Unhandled FR event: CHANNEL: %02X, SEQUENCE: %02X BYTES: %02X, %02X, %02X, %02X, %02X, %02X, %02X, %02X, %02X\n", spiRead.channel, spiRead.sequence, spiRead.buffer[0], spiRead.buffer[1], spiRead.buffer[2], spiRead.buffer[3], spiRead.buffer[4], spiRead.buffer[5], spiRead.buffer[6], spiRead.buffer[7], spiRead.buffer[8]);
     }
 }
@@ -590,28 +701,33 @@ void parseGyroIntegratedRotationVector(void){
     } else if (rolldiff < -250.0) {
         rolldiff += 360.0;
     }
- 
+    
     gyroIntegratedRotationVectorData.lastRoll = roll;
     gyroIntegratedRotationVectorData.lastPitch = pitch;
     gyroIntegratedRotationVectorData.lastYaw = yaw;
 
     if(!RUNNING) return;  // only push data to fifo if we are on a run
 
-    if (gyroIntegratedRotationVectorData.available == 15) {
+    if (gyroIntegratedRotationVectorData.available == (BUFFERSIZE - 2)) {
         printf("Rate buffer full.  Ditching oldest sample\n");
-        gyroIntegratedRotationVectorData.tail = (gyroIntegratedRotationVectorData.tail + 1) & 0x0F;
+        gyroIntegratedRotationVectorData.tail = (gyroIntegratedRotationVectorData.tail + 1) % BUFFERSIZE;
         gyroIntegratedRotationVectorData.available -= 1;
     }
             
     gyroIntegratedRotationVectorData.rateBuffer[gyroIntegratedRotationVectorData.head] = Gx;
     gyroIntegratedRotationVectorData.accnBuffer[gyroIntegratedRotationVectorData.head] = (Gx-gyroIntegratedRotationVectorData.lastRate)*ODR;
     gyroIntegratedRotationVectorData.lastRate = Gx;
-    gyroIntegratedRotationVectorData.angleBuffer[gyroIntegratedRotationVectorData.head] = gameRotationVectorData.angleBuffer[(gyroIntegratedRotationVectorData.head -1) & 0x0F] + gyroIntegratedRotationVectorData.direction*rolldiff;
-    gyroIntegratedRotationVectorData.head = (gyroIntegratedRotationVectorData.head + 1) & 0x0F;
+    unsigned int lastHead = (gyroIntegratedRotationVectorData.head == 0) ? BUFFERSIZE-1 : gyroIntegratedRotationVectorData.head -1;
+    gyroIntegratedRotationVectorData.angleBuffer[gyroIntegratedRotationVectorData.head] = gyroIntegratedRotationVectorData.angleBuffer[lastHead] + gyroIntegratedRotationVectorData.direction*rolldiff;
+    gyroIntegratedRotationVectorData.head = (gyroIntegratedRotationVectorData.head + 1) % BUFFERSIZE;
     gyroIntegratedRotationVectorData.available += 1;
 }
 
 void parseGameRotationVector(void){
+    uint8_t newSequence = spiRead.buffer[5 + 1];
+    if(newSequence == gameRotationVectorData.lastSequence) return; // sometimes HINT is not brought low quickly, this checks to see if we are reading a report we have already seen.
+    gameRotationVectorData.lastSequence = newSequence;
+
     uint8_t status = spiRead.buffer[5 + 2] & 0x03;
    
 //    uint32_t timebase = (uint32_t)((spiRead.buffer[4] << 24) + (spiRead.buffer[3] << 16 ) + (spiRead.buffer[2] << 8) + spiRead.buffer[1]);
@@ -659,9 +775,15 @@ void parseGameRotationVector(void){
 
 */
 
-    float yaw   =  atan2((Qx * Qy + Qw * Qz), ((Qw * Qw + Qx * Qx) - 0.5f)) * RADIANS_TO_DEGREES_MULTIPLIER;   
-    float pitch = -asin(2.0f * (Qx * Qz - Qw * Qy))* RADIANS_TO_DEGREES_MULTIPLIER;
-    float roll  =  atan2((Qw * Qx + Qy * Qz), ((Qw * Qw + Qz * Qz) - 0.5f))* RADIANS_TO_DEGREES_MULTIPLIER;
+// https://math.stackexchange.com/questions/687964/getting-euler-tait-bryan-angles-from-quaternion-representation
+//    float yaw   =  atan2(Qx * Qy + Qw * Qz, 0.5 - (Qw * Qw + Qx * Qx)) * RADIANS_TO_DEGREES_MULTIPLIER;   
+//    float pitch = asin(-2.0 * (Qx * Qz - Qw * Qy))* RADIANS_TO_DEGREES_MULTIPLIER;
+//    float roll  =  atan2(Qw * Qx + Qy * Qz, 0.5 - (Qw * Qw + Qz * Qz))* RADIANS_TO_DEGREES_MULTIPLIER;
+
+
+    float yaw   =  atan2(Qx * Qy + Qw * Qz, (Qw * Qw + Qx * Qx) - 0.5) * RADIANS_TO_DEGREES_MULTIPLIER;   
+    float pitch = -asin(2.0 * (Qx * Qz - Qw * Qy)) * RADIANS_TO_DEGREES_MULTIPLIER;
+    float roll  =  atan2(Qw * Qx + Qy * Qz, (Qw * Qw + Qz * Qz) - 0.5) * RADIANS_TO_DEGREES_MULTIPLIER;
 
 
     gameRotationVectorData.status = status;
@@ -674,27 +796,34 @@ void parseGameRotationVector(void){
     } else if (rolldiff < -250.0) {
         rolldiff += 360.0;
     }    
+
     gameRotationVectorData.lastRoll = roll;
     gameRotationVectorData.lastPitch = pitch;
     gameRotationVectorData.lastYaw = yaw;
 
     if(!RUNNING) return;  // only push data to fifo if we are on a run
 
-    if (gameRotationVectorData.available == 15) {
+    if (gameRotationVectorData.available == (BUFFERSIZE - 2)) {
         printf("Angle buffer full.  Ditching oldest sample\n");
-        gameRotationVectorData.tail = (gameRotationVectorData.tail + 1) & 0x0F;
+        gameRotationVectorData.tail = (gameRotationVectorData.tail + 1) % BUFFERSIZE;
         gameRotationVectorData.available -= 1;
     }
 
-    gameRotationVectorData.angleBuffer[gameRotationVectorData.head] =  gameRotationVectorData.angleBuffer[(gameRotationVectorData.head -1) & 0x0F] + gameRotationVectorData.direction*rolldiff;
-    gameRotationVectorData.head = (gameRotationVectorData.head + 1) & 0x0F;
+    unsigned int lastHead = (gameRotationVectorData.head == 0) ? BUFFERSIZE-1 : gameRotationVectorData.head -1;
+    gameRotationVectorData.angleBuffer[gameRotationVectorData.head] =  gameRotationVectorData.angleBuffer[lastHead] + gameRotationVectorData.direction*rolldiff;
+    gameRotationVectorData.head = (gameRotationVectorData.head + 1) % BUFFERSIZE;
     gameRotationVectorData.available += 1;
 
 //    printf("Game Rotation Vector.  S: %d R:%+07.1f, P:%+07.1f, Y:%+07.1f, Sequence: %02X, Buff: %d\n", status, roll, pitch, yaw, spiRead.sequence, gameRotationVectorData.available);
 }
 
 void parseLinearAccelerometer(void){
+    uint8_t newSequence = spiRead.buffer[5 + 1];
+    if(newSequence == linearAccelerometerData.lastSequence) return; // sometimes HINT is not brought low quickly, this checks to see if we are reading a report we have already seen.
+    linearAccelerometerData.lastSequence = newSequence;
+
     uint8_t status = spiRead.buffer[5 + 2] & 0x03;
+    
 //    uint32_t timebase = (uint32_t)((spiRead.buffer[4] << 24) + (spiRead.buffer[3] << 16 ) + (spiRead.buffer[2] << 8) + spiRead.buffer[1]);
     float Ax = (float)((spiRead.buffer[5 + 5] << 8) + spiRead.buffer[5 + 4]);
     float Ay = (float)((spiRead.buffer[5 + 7] << 8) + spiRead.buffer[5 + 6]);
@@ -704,9 +833,9 @@ void parseLinearAccelerometer(void){
     if(Ay >= 0x8000) Ay -= 0x10000;
     if(Az >= 0x8000) Az -= 0x10000;
 
-    Ax *= QP(8);
-    Ay *= QP(8);
-    Az *= QP(8);
+    Ax *= QP(8) * 100;
+    Ay *= QP(8) * 100;
+    Az *= QP(8) * 100;
 
     linearAccelerometerData.status = status;
     gettimeofday(&current, NULL);
@@ -714,23 +843,69 @@ void parseLinearAccelerometer(void){
 
     if(!RUNNING) return;  // only push data to fifo if we are on a run
 
-    if (linearAccelerometerData.available == 15) {
+    if (linearAccelerometerData.available == (BUFFERSIZE - 2)) {
         printf("Lin Acc buffer full.  Ditching oldest sample\n");
-        linearAccelerometerData.tail = (linearAccelerometerData.tail + 1) & 0x0F;
+        linearAccelerometerData.tail = (linearAccelerometerData.tail + 1) % BUFFERSIZE;
         linearAccelerometerData.available -= 1;
     }
     linearAccelerometerData.XBuffer[linearAccelerometerData.head] = Ax;
     linearAccelerometerData.YBuffer[linearAccelerometerData.head] = Ay;
     linearAccelerometerData.ZBuffer[linearAccelerometerData.head] = Az;
-    linearAccelerometerData.head = (linearAccelerometerData.head + 1) & 0x0F;
+    linearAccelerometerData.head = (linearAccelerometerData.head + 1) % BUFFERSIZE;
     linearAccelerometerData.available += 1;
     
 //    printf("Lin. Accel.  S: %d X:%+07.2f, Y:%+07.2f, Z:%+07.2f, Sequence: %02X, Buff: %d\n", status, Ax, Ay, Az, spiRead.sequence, CB_linaccn.available);
 }
 
-void parseCalibratedGyroscope(void){
+void parseAccelerometer(void){
+    uint8_t newSequence = spiRead.buffer[5 + 1];
+    if(newSequence == accelerometerData.lastSequence) return; // sometimes HINT is not brought low quickly, this checks to see if we are reading a report we have already seen.
+    accelerometerData.lastSequence = newSequence;
+
     uint8_t status = spiRead.buffer[5 + 2] & 0x03;
+    
 //    uint32_t timebase = (uint32_t)((spiRead.buffer[4] << 24) + (spiRead.buffer[3] << 16 ) + (spiRead.buffer[2] << 8) + spiRead.buffer[1]);
+    float Ax = (float)((spiRead.buffer[5 + 5] << 8) + spiRead.buffer[5 + 4]);
+    float Ay = (float)((spiRead.buffer[5 + 7] << 8) + spiRead.buffer[5 + 6]);
+    float Az = (float)((spiRead.buffer[5 + 9] << 8) + spiRead.buffer[5 + 8]);
+    
+    if(Ax >= 0x8000) Ax -= 0x10000;
+    if(Ay >= 0x8000) Ay -= 0x10000;
+    if(Az >= 0x8000) Az -= 0x10000;
+
+    Ax *= QP(8) * 100;
+    Ay *= QP(8) * 100;
+    Az *= QP(8) * 100;
+
+    accelerometerData.status = status;
+    gettimeofday(&current, NULL);
+    accelerometerData.lastReportTimestamp= (unsigned int)((current.tv_sec)*1000 +(current.tv_usec)/1000);
+
+    if(!RUNNING) return;  // only push data to fifo if we are on a run
+
+    if (accelerometerData.available == (BUFFERSIZE - 2)) {
+        printf("Lin Acc buffer full.  Ditching oldest sample\n");
+        accelerometerData.tail = (accelerometerData.tail + 1) % BUFFERSIZE;
+        accelerometerData.available -= 1;
+    }
+    accelerometerData.XBuffer[accelerometerData.head] = Ax;
+    accelerometerData.YBuffer[accelerometerData.head] = Ay;
+    accelerometerData.ZBuffer[accelerometerData.head] = Az;
+    accelerometerData.head = (accelerometerData.head + 1) % BUFFERSIZE;
+    accelerometerData.available += 1;
+    
+//    printf("Accel.  S: %d X:%+07.2f, Y:%+07.2f, Z:%+07.2f, Sequence: %02X, Buff: %d\n", status, Ax, Ay, Az, spiRead.sequence, CB_linaccn.available);
+}
+
+
+void parseCalibratedGyroscope(void){
+    uint8_t newSequence = spiRead.buffer[5 + 1];
+    if(newSequence == gyroData.lastSequence) return; // sometimes HINT is not brought low quickly, this checks to see if we are reading a report we have already seen.
+    gyroData.lastSequence = newSequence;
+//    uint32_t timebase = (uint32_t)((spiRead.buffer[4] << 24) + (spiRead.buffer[3] << 16 ) + (spiRead.buffer[2] << 8) + spiRead.buffer[1]);
+
+    uint8_t status = spiRead.buffer[5 + 2] & 0x03;
+
     float Gx = (float)((spiRead.buffer[5 + 5] << 8) + spiRead.buffer[5 + 4]);
     float Gy = (float)((spiRead.buffer[5 + 7] << 8) + spiRead.buffer[5 + 6]);
     float Gz = (float)((spiRead.buffer[5 + 9] << 8) + spiRead.buffer[5 + 8]);
@@ -749,20 +924,25 @@ void parseCalibratedGyroscope(void){
 
     if(!RUNNING) return;  // only push data to fifo if we are on a run
 
-    if (gyroData.available == 15) {
+    if (gyroData.available == (BUFFERSIZE - 2)) {
         printf("Rate buffer full.  Ditching oldest sample\n");
-        gyroData.tail = (gyroData.tail + 1) & 0x0F;
+        gyroData.tail = (gyroData.tail + 1) % BUFFERSIZE;
         gyroData.available -= 1;
     }
     gyroData.rateBuffer[gyroData.head] = Gx;
     gyroData.accnBuffer[gyroData.head] = (Gx-gyroData.lastRate)*ODR;
     gyroData.lastRate = Gx;
-    gyroData.head = (gyroData.head + 1) & 0x0F;
+    gyroData.head = (gyroData.head + 1) % BUFFERSIZE;
     gyroData.available += 1;
 }
 
-void parseStability(void){
+void parseStability(void){    
+    uint8_t newSequence = spiRead.buffer[5 + 1];
+    if(newSequence == stabilityData.lastSequence) return; // sometimes HINT is not brought low quickly, this checks to see if we are reading a report we have already seen.
+    stabilityData.lastSequence = newSequence;
+
     stabilityData.status = spiRead.buffer[5+4];
+
     gettimeofday(&current, NULL);
     stabilityData.lastReportTimestamp= (unsigned int)((current.tv_sec)*1000 +(current.tv_usec)/1000);
 }
@@ -787,7 +967,7 @@ void clearPersistentTare(void){
 
 void tare(void){
     spiWrite.buffer[0] = SHTP_REPORT_COMMAND_REQUEST; // set feature
-    spiWrite.buffer[1] = SEQUENCENUMBER[6]++; // 0x05=rotation vector, 0x08=game rotation vector, 0x28=ARVR-stabilized rotation vector, 0x29=ARVR-stabilised game rotation vector
+    spiWrite.buffer[1] = SEQUENCENUMBER[6]++; 
     spiWrite.buffer[2] = 0x03; // Tare command
     spiWrite.buffer[3] = 0x00; // perform Tare now
     spiWrite.buffer[4] = 0x07; // all axes
@@ -800,7 +980,7 @@ void tare(void){
     spiWrite.buffer[11]= 0x00;
     sendPacket(CHANNEL_CONTROL, 12);
     spiWrite.buffer[0] = SHTP_REPORT_COMMAND_REQUEST; // set feature
-    spiWrite.buffer[1] = SEQUENCENUMBER[6]++; // 0x05=rotation vector, 0x08=game rotation vector, 0x28=ARVR-stabilized rotation vector, 0x29=ARVR-stabilised game rotation vector
+    spiWrite.buffer[1] = SEQUENCENUMBER[6]++;
     spiWrite.buffer[2] = 0x03; // Tare command
     spiWrite.buffer[3] = 0x01; // persist tare
     spiWrite.buffer[4] = 0x00; 
@@ -1051,12 +1231,15 @@ void start(uint32_t dataRate){ // set datarate to zero to stop sensors
     configureFeatureReport(SENSOR_REPORTID_GYROSCOPE_CALIBRATED, odrPeriodMicrosecs);
     gyroData.requestedInterval=odrPeriodMicrosecs;
 
-    configureFeatureReport(SENSOR_REPORTID_LINEAR_ACCELERATION, odrPeriodMicrosecs);
-    linearAccelerometerData.requestedInterval=odrPeriodMicrosecs;
+//    configureFeatureReport(SENSOR_REPORTID_LINEAR_ACCELERATION, odrPeriodMicrosecs);
+//    linearAccelerometerData.requestedInterval=odrPeriodMicrosecs;
     
-    configureFeatureReport(SENSOR_REPORTID_STABILITY_CLASSIFIER, 500000);// one report per second
+    configureFeatureReport(SENSOR_REPORTID_STABILITY_CLASSIFIER, 500000);// two reports per second
     stabilityData.requestedInterval=500000;
-    
+
+    configureFeatureReport(SENSOR_REPORTID_ACCELEROMETER, odrPeriodMicrosecs);
+    accelerometerData.requestedInterval=odrPeriodMicrosecs;
+
 //    configureFeatureReport(SENSOR_REPORTID_GYRO_INTEGRATED_ROTATION_VECTOR, odrPeriodMicrosecs);
 //    gyroIntegratedRotationVectorData.requestedInterval=odrPeriodMicrosecs;
 //    gyroIntegratedRotationVectorData.direction = 0;

@@ -101,6 +101,7 @@ var PAUSED=1024;
 var ABORTFLAG = 8192;
 var SKIPMAIN = 16384;
 var SKIPTEMPLATE = 32768;
+var WOBBLINGATSTAND = 65536;
 
 var targetAngleHand=null;
 var targetAngleBack=null;
@@ -416,6 +417,25 @@ function getWeighting(){
     return result;
 }
 
+function calculateError(guess){
+    var count = 0.0, error = 0.0;
+    var i = 0;
+    if(swingStarts.length > 1) i = swingStarts[1];
+    for(; i < sample.length; i++){
+        if(sample[i][0] > 70 && sample[i][0] < 110 && sample[i][1] > 0){
+            count += 1;
+            error += guess*Math.sin(sample[i][0]*3.1416/180) - sample[i][2];
+        } else if(sample[i][0] < 290 && sample[i][0] > 250 && sample[i][1] < 0){
+            count += 1;
+            error += -guess*Math.sin(sample[i][0]*3.1416/180) + sample[i][2];
+        }
+
+        if(count > 4000) break; // should be enough
+    }
+    error /= count;
+    return error;
+}
+
 function getAveragePullStrengths(){
     if(calibrationValue == null) {
         getWeighting(); // should not happen as getweighting should always be called first - untidy getweighting should do this as well
@@ -446,24 +466,7 @@ function getAveragePullStrengths(){
     }
 }
 
-function calculateError(guess){
-    var count = 0.0, error = 0.0;
-    var i = 0;
-    if(swingStarts.length > 1) i = swingStarts[1];
-    for(; i < sample.length; i++){
-        if(sample[i][0] > 70 && sample[i][0] < 110 && sample[i][1] > 0){
-            count += 1;
-            error += guess*Math.sin(sample[i][0]*3.1416/180) - sample[i][2];
-        } else if(sample[i][0] < 290 && sample[i][0] > 250 && sample[i][1] < 0){
-            count += 1;
-            error += -guess*Math.sin(sample[i][0]*3.1416/180) + sample[i][2];
-        }
 
-        if(count > 4000) break; // should be enough
-    }
-    error /= count;
-    return error;
-}
 
 function showLive(){
 //    ws.send("LDAT:"); // consider removing this line.
@@ -662,7 +665,11 @@ function drawSamples(position,iterations){
                 continue; // for moment don't swap, just do nothing
             }
             if ((currentStatus & LASTHS1) == 0 ) { // clear highest part of this and previous ROI if this is the first time
-                drawHSpower(dataEntryCurrent[2],dataEntryCurrent[0]); // and also draw power indicator
+            if((currentStatus & WOBBLINGATSTAND) == 0){
+                drawHSpower(dataEntryCurrent[2],dataEntryCurrent[0]); // and also draw power indicator if not wobbling
+            } else {
+                currentStatus &= ~WOBBLINGATSTAND;
+            }
                 var pixelsFromROIL = (ROIL - startAngle) * stepSize;
                 ctxBD.clearRect(posBS2 + pixelsFromROIL, 14, 2 * (BDwidth - pixelsFromROIL), ctxBD.canvas.height - 14 - 25);
                 if ((currentStatus & LASTBS2) != 0 ) {
@@ -739,6 +746,7 @@ function drawSamples(position,iterations){
                 continue; // for moment don't swap, just do nothing
             }
             if ((currentStatus & LASTBS2) == 0 ) { // set flags if we have not been before this swing
+                if(currentStatus & LASTHS1) currentStatus |= WOBBLINGATSTAND; // the only way this can happen is with a wobble - this flags stave not to draw anything
                 currentStatus &= ~(LASTHS1 | LASTBS1 | LASTHS2);
                 currentStatus |= LASTBS2;
             }
@@ -936,6 +944,14 @@ clearTareButton.onclick = function() {
     if ((currentStatus & HELPDISPLAYED) != 0) return;
     if ((currentStatus & RECORDINGSESSION) != 0) return
     ws.send("CLTA:");
+};
+
+doneTareButton.onclick = function() {
+    if ((currentStatus & DOWNLOADINGFILE) != 0) return;
+    if ((currentStatus & PLAYBACK) != 0) return;
+    if ((currentStatus & HELPDISPLAYED) != 0) return;
+    if ((currentStatus & RECORDINGSESSION) != 0) return
+    ws.send("DOTA:");
 };
 
 targetSelectHand.onchange = function() {
