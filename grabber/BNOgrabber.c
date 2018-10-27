@@ -488,9 +488,9 @@ void handleEvent(void){
 // this may not be needed
 void alignFIFOs(void){
     if(gyroData.available >= 3){
-        if ((gyroData.available - 3) > gameRotationVectorData.available) {
+        if ((gyroData.available - 3) > gameRotationVectorData.available ||
 //            (gyroData.available - 3) > gyroIntegratedRotationVectorData.available ||
-            (gyroData.available - 3) > accelerometerData.available ||
+            (gyroData.available - 3) > accelerometerData.available) {
 //            (gyroData.available - 3) > linearAccelerometerData.available){
                 gyroData.tail = (gyroData.tail + 1) % BUFFERSIZE; // ditch a sample don't forget that there is a gyro accelerometer reading here too
                 gyroData.available -= 1;
@@ -499,9 +499,9 @@ void alignFIFOs(void){
     }
 
     if(gameRotationVectorData.available >= 3){
-        if ((gameRotationVectorData.available - 3) > gyroData.available) {
+        if ((gameRotationVectorData.available - 3) > gyroData.available ||
 //            (gameRotationVectorData.available - 3) > gyroIntegratedRotationVectorData.available ||
-            (gameRotationVectorData.available - 3) > accelerometerData.available ||
+            (gameRotationVectorData.available - 3) > accelerometerData.available){
 //            (gameRotationVectorData.available - 3) > linearAccelerometerData.available){
                 gameRotationVectorData.tail = (gameRotationVectorData.tail + 1) % BUFFERSIZE; // ditch a sample
                 gameRotationVectorData.available -= 1;
