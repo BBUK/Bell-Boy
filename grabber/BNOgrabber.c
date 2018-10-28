@@ -60,7 +60,7 @@
 #define RESETPIN 24
 #define WAKPS0PIN 25
 #define QP(n) (pow(2,-n)) 
-#define ODR 200
+#define ODR 100
 #define BUFFERSIZE 32
 #define PUSHBATCH 20
 
@@ -540,7 +540,7 @@ void alignFIFOs(void){
             (accelerometerData.available - 3) > gameRotationVectorData.available){
                 accelerometerData.tail = (accelerometerData.tail + 1) % BUFFERSIZE; // ditch a sample
                 accelerometerData.available -= 1;
-                printf("Ditched acc sample\n"); // running at 16ms when the rest is at 20ms
+                printf("Ditched acc sample\n");
         }
     }
 
@@ -558,7 +558,7 @@ void pushData(void){
 
 //    if (gyroData.available >=10 && linearAccelerometerData.available >=10 && gameRotationVectorData.available >=10 && gyroIntegratedRotationVectorData.available >=10  && accelerometerData.available >= 10){
 //        printf("Gyro: %d, LinAcc: %d, Angle: %d",gyroData.available, linearAccelerometerData.available, gameRotationVectorData.available);
-    if (gyroData.available >= PUSHBATCH && gameRotationVectorData.available >= PUSHBATCH){
+    if (gyroData.available >= PUSHBATCH && gameRotationVectorData.available >= PUSHBATCH && accelerometerData.available >= PUSHBATCH){
         for(int counter = 0; counter < PUSHBATCH; ++counter){
 //            printf("A:%+07.1f,R:%+07.1f,C:%+07.1f\n", gyroIntegratedRotationVectorData.angleBuffer[gyroIntegratedRotationVectorData.tail], gyroIntegratedRotationVectorData.rateBuffer[gyroIntegratedRotationVectorData.tail], gyroIntegratedRotationVectorData.accnBuffer[gyroIntegratedRotationVectorData.tail]);
 //            outputCount += sprintf(&output[outputCount],"LIVE:A:%+07.1f,R:%+07.1f,C:%+07.1f,LA:%+07.1f,AC:%+07.1f,GI:%+07.1f,S:%04X\n", gameRotationVectorData.angleBuffer[gameRotationVectorData.tail], gyroData.rateBuffer[gyroData.tail]*gameRotationVectorData.direction, gyroData.accnBuffer[gyroData.tail]*gameRotationVectorData.direction, linearAccelerometerData.YBuffer[linearAccelerometerData.tail],accelerometerData.YBuffer[accelerometerData.tail],gyroIntegratedRotationVectorData.angleBuffer[gyroIntegratedRotationVectorData.tail],statuses);
@@ -572,13 +572,13 @@ void pushData(void){
             gyroData.tail = (gyroData.tail + 1) % BUFFERSIZE;
 //            linearAccelerometerData.tail = (linearAccelerometerData.tail + 1) % BUFFERSIZE;
 //            gyroIntegratedRotationVectorData.tail = (gyroIntegratedRotationVectorData.tail + 1) % BUFFERSIZE;
-//            accelerometerData.tail = (accelerometerData.tail + 1) % BUFFERSIZE;
+            accelerometerData.tail = (accelerometerData.tail + 1) % BUFFERSIZE;
         }
-//        gyroIntegratedRotationVectorData.available -=10;
+//        gyroIntegratedRotationVectorData.available -= PUSHBATCH;
         gameRotationVectorData.available -= PUSHBATCH;
         gyroData.available -= PUSHBATCH;
-//        linearAccelerometerData.available -= 10;
-//        accelerometerData.available -= 10;
+//        linearAccelerometerData.available -= PUSHBATCH;
+        accelerometerData.available -= PUSHBATCH;
         OUT_COUNT += PUSHBATCH;
         
         printf("%s",output);
@@ -618,32 +618,32 @@ void parseEvent(void){
 }
 
 void reportFeatureResponse(void){
-    float reportInterval = (spiRead.buffer[8 ] << 24) + (spiRead.buffer[7 ] << 16) + (spiRead.buffer[6 ] << 8) + spiRead.buffer[5];
-    float batchInterval =  (spiRead.buffer[12] << 24) + (spiRead.buffer[11] << 16) + (spiRead.buffer[10] << 8) + spiRead.buffer[9];
+    unsigned int reportInterval = (spiRead.buffer[8 ] << 24) + (spiRead.buffer[7 ] << 16) + (spiRead.buffer[6 ] << 8) + spiRead.buffer[5];
+    unsigned int batchInterval =  (spiRead.buffer[12] << 24) + (spiRead.buffer[11] << 16) + (spiRead.buffer[10] << 8) + spiRead.buffer[9];
     switch(spiRead.buffer[1]){
         case SENSOR_REPORTID_GAME_ROTATION_VECTOR:  
             gameRotationVectorData.reportInterval = reportInterval; 
-            if(gameRotationVectorData.reportInterval != gameRotationVectorData.requestedInterval) printf("Warning: GRV data rate mismatch: %d\n",reportInterval);
+            if(gameRotationVectorData.reportInterval != gameRotationVectorData.requestedInterval) printf("Warning: GRV data rate mismatch. Req: %d, Rep: %d\n",gameRotationVectorData.requestedInterval,reportInterval);
             break;
         case SENSOR_REPORTID_GYROSCOPE_CALIBRATED:  
             gyroData.reportInterval = reportInterval;
-            if(gyroData.reportInterval != gyroData.requestedInterval) printf("Warning: Gyro data rate mismatch: %d\n",reportInterval);
+            if(gyroData.reportInterval != gyroData.requestedInterval) printf("Warning: Gyro data rate mismatch. Req: %d, Rep: %d\n",gyroData.requestedInterval,reportInterval);
             break;
         case SENSOR_REPORTID_LINEAR_ACCELERATION:   
             linearAccelerometerData.reportInterval = reportInterval;
-            if(linearAccelerometerData.reportInterval != linearAccelerometerData.requestedInterval) printf("Warning: LinAcc data rate mismatch: %d\n", reportInterval);
+            if(linearAccelerometerData.reportInterval != linearAccelerometerData.requestedInterval) printf("Warning: LinAcc data rate mismatch. Req: %d, Rep: %d\n", linearAccelerometerData.requestedInterval,reportInterval);
             break;
         case SENSOR_REPORTID_ACCELEROMETER:         
             accelerometerData.reportInterval = reportInterval; 
-            if(accelerometerData.reportInterval != accelerometerData.requestedInterval) printf("Warning: Acc data rate mismatch: %d\n",reportInterval);
+            if(accelerometerData.reportInterval != accelerometerData.requestedInterval) printf("Warning: Acc data rate mismatch. Req: %d, Rep: %d\n",accelerometerData.requestedInterval,reportInterval);
             break;
         case SENSOR_REPORTID_STABILITY_CLASSIFIER:  
             stabilityData.reportInterval = reportInterval; 
-            if(stabilityData.reportInterval != stabilityData.requestedInterval) printf("Warning: Stability data rate mismatch: %d\n",reportInterval);
+            if(stabilityData.reportInterval != stabilityData.requestedInterval) printf("Warning: Stability data rate mismatch. Req: %d, Rep: %d\n",stabilityData.requestedInterval,reportInterval);
             break;
         case SENSOR_REPORTID_GYRO_INTEGRATED_ROTATION_VECTOR: 
             gyroIntegratedRotationVectorData.reportInterval = reportInterval;
-            if(gyroIntegratedRotationVectorData.reportInterval != gyroIntegratedRotationVectorData.requestedInterval) printf("Warning: GIRV data rate mismatch: %d\n",reportInterval);
+            if(gyroIntegratedRotationVectorData.reportInterval != gyroIntegratedRotationVectorData.requestedInterval) printf("Warning: GIRV data rate mismatch. Req: %d, Rep: %d\n",gyroIntegratedRotationVectorData.requestedInterval,reportInterval);
             break;
         default: printf("Unhandled FR event: CHANNEL: %02X, SEQUENCE: %02X BYTES: %02X, %02X, %02X, %02X, %02X, %02X, %02X, %02X, %02X\n", spiRead.channel, spiRead.sequence, spiRead.buffer[0], spiRead.buffer[1], spiRead.buffer[2], spiRead.buffer[3], spiRead.buffer[4], spiRead.buffer[5], spiRead.buffer[6], spiRead.buffer[7], spiRead.buffer[8]);
     }
@@ -731,10 +731,10 @@ void parseGameRotationVector(void){
     uint8_t status = spiRead.buffer[5 + 2] & 0x03;
    
 //    uint32_t timebase = (uint32_t)((spiRead.buffer[4] << 24) + (spiRead.buffer[3] << 16 ) + (spiRead.buffer[2] << 8) + spiRead.buffer[1]);
-    double Qx = (double)((spiRead.buffer[5 + 5] << 8) + spiRead.buffer[5 + 4]);
-    double Qy = (double)((spiRead.buffer[5 + 7] << 8) + spiRead.buffer[5 + 6]);
-    double Qz = (double)((spiRead.buffer[5 + 9] << 8) + spiRead.buffer[5 + 8]);
-    double Qw = (double)((spiRead.buffer[5 + 11] << 8) + spiRead.buffer[5 + 10]);
+    float Qx = (float)((spiRead.buffer[5 + 5] << 8) + spiRead.buffer[5 + 4]);
+    float Qy = (float)((spiRead.buffer[5 + 7] << 8) + spiRead.buffer[5 + 6]);
+    float Qz = (float)((spiRead.buffer[5 + 9] << 8) + spiRead.buffer[5 + 8]);
+    float Qw = (float)((spiRead.buffer[5 + 11] << 8) + spiRead.buffer[5 + 10]);
     
     if(Qx >= 0x8000) Qx -= 0x10000;
     if(Qy >= 0x8000) Qy -= 0x10000;
@@ -902,17 +902,22 @@ void parseCalibratedGyroscope(void){
     uint8_t newSequence = spiRead.buffer[5 + 1];
     if(newSequence == gyroData.lastSequence) return; // sometimes HINT is not brought low quickly, this checks to see if we are reading a report we have already seen.
     gyroData.lastSequence = newSequence;
+    float Gx, Gy, Gz;
 //    uint32_t timebase = (uint32_t)((spiRead.buffer[4] << 24) + (spiRead.buffer[3] << 16 ) + (spiRead.buffer[2] << 8) + spiRead.buffer[1]);
 
     uint8_t status = spiRead.buffer[5 + 2] & 0x03;
 
-    float Gx = (float)((spiRead.buffer[5 + 5] << 8) + spiRead.buffer[5 + 4]);
-    float Gy = (float)((spiRead.buffer[5 + 7] << 8) + spiRead.buffer[5 + 6]);
-    float Gz = (float)((spiRead.buffer[5 + 9] << 8) + spiRead.buffer[5 + 8]);
+    uint32_t Gxi = (spiRead.buffer[5 + 5] << 8) + spiRead.buffer[5 + 4];
+    uint32_t Gyi = (spiRead.buffer[5 + 7] << 8) + spiRead.buffer[5 + 6];
+    uint32_t Gzi = (spiRead.buffer[5 + 9] << 8) + spiRead.buffer[5 + 8];
     
-    if(Gx >= 0x8000) Gx -= 0x10000;
-    if(Gy >= 0x8000) Gy -= 0x10000;
-    if(Gz >= 0x8000) Gz -= 0x10000;
+    Gx = Gxi;
+    Gy = Gyi;
+    Gz = Gzi;
+    
+    if(Gxi >= 0x8000) Gx -= 0x10000;
+    if(Gyi >= 0x8000) Gy -= 0x10000;
+    if(Gzi >= 0x8000) Gz -= 0x10000;
 
     Gx *= QP(9) * RADIANS_TO_DEGREES_MULTIPLIER;
     Gy *= QP(9) * RADIANS_TO_DEGREES_MULTIPLIER;
