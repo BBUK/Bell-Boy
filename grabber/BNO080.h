@@ -49,6 +49,7 @@ void pushData(void);
 void clearPersistentTare(void);
 void setupStabilityClassifierFrs(float threshold);
 int startRun(void);
+void start_accel(uint32_t);
 int eraseFrsRecord(uint16_t recordType);
 
 const uint8_t CHANNEL_COMMAND = 0;
