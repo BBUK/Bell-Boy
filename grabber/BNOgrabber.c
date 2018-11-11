@@ -241,7 +241,7 @@ int main(int argc, char const *argv[]){
     char details[42];
     char oscommand[90];
     int entries;
-    int torn;
+    int torn = 0;
     float shutdowncount = 0.0;
     FILE *shutdowncheck;
 
@@ -258,11 +258,7 @@ int main(int argc, char const *argv[]){
     fcntl(STDIN_FILENO, F_SETFL, fcntl(STDIN_FILENO, F_GETFL) | O_NONBLOCK);
     
     setup();
-    setupStabilityClassifierFrs(2.5);
-//    
-//    reorient(0,0,0,0);
-//    
-//    reorient(0.0,0.0,-1.0,0.0);
+    setupStabilityClassifierFrs(2.5);  // used to check if bell is moving.  2.5m/s2 allows some small movement
 
     start(ODR);
     start_accel(ODR);
@@ -349,6 +345,7 @@ int main(int argc, char const *argv[]){
                 continue;
             }
             if(strcmp("STRT:", command) == 0) {
+                start_accel(0);
                 if(entries == 2  && strlen(details) < 34){
                     sprintf(FILENAME, "/data/samples/%s", details);
                 } else {
@@ -892,7 +889,7 @@ void parseAccelerometer(void){
     if(!RUNNING) return;  // only push data to fifo if we are on a run
 
     if (accelerometerData.available == (BUFFERSIZE - 2)) {
-        printf("Lin Acc buffer full.  Ditching oldest sample\n");
+        printf("Acc buffer full.  Ditching oldest sample\n");
         accelerometerData.tail = (accelerometerData.tail + 1) % BUFFERSIZE;
         accelerometerData.available -= 1;
     }
@@ -1122,7 +1119,7 @@ int readFrsRecord(uint16_t recordType){
         }
     }
     printf("FRS Read timeout");
-    return(-1);
+    return(0);
 }
 
 int eraseFrsRecord(uint16_t recordType){
