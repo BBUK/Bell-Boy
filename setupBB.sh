@@ -58,10 +58,9 @@ if [ $(cat /boot/config.txt | grep 'dtoverlay=gpio-poweroff' | wc -l) -eq 0 ]; t
   echo -e "\ndtoverlay=gpio-poweroff,gpiopin=18,active_low\n" | tee -a /boot/config.txt
 fi
 
-# to be tested in favour of the custom dt overlay below
-#if [ $(cat /boot/config.txt | grep 'gpio=17=pd' | wc -l) -eq 0 ]; then
-#  echo -e "\ngpio=17=pd\n" | tee -a /boot/config.txt
-#fi
+if [ $(cat /boot/config.txt | grep 'gpio=17=pd' | wc -l) -eq 0 ]; then
+  echo -e "\ngpio=17=pd\n" | tee -a /boot/config.txt
+fi
 
 if [ $(cat /etc/modules-load.d/raspberrypi.conf | grep 'i2c-dev' | wc -l) -eq 0 ]; then
   echo -e "\ni2c-dev\n" | tee -a /etc/modules-load.d/raspberrypi.conf
@@ -80,9 +79,11 @@ timedatectl set-timezone Europe/London
 hostnamectl set-hostname ${HOSTNAME}
 
 pacman-key --init
+pacman-key --populate archlinuxarm
+pacman-key --refresh
 pacman -Syu --noconfirm || { echo "Failed pacman -Syu.  Exiting"; exit 1; }
 sync
-pacman -S --noconfirm --needed wget dtc samba bzip2 screen tmux hostapd crda samba base-devel i2c-tools unzip dhcp git || { echo "Failed downloading packages.  Exiting"; exit 1; }
+pacman -S --noconfirm --needed wget samba bzip2 screen tmux hostapd crda samba base-devel i2c-tools unzip dhcp git || { echo "Failed downloading packages.  Exiting"; exit 1; }
 
 echo -e '\nWIRELESS_REGDOM="GB"\n' >> /etc/conf.d/wireless-regdom
 
@@ -193,7 +194,7 @@ mv ./websocketd /srv/http/ || { echo "Could not find websocketd executable. Exit
 
 tee /etc/systemd/system/bellboy.service <<HDHD
 [Unit]
-Description= Websocket script to start on boot
+Description= Bellboy websocket service file to start on boot
 After=network.target
 [Service]
 User=root
@@ -205,6 +206,17 @@ KillMode = control-group
 TimeoutStopSec=0
 Restart=always
 RestartSec=5
+[Install]
+WantedBy=multi-user.target
+HDHD
+
+tee /etc/systemd/system/32kHz.service <<HDHD
+[Unit]
+Description= 32Khz PWM service file
+[Service]
+User=root
+Type=oneshot
+ExecStart=/root/32KHz
 [Install]
 WantedBy=multi-user.target
 HDHD
@@ -221,7 +233,7 @@ chown -R nobody.nobody /data
 chmod -R 777 /data
 
 cd grabber
-gcc grabber.c -o grabber -lm || { echo "Unable compile grabber.  Exiting."; exit 1; }
+gcc grabber.c -o grabber -lm || { echo "Unable to compile grabber.  Exiting."; exit 1; }
 mv grabber /srv/http/
 gcc MPU6050_calibrate.c -o MPU6050_calibrate
 mv MPU6050_calibrate /srv/http/
@@ -237,62 +249,16 @@ mv images/StrokeComparison.png /srv/http/
 mv images/Settings.png /srv/http/
 
 cd ~
-# The only reason I an creating this overlay is to save one resistor on the PCB
-# Since this was written there is a new gpio config.txt command which is far
-# easier.  Let's do that instead
-tee gpio_pull-overlay.dts <<HDHD
-/*
-* Overlay for enabling gpio's to pull at boot time
-* this overlay uses pincctrl to initialize the pull-up register for the the listed gpios
-* the compatible="gpio-leds" forces a module probe so the pinctrl does something
-*
-* To use this dts:
-* copy this to a file named gpio_pull-overlay.dts
-* modify the brcm,pins, brcm,function, and brcm,pull values
-* apt-get install device-tree-compiler
-* dtc -@ -I dts -O dtb -o gpio_pull-overlay.dtb gpio_pull-overlay.dts
-* sudo cp gpio_pull-overlay.dtb /boot/overlays
-* add this line to the end config.txt: dtoverlay=gpio_pull
-* reboot
-*/
 
-/dts-v1/;
-/plugin/;
-/ {
-  compatible = "brcm,bcm2835", "brcm,bcm2708";
-  fragment@0 {
-    target = <&gpio>;
-    __overlay__ {
-       gpio_pins: gpio_pins {
-          brcm,pins = <17>; /* list of gpio(n) pins to pull */
-          brcm,function = <0>; /* boot up direction:in=0 out=1 */
-          brcm,pull = <1>; /* pull direction: none=0, 1 = down, 2 = up */
-       };
-    };
-  };
-  fragment@1 {
-    target-path = "/soc";
-    __overlay__ {
-       gpiopull:gpiopull {
-          compatible = "gpio-leds";
-          pinctrl-names = "default";
-          pinctrl-0 = <&gpio_pins>;
-          status = "okay";
-       };
-    };
-  };
-  __overrides__ {
-     gpio_pull = <&gpiopull>,"status";
-  };
-};
-HDHD
+# setup bcm2835
 
-dtc -Wno-unit_address_vs_reg -@ -I dts -O dtb -o gpio_pull.dtbo gpio_pull-overlay.dts || { echo "Unable to compile dts"; exit 1; }
-cp gpio_pull.dtbo /boot/overlays/
-
-if [ $(cat /boot/config.txt | grep 'dtoverlay=gpio_pull' | wc -l) -eq 0 ]; then
-  echo -e "\ndtoverlay=gpio_pull\n" | tee -a /boot/config.txt
-fi
+wget http://www.airspayce.com/mikem/bcm2835/bcm2835-1.57.tar.gz || { echo "Unable to download BCM2835 library. Exiting"; exit 1; }
+tar xzvf bcm2835-1.57.tar.gz
+cd bcm2835-1.57
+./configure
+make
+make check
+make install  || { echo "Unable to install BCM2835 library. Exiting"; exit 1; }
 
 tee /etc/samba/smb.conf <<HDHD
 [global]
@@ -326,6 +292,7 @@ systemctl enable bellboy
 systemctl enable ap0.timer
 systemctl enable ap1.timer
 systemctl enable smb nmb
+systemctl enable 32kHz
 
 cp ~/Bell-Boy/images/imagepack.zip /srv/http
 cd /srv/http

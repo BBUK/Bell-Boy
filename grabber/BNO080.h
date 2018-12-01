@@ -31,7 +31,7 @@ void parseCalibratedGyroscope(void);
 void parseLinearAccelerometer(void);
 void parseAccelerometer(void);
 void parseGyroIntegratedRotationVector(void);
-
+void setStandardOrientation(void);
 void reportFeatureResponse(void);
 void reportCommandResponse(void);
 void saveCalibration(void);
@@ -46,6 +46,7 @@ void configureStability(uint32_t reportPeriod);
 void alignFIFOs(void);
 int configureFeatureReport(uint8_t report, uint32_t reportPeriod);
 void pushData(void);
+void pushTestData(void);
 void clearPersistentTare(void);
 void setupStabilityClassifierFrs(float threshold);
 int startRun(void);
