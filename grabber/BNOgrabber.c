@@ -60,9 +60,13 @@
 #define RESETPIN 24
 #define WAKPS0PIN 25
 #define QP(n) (pow(2,-n)) 
-#define ODR 500
+// interesting effect, the gyro integrated rotation vector is unstable
+// at ODR values in which the game rotation vector is "uncomfortable"
+// (The game rotation vector is used for stabilisation of the GIRV.) 
+// An ODR of 400 works fine.
+#define ODR 400 
 #define BUFFERSIZE 64
-#define PUSHBATCH 50
+#define PUSHBATCH 40
 #define R2O2 (sqrt(2)/2.0)
 
 struct timeval current;
@@ -72,7 +76,7 @@ char READ_OUTBUF[1500];
 uint32_t FRS_READ_BUFFER[64];
 
 uint8_t SEQUENCENUMBER[7];
-unsigned int LOOPSLEEP = 2000;  // in microseconds
+unsigned int LOOPSLEEP = 1000;  // in microseconds
 unsigned int LOOPCOUNT = 0;
 char FILENAME[50];
 int RUNNING = 0;
@@ -480,7 +484,7 @@ void pushData(void){
         gyroIntegratedRotationVectorData.available -= PUSHBATCH;
         OUT_COUNT += PUSHBATCH;
         
-        if (counter % 5 == 0) printf("%s",output); // for the moment only write one in 5 samples to browser
+        if (outputCount % 4 == 0) printf("%s",output); // for the moment only write one in 4 samples to browser
         fputs(output,fd_write_out);
         fflush(fd_write_out);
     }

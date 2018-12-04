@@ -216,7 +216,7 @@ Description= 32Khz PWM service file
 [Service]
 User=root
 Type=oneshot
-ExecStart=/root/32KHz
+ExecStart=/root/32kHz
 [Install]
 WantedBy=multi-user.target
 HDHD
@@ -233,6 +233,7 @@ chown -R nobody.nobody /data
 chmod -R 777 /data
 
 # setup bcm2835
+cd ~
 wget http://www.airspayce.com/mikem/bcm2835/bcm2835-1.57.tar.gz || { echo "Unable to download BCM2835 library. Exiting"; exit 1; }
 tar xzvf bcm2835-1.57.tar.gz
 cd bcm2835-1.57
@@ -241,17 +242,17 @@ make
 make check
 make install  || { echo "Unable to install BCM2835 library. Exiting"; exit 1; }
 
-#cd grabber
+cd ~/Bell-Boy/grabber
 #gcc grabber.c -o grabber -lm || { echo "Unable to compile grabber.  Exiting."; exit 1; }
 #mv grabber /srv/http/
 #gcc MPU6050_calibrate.c -o MPU6050_calibrate
 #mv MPU6050_calibrate /srv/http/
-gcc 32kHz.c -o 32kHz -lbcm2835
+gcc 32kHz.c -o 32kHz -lbcm2835 || { echo "Unable to compile 32kHz. Exiting"; exit 1; }
 mv 32kHz /root/
-gcc BNOgrabber.c -o BNOgrabber -lm -lbcm2835
+gcc BNOgrabber.c -o BNOgrabber -lm -lbcm2835 || { echo "Unable to compile grabber. Exiting"; exit 1; }
 mv BNOgrabber /srv/http/
 
-cd ..
+cd ~/Bell-Boy
 mv images/Mounting.png /srv/http/
 mv images/BBtaped.png /srv/http/
 mv images/MainScreenGuide.png /srv/http/
@@ -262,7 +263,6 @@ mv images/StrokeComparison.png /srv/http/
 mv images/Settings.png /srv/http/
 
 cd ~
-
 
 tee /etc/samba/smb.conf <<HDHD
 [global]
