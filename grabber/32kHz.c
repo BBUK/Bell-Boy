@@ -51,7 +51,7 @@ int main(int argc, char const *argv[]){
         exit(1);
     }
     bcm2835_gpio_fsel(RESETPIN, BCM2835_GPIO_FSEL_OUTP); // reset
-    bcm2835_gpio_set(RESETPIN);
+    bcm2835_gpio_clr(RESETPIN);
     bcm2835_gpio_fsel(WAKPS0PIN, BCM2835_GPIO_FSEL_OUTP); // WAKPS0
     bcm2835_gpio_set(WAKPS0PIN);
     bcm2835_gpio_fsel(INTPIN, BCM2835_GPIO_FSEL_INPT); // INT

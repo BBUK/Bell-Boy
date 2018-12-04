@@ -38,7 +38,7 @@ void saveCalibration(void);
 int reorient(float w, float x, float y, float z);
 void parseEvent(void);
 void calibrationSetup(char accel, char gyro, char mag);
-void tare(void);
+//void tare(void);
 int readFrsRecord(uint16_t recordType);
 int writeFrsWord(uint16_t recordType, uint32_t offset, uint32_t data);
 int readFrsWord(uint16_t recordType, uint32_t offset, uint32_t* result);
@@ -50,7 +50,7 @@ void pushTestData(void);
 void clearPersistentTare(void);
 void setupStabilityClassifierFrs(float threshold);
 int startRun(void);
-void start_accel(uint32_t);
+//void start_accel(uint32_t);
 int eraseFrsRecord(uint16_t recordType);
 
 const uint8_t CHANNEL_COMMAND = 0;
