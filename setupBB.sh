@@ -58,9 +58,9 @@ if [ $(cat /boot/config.txt | grep 'dtoverlay=gpio-poweroff' | wc -l) -eq 0 ]; t
   echo -e "\ndtoverlay=gpio-poweroff,gpiopin=18,active_low\n" | tee -a /boot/config.txt
 fi
 
-if [ $(cat /boot/config.txt | grep 'gpio=17=pd' | wc -l) -eq 0 ]; then
-  echo -e "\ngpio=17=pd\n" | tee -a /boot/config.txt
-fi
+#if [ $(cat /boot/config.txt | grep 'gpio=17=pd' | wc -l) -eq 0 ]; then
+#  echo -e "\ngpio=17=pd\n" | tee -a /boot/config.txt
+#fi
 
 if [ $(cat /etc/modules-load.d/raspberrypi.conf | grep 'i2c-dev' | wc -l) -eq 0 ]; then
   echo -e "\ni2c-dev\n" | tee -a /etc/modules-load.d/raspberrypi.conf
@@ -200,7 +200,7 @@ After=network.target
 User=root
 Type=forking
 ExecStartPre=/usr/bin/sh -c "/srv/http/powermonitor.sh &"
-ExecStart=/usr/bin/screen -S wrad -d -m sh -c "(/srv/http/websocketd --port=80 --staticdir=/srv/http/ /srv/http/grabber 200 500 4 2>&1) | tee -a /var/log/bellboy.log"
+ExecStart=/usr/bin/screen -S wrad -d -m sh -c "(/srv/http/websocketd --port=80 --staticdir=/srv/http/ /srv/http/BNOgrabber 2>&1) | tee -a /var/log/bellboy.log"
 ExecStop=/usr/bin/screen -S wrad -X wrad
 KillMode = control-group
 TimeoutStopSec=0
@@ -232,11 +232,24 @@ mv samples/* /data/samples/
 chown -R nobody.nobody /data
 chmod -R 777 /data
 
-cd grabber
-gcc grabber.c -o grabber -lm || { echo "Unable to compile grabber.  Exiting."; exit 1; }
-mv grabber /srv/http/
-gcc MPU6050_calibrate.c -o MPU6050_calibrate
-mv MPU6050_calibrate /srv/http/
+# setup bcm2835
+wget http://www.airspayce.com/mikem/bcm2835/bcm2835-1.57.tar.gz || { echo "Unable to download BCM2835 library. Exiting"; exit 1; }
+tar xzvf bcm2835-1.57.tar.gz
+cd bcm2835-1.57
+./configure
+make
+make check
+make install  || { echo "Unable to install BCM2835 library. Exiting"; exit 1; }
+
+#cd grabber
+#gcc grabber.c -o grabber -lm || { echo "Unable to compile grabber.  Exiting."; exit 1; }
+#mv grabber /srv/http/
+#gcc MPU6050_calibrate.c -o MPU6050_calibrate
+#mv MPU6050_calibrate /srv/http/
+gcc 32kHz.c -o 32kHz -lbcm2835
+mv 32kHz /root/
+gcc BNOgrabber.c -o BNOgrabber -lm -lbcm2835
+mv BNOgrabber /srv/http/
 
 cd ..
 mv images/Mounting.png /srv/http/
@@ -250,15 +263,6 @@ mv images/Settings.png /srv/http/
 
 cd ~
 
-# setup bcm2835
-
-wget http://www.airspayce.com/mikem/bcm2835/bcm2835-1.57.tar.gz || { echo "Unable to download BCM2835 library. Exiting"; exit 1; }
-tar xzvf bcm2835-1.57.tar.gz
-cd bcm2835-1.57
-./configure
-make
-make check
-make install  || { echo "Unable to install BCM2835 library. Exiting"; exit 1; }
 
 tee /etc/samba/smb.conf <<HDHD
 [global]
