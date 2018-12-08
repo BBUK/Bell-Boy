@@ -25,11 +25,6 @@
 #           (username alarm, password alarm), change to root user (su root, password root) 
 #    (e)    run this script - /boot/setupBB.sh (assuming you placed the script into the FAT partition.
 
-# This script also configures some GPIO pins of the Pi.  GPIO 17 (pulled down by the DTS compiled below)
-# is used to detect whether the power button has been pressed on the device (i.e. when it has been switched on)
-# so that it can be shut down.  The GPIO power down overlay is configured to use GPIO 18 to indicate power
-# up.  The standard PCB for the device wires things up to these GPIOs.   
-
 PORTABLEWIFINETWORK=Bell-Boy
 HOSTNAME=Bell-Boy
 
@@ -54,9 +49,14 @@ fi
 #  echo -e "\ndtoverlay=i2c-gpio,i2c_gpio_sda=2,i2c_gpio_scl=3,i2c_gpio_delay_us=0\n" | tee -a /boot/config.txt
 #fi
 
-if [ $(cat /boot/config.txt | grep 'dtoverlay=gpio-poweroff' | wc -l) -eq 0 ]; then
-  echo -e "\ndtoverlay=gpio-poweroff,gpiopin=18,active_low\n" | tee -a /boot/config.txt
-fi
+#if [ $(cat /boot/config.txt | grep 'dtoverlay=gpio-poweroff' | wc -l) -eq 0 ]; then
+#  echo -e "\ndtoverlay=gpio-poweroff,gpiopin=18,active_low\n" | tee -a /boot/config.txt
+#fi
+
+#test to see if we should have BNO080 in reset
+#if [ $(cat /boot/config.txt | grep 'gpio=24=pd' | wc -l) -eq 0 ]; then
+#  echo -e "\ngpio=24=pd\n" | tee -a /boot/config.txt
+#fi
 
 #if [ $(cat /boot/config.txt | grep 'gpio=17=pd' | wc -l) -eq 0 ]; then
 #  echo -e "\ngpio=17=pd\n" | tee -a /boot/config.txt
@@ -200,7 +200,7 @@ After=network.target
 User=root
 Type=forking
 ExecStartPre=/usr/bin/sh -c "/srv/http/powermonitor.sh &"
-ExecStart=/usr/bin/screen -S wrad -d -m sh -c "(/srv/http/websocketd --port=80 --staticdir=/srv/http/ /srv/http/BNOgrabber 2>&1) | tee -a /var/log/bellboy.log"
+ExecStart=/usr/bin/screen -S wrad -d -m sh -c "(/srv/http/websocketd --port=80 --staticdir=/srv/http/ /srv/http/grabber 2>&1) | tee -a /var/log/bellboy.log"
 ExecStop=/usr/bin/screen -S wrad -X wrad
 KillMode = control-group
 TimeoutStopSec=0
@@ -243,14 +243,10 @@ make check
 make install  || { echo "Unable to install BCM2835 library. Exiting"; exit 1; }
 
 cd ~/Bell-Boy/grabber
-#gcc grabber.c -o grabber -lm || { echo "Unable to compile grabber.  Exiting."; exit 1; }
-#mv grabber /srv/http/
-#gcc MPU6050_calibrate.c -o MPU6050_calibrate
-#mv MPU6050_calibrate /srv/http/
+gcc grabber.c -o grabber -lm -lbcm2835 || { echo "Unable to compile grabber.  Exiting."; exit 1; }
+mv grabber /srv/http/
 gcc 32kHz.c -o 32kHz -lbcm2835 || { echo "Unable to compile 32kHz. Exiting"; exit 1; }
 mv 32kHz /root/
-gcc BNOgrabber.c -o BNOgrabber -lm -lbcm2835 || { echo "Unable to compile grabber. Exiting"; exit 1; }
-mv BNOgrabber /srv/http/
 
 cd ~/Bell-Boy
 mv images/Mounting.png /srv/http/

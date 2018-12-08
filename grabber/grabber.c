@@ -1,25 +1,36 @@
-//gcc grabber.c -o grabber -lm
+//gcc grabber.c -o grabber -lm -lbcm2835
 
 /*
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+ * Copyright (c) 2017,2018 Peter Budd. All rights reserved
+ * Permission is hereby granted, free of charge, to any person obtaining a copy of this software and
+ * associated documentation files (the "Software"), to deal in the Software without restriction,
+ * including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense,
+ * and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so,
+ * subject to the following conditions:
+    * The above copyright notice and this permission notice shall be included in all copies or substantial
+      portions of the Software.
+    * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING
+      BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+      IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+      WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+      SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE. THE AUTHORS AND COPYRIGHT HOLDERS, HOWEVER,
+      ACCEPT LIABILITY FOR DEATH OR PERSONAL INJURY CAUSED BY NEGLIGENCE AND FOR ALL MATTERS LIABILITY
+      FOR WHICH MAY NOT BE LAWFULLY LIMITED OR EXCLUDED UNDER ENGLISH LAW
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+* This script forms part of the Bell-Boy project to measure the force applied by a bell ringer to a tower
+* bell rope.  The Bell-Boy uses rotational acceleration of the bell as a proxy for force applied.  The
+* hardware is currently a Pi Zero running Arch Linux.
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+* I pulled snippets of code from loads of places so if any of you recognise anything you wrote - thanks!
+
+* This program uses a BNO080 device.  It pulls data from the device and pushes it
+* to the javascript running on the users browser
+* 
+* Will "work" standalone (from the command line) but just communicates with the terminal.  It is
+* intended to be interfaced with websocketd https://github.com/joewalnes/websocketd to connect to 
+* browsers
+
 */
-
 #include <math.h>
 #include <sys/time.h>
 #include <time.h>
@@ -31,76 +42,41 @@ SOFTWARE.
 #include <fcntl.h>
 #include <sys/ioctl.h>
 #include <sys/time.h>
-#include <linux/i2c-dev.h>
 #include <errno.h>
 #include <linux/types.h>
-#include <linux/i2c.h>
-#include <linux/i2c-dev.h>
+#include <sys/types.h>
+#include <linux/spi/spidev.h>
 #include <dirent.h>
-#include "grabber.h"
+#include "BNO080.h"
+#include <bcm2835.h>
 
 #ifndef NULL
 #define NULL 0
 #endif
 
-#ifndef I2C_SMBUS_I2C_BLOCK_BROKEN
-#define I2C_SMBUS_I2C_BLOCK_BROKEN I2C_SMBUS_I2C_BLOCK_DATA
-#endif
-#ifndef I2C_FUNC_SMBUS_PEC
-#define I2C_FUNC_SMBUS_PEC I2C_FUNC_SMBUS_HWPEC_CALC
-#endif
-
-// these are used by the extended Kalman filter
-#define g0 9.8189
-#define g0_2 (g0*g0)
-#define q_dcm2 (0.1*0.1)
-#define q_gyro_bias2 (0.0001*0.0001)
-#define r_acc2 (0.5*0.5)
-#define r_a2 (10*10)
-#define q_dcm2_init (1*1)
-#define q_gyro_bias2_init (0.1*0.1)
-
 #define DEGREES_TO_RADIANS_MULTIPLIER 0.017453 
 #define RADIANS_TO_DEGREES_MULTIPLIER 57.29578 
-#define I2CDEV "/dev/i2c-1"
+#define INTPIN 23
+#define RESETPIN 24
+#define WAKPS0PIN 25
+#define QP(n) (pow(2,-n)) 
+// interesting effect, the gyro integrated rotation vector is unstable
+// at ODR values in which the game rotation vector is "uncomfortable"
+// (The game rotation vector is used for stabilisation of the GIRV.) 
+// An ODR of 400 works fine.
+#define ODR 400 
+#define BUFFERSIZE 64
+#define PUSHBATCH 40
+#define R2O2 (sqrt(2)/2.0)
 
-#define MPU6050_1_I2C_ADDRESS 0x68
-#define MPU6050_2_I2C_ADDRESS 0x69
+char READ_OUTBUF[1500];
 
-FILE *fd_write_out;
-int MPU6050_1_fd = -1;
-int MPU6050_2_fd = -1;
+uint32_t FRS_READ_BUFFER[64];
 
-float yaw = 0.0;
-float pitch = 0.0;
-float roll = 0.0;
-float a[3];
-float sample_period = 0.0;
-float GYRO_BIAS_1[3] = { 0.0, 0.0, 0.0 };
-float GYRO_BIAS_2[3] = { 0.0, 0.0, 0.0 };
-int DEBUG = 0;
-//float angle_correction = 0.0;
-
-// These are the smoothed results to report to the front end
-float smoothedAngle = 0.0;
-float smoothedRate = 0.0;
-float smoothedAccn = 0.0;
-
-// this is the smoothing factor (angle, rate and acceleration have a complementary
-// filter applied.  This is the default, can be changed on commant line
-float smoothFactor = 0.92;
-
-float MPU6050_gyro_scale_factor = 0;
-float MPU6050_accel_scale_factor = 0;
-
-float ROTATIONS[3] = { 1.0, -1.0, -1.0 }; //set rotation values for mounting IMU device x y z
-
-float SIDEMOUNT = 0.0;
-
-int ODR = 0;
-int FS_GYRO = 0;
-int FS_ACCEL = 0;
-
+uint8_t SEQUENCENUMBER[7];
+unsigned int LOOPSLEEP = 1000;  // in microseconds
+unsigned int LOOPCOUNT = 0;
+char FILENAME[50];
 int RUNNING = 0;
 int OUT_COUNT = 0;
 
@@ -108,28 +84,10 @@ char READ_OUTBUF[1500];
 char READ_OUTBUF_LINE[150];
 int READ_OUTBUF_COUNT;
 
-float yoffset_1 = 0.0;
-float yscale_1 = 1.0;
-float zoffset_1 = 0.0;
-float zscale_1 = 1.0;
+FILE *fd_write_out;
 
-float yoffset_2 = 0.0;
-float yscale_2 = 1.0;
-float zoffset_2 = 0.0;
-float zscale_2 = 1.0;
-
-char FILENAME[50];
-
-int LOOPSLEEP = 100000; // sleep for 0.1 of a second unless actively sampling then sleep 4000000/ODR
-
-volatile sig_atomic_t sig_exit = 0;
-void sig_handler(int signum) {
-    if (signum == SIGINT) fprintf(stderr, "received SIGINT\n");
-    if (signum == SIGTERM) fprintf(stderr, "received SIGTERM\n");
-    sig_exit = 1;
-}
 /*
-# There are nine possible command sent by the user's browser:
+# There are the following possible command sent by the user's browser:
 # (a)   STRT:[filename] Start recording a session with a bell.  The bell
 #       must be at stand and (reasonably) stationary otherwise this
 #       will return ESTD: or EMOV: either of which signals the browser 
@@ -146,7 +104,12 @@ void sig_handler(int signum) {
 #             string is unixtime (microsecs since 1/1/70)
 # (g)   SAMP: requests the current sample period
 # (h)   SHDN: tells the device to shutdown
-# (i)   TEST: returns the current basic orientation (for testing)
+# (i)   CALI: tells the device to provide calibration and tare data
+# (j)   TARE: tares the device in the current position (bell down)
+# (k)   CLTA: clears the current tare
+# (l)   DOTA: marks tare as already done - useful when tare was done but you need
+#               to reset things with the bell at stand
+# (m)   SAVE: save current calibration to flash
 # 
 # There are the following responses back to the user's browser:
 # (i)   STPD: tells the browser that the device has sucessfully stopped sampling
@@ -167,26 +130,122 @@ void sig_handler(int signum) {
 # (xiii)FILE:[filename] in response to FILE: a list of the previous recordings in /data/samples
 # (xiv) STRT: in response to STRT: indicates a sucessful start.
 # (xv)  LFIN:[number] indicates the end of a file download and the number of samples sent
-* (xvi) TEST:[number] current orientation
+# (xvi) CALI:returns certain calibration/tare data
+
+* Commands (see above) are received on stdin and output is on stdout.
 */
 
-/*
-* Command line arguments bb_grabber {1} {2} {3} {4}
-* {1} = Operational data rate (ODR). One of 500, 200, 100 and 50 samples per second.
-* {2} = gyro full scale range. One of 500 and 1000 (in degrees/second).
-* {3} = accelerometer full scale range.  One of 2 and 4 (g).
-* {4} = (optional) smooth factor.  If nothing entered here 0.92 is used
-* Example: bb_grabber 200 500 4 0.94
-* Commands (see above) are received on stdin and output is on stdout.
-* Will work standalone but intended to be interfaced with websocketd https://github.com/joewalnes/websocketd
-*/
+struct {
+    uint32_t buffer[MAX_PACKET_SIZE];
+    unsigned int sequence;
+    unsigned int dataLength;
+    uint8_t channel;
+} spiRead;
+
+struct {
+    uint32_t buffer[256];
+} spiWrite;
+
+struct {
+    float rateBuffer[BUFFERSIZE];
+    float accnBuffer[BUFFERSIZE];
+    unsigned int head;
+    unsigned int tail;
+    unsigned int available;
+    unsigned int status;
+    unsigned int lastSequence;
+    unsigned int requestedInterval;
+    unsigned int reportInterval;
+    float lastRate;
+    float lastX;
+    float lastY;
+    float lastZ;
+} gyroData={ .head=0, .tail=0, .available=0, .lastRate=0 };
+
+struct {
+    float angleBuffer[BUFFERSIZE];
+    float rateBuffer[BUFFERSIZE];
+    float accnBuffer[BUFFERSIZE];
+    unsigned int head;
+    unsigned int tail;
+    unsigned int available;
+    float direction;
+    float lastYaw;
+    float lastPitch;
+    float lastRoll;
+    float lastX;
+    float lastY;
+    float lastZ;
+    float averageAngle;
+    float tareValue;
+    unsigned int lastSequence;
+    unsigned int requestedInterval;
+    unsigned int reportInterval;
+    float lastRate;
+} gyroIntegratedRotationVectorData ={ .averageAngle=0, .head=0, .tail=0, .available=0 };
+
+struct {
+    float angleBuffer[BUFFERSIZE];
+    unsigned int head;
+    unsigned int tail;
+    unsigned int available;
+    float direction;
+    unsigned int status;
+    float lastYaw;
+    float lastPitch;
+    float lastRoll;
+    unsigned int lastSequence;
+    unsigned int requestedInterval;
+    unsigned int reportInterval;
+} gameRotationVectorData ={ .head=0, .tail=0, .available=0 };
+
+struct {
+    float XBuffer[BUFFERSIZE];
+    float YBuffer[BUFFERSIZE];
+    float ZBuffer[BUFFERSIZE];
+    unsigned int head;
+    unsigned int tail;
+    unsigned int available;
+    unsigned int status;
+    unsigned int lastSequence;
+    unsigned int requestedInterval;
+    unsigned int reportInterval;
+} linearAccelerometerData={ .head=0, .tail=0, .available=0 };
+
+struct {
+    float XBuffer[BUFFERSIZE];
+    float YBuffer[BUFFERSIZE];
+    float ZBuffer[BUFFERSIZE];
+    unsigned int head;
+    unsigned int tail;
+    unsigned int available;
+    unsigned int status;
+    unsigned int lastSequence;
+    unsigned int requestedInterval;
+    unsigned int reportInterval;
+} accelerometerData={ .head=0, .tail=0, .available=0 };
+
+struct {
+    unsigned int status;
+    unsigned int lastSequence;
+    unsigned int requestedInterval;
+    unsigned int reportInterval;
+} stabilityData;
+
+volatile sig_atomic_t sig_exit = 0;
+void sig_handler(int signum) {
+    if (signum == SIGINT) fprintf(stderr, "received SIGINT\n");
+    if (signum == SIGTERM) fprintf(stderr, "received SIGTERM\n");
+    sig_exit = 1;
+}
+
 int main(int argc, char const *argv[]){
     char linein[50];
     char command[6];
     char details[42];
     char oscommand[90];
-    float start_angle = 0.0;
     int entries;
+    int torn = 0;
     float shutdowncount = 0.0;
     FILE *shutdowncheck;
 
@@ -196,77 +255,23 @@ int main(int argc, char const *argv[]){
     sig_action.sa_handler = sig_handler;
     sigaction(SIGTERM, &sig_action, NULL);
     sigaction(SIGINT, &sig_action, NULL);
-    
+
     setbuf(stdout, NULL);
     setbuf(stdin, NULL);
     fcntl(STDIN_FILENO, F_SETFL, fcntl(STDIN_FILENO, F_GETFL) | O_NONBLOCK);
+    
+    setup();
+    start(ODR);
 
-    if(argc < 4 || argc > 5){
-        printf("Incorrect number of arguments for BellBoy app.  Expect ODR, FS gyro, FS accelerometer and (optionally) a smooth factor between 0 and 1.\n");
-        return -1;
-    }
-    ODR = atoi(argv[1]);
-    if (ODR != 50 && ODR != 100 && ODR != 200 && ODR != 500) {
-        printf("Incorrect ODR.  Expects 50, 100, 200 or 500 as first argument.\n");
-        return -1;
-    }
-    sample_period = 1.0/ODR; // this is an initial estimate.  SAMP: command measures this directly and updates sample_period
-    
-    FS_GYRO = atoi(argv[2]);
-    if (FS_GYRO != 500 && FS_GYRO != 1000) {
-        printf("Incorrect FS gyro.  Expects 500 or 1000 as second argument.\n");
-        return -1;
-    }
-    
-    FS_ACCEL = atoi(argv[3]);
-    if (FS_ACCEL != 2 && FS_ACCEL != 4) {
-        printf("Incorrect FS accel.  Expects 2 or 4 as second argument.\n");
-        return -1;
-    }
-    
-    if (argc == 5){
-        smoothFactor = atof(argv[4]);
-        if(smoothFactor > 1.0 || smoothFactor < 0.0){
-            printf("Incorrect smooth factor.  Expects a number between 0 and 1.\n");
-            return -1;
-        }
-    }
-        
-//    if(MPU6050_test() != 0){
-//        printf("EIMU:\n");
-//        return -1;
-//    }
-    
-    FILE *fd_read_cal;
-    fd_read_cal = fopen("/boot/bb_calibrations","r");
-    if(fd_read_cal == NULL) {
-        fprintf(stderr, "Calibration file not found.\n");
-    } else {
-        if (fgets(READ_OUTBUF_LINE, sizeof(READ_OUTBUF_LINE), fd_read_cal) != NULL) {
-            char *p = strtok(READ_OUTBUF_LINE,",");
-            if(p!= NULL) yoffset_1 = atof(&p[4]);
-            p = strtok(NULL,",");
-            if(p!= NULL) yscale_1 = atof(&p[4]);
-            p = strtok(NULL,",");
-            if(p!= NULL) zoffset_1 = atof(&p[4]);
-            p = strtok(NULL,",");
-            if(p!= NULL) zscale_1 = atof(&p[4]);
-            p = strtok(NULL,",");
-            if(p!= NULL) yoffset_2 = atof(&p[4]);
-            p = strtok(NULL,",");
-            if(p!= NULL) yscale_2 = atof(&p[4]);
-            p = strtok(NULL,",");
-            if(p!= NULL) zoffset_2 = atof(&p[4]);
-            p = strtok(NULL,",");
-            if(p!= NULL) zscale_2 = atof(&p[4]);
-//            fprintf(stderr,"YO:%+06.3f,YS:%+06.3f,ZO:%+06.3f,ZS:%+06.3f\n", yoffset,yscale,zoffset,zscale);
-        }
-        fclose(fd_read_cal);
-    }
-    
     while(!sig_exit){
         usleep(LOOPSLEEP);
-        
+        LOOPCOUNT += 1;        
+        while(bcm2835_gpio_lev(INTPIN) == 0) handleEvent();
+
+        if((LOOPCOUNT > 5000) && ((LOOPCOUNT % 3000) == 0)  && (torn == 0)){ // if we already haven't torn the device then try doing it now
+            printf("CALI:%d P:%+07.1f R:%+07.1f Y:%+07.1f, AA:%+07.1f\n",torn,gyroIntegratedRotationVectorData.lastPitch,gyroIntegratedRotationVectorData.lastRoll, gyroIntegratedRotationVectorData.lastYaw, gyroIntegratedRotationVectorData.averageAngle);
+        }
+
         shutdowncount += LOOPSLEEP/1000;
         if(shutdowncount >= 20000){ // check every 20 seconds
             shutdowncheck = fopen("/run/nologin","r");  // 5 minute warning
@@ -277,29 +282,49 @@ int main(int argc, char const *argv[]){
             shutdowncount = 0.0;
         }
         
-        if(RUNNING) MPU6050_pull_data(0);
         while(fgets(linein, sizeof(linein), stdin ) != NULL) {
             entries = sscanf(linein, "%5s%[^\n]", command, details);
             if(entries < 1) {
                 fprintf( stderr, "\nError reading: %s \n", linein );
                 continue;
             }
-//            if(entries == 2) printf("Command: %s Details: %s Count: %d \n", command, details, count);
-//            if(entries == 1) printf("Command: %s Count: %d \n", command, count);
-  
             if(strcmp("DATE:", command) == 0 && entries == 2  && strlen(details) < 12){
                 sprintf(oscommand,"/usr/bin/date --set=\"$(date --date='@%s')\" && /usr/bin/touch /var/lib/systemd/clock", details);
                 system(oscommand);
                 continue;
             }
             if(strcmp("SAMP:", command) == 0) {
-                if(MPU6050_fifo_timer() == 0) {
-                    printf("SAMP:%f\n",sample_period);
-                } else {
-                    printf("EIMU:\n");
-                }
+                printf("SAMP:%f\n",5.0/ODR); // temporary reduction in sample rate
                 continue;
             }
+            if(strcmp("CALI:", command) == 0) {
+                printf("CALI:%d P:%+07.1f R:%+07.1f Y:%+07.1f, AA:%+07.1f, TV:%+07.1f\n",torn,gyroIntegratedRotationVectorData.lastPitch,gyroIntegratedRotationVectorData.lastRoll, gyroIntegratedRotationVectorData.lastYaw, gyroIntegratedRotationVectorData.averageAngle, gyroIntegratedRotationVectorData.tareValue);
+//                printf("CALI:%d %d %d %d P:%+07.1f R:%+07.1f Y:%+07.1f\n",torn,gameRotationVectorData.status,gyroData.status,accelerometerData.status, gameRotationVectorData.lastPitch,gameRotationVectorData.lastRoll, gameRotationVectorData.lastYaw);
+                continue;
+            }
+            if(strcmp("TARE:", command) == 0) {
+                saveCalibration();
+                torn = 1;
+                gyroIntegratedRotationVectorData.tareValue = gyroIntegratedRotationVectorData.averageAngle;
+//                tare();
+                start(ODR); // occasional hang found unless we did this
+                continue;
+            }
+            if(strcmp("CLTA:", command) == 0) {
+                clearPersistentTare();
+                continue;
+            }
+
+            if(strcmp("DOTA:", command) == 0) {
+//                start_accel(0);
+                torn=1;
+                continue;
+            }            
+            if(strcmp("SAVE:", command) == 0) {
+                saveCalibration();
+                continue;
+            }            
+
             if(strcmp("FILE:", command) == 0) {
                 DIR *d;
                 struct dirent *dir;
@@ -312,15 +337,8 @@ int main(int argc, char const *argv[]){
                 }
                 continue;
             }
-            if(strcmp("TEST:", command) == 0) {
-                ROTATIONS[0] = 1.0;   // reset rotations
-                ROTATIONS[1] = -1.0;
-                ROTATIONS[2] = -1.0;
-				printf("TEST:%f\n",MPU6050_get_orientation());
-                continue;
-            }
-
             if(strcmp("STRT:", command) == 0) {
+//                start_accel(0);
                 if(entries == 2  && strlen(details) < 34){
                     sprintf(FILENAME, "/data/samples/%s", details);
                 } else {
@@ -329,86 +347,29 @@ int main(int argc, char const *argv[]){
                     timenow = gmtime(&now);
                     strftime(FILENAME, sizeof(FILENAME), "/data/samples/Unnamed_%d-%m-%y_%H%M", timenow);
                 }
-                SIDEMOUNT = 0.0;
-                ROTATIONS[0] = 1.0;   // reset rotations
-                ROTATIONS[1] = -1.0;
-                ROTATIONS[2] = -1.0;
-                start_angle = MPU6050_get_orientation(); // also sets gyro biasses
-                if(start_angle == -999) {
-                    printf("ESTD:\n");
-                    fprintf(stderr, "Can't calculate start angle\n");
-                    continue;
-                }
-                if(start_angle > 70.0 && start_angle < 110.0){ // appears to be mounted on the side of the headstock
-                    SIDEMOUNT = 90.0;
-                    start_angle -= SIDEMOUNT;
-                }
-                if(start_angle > -110.0 && start_angle < -90.0){ // appears to be mounted on the side of the headstock
-                    SIDEMOUNT = -90.0;
-                    start_angle -= SIDEMOUNT;
-                }
-
-                if(start_angle < 2.0 && start_angle > -2.0) {
-                    printf("ESTD:\n"); // bell out of range for stand
-                    continue;
-                }
-                if(start_angle >= 2.0){             // this check enables the user not to think
-                    ROTATIONS[0] = -ROTATIONS[0];   // about which way to mount the sensor
-                    ROTATIONS[1] = -ROTATIONS[1];   // it just flips things around as if the sensor
-                    start_angle = -start_angle;     // was mounted the other way round
-                    SIDEMOUNT = -SIDEMOUNT;
-                    GYRO_BIAS_1[0] = -GYRO_BIAS_1[0];
-                    GYRO_BIAS_1[1] = -GYRO_BIAS_1[1];
-                    GYRO_BIAS_2[0] = -GYRO_BIAS_2[0];
-                    GYRO_BIAS_2[1] = -GYRO_BIAS_2[1];
-
-                }
-                if(start_angle < -20){
-                    printf("ESTD:\n"); // bell out of range for stand
-                    continue;
-                }
-                if(abs(GYRO_BIAS_2[0]) > 5.0){
-                    printf("EMOV:\n"); // bell is moving
-                    continue;
-                }
+                if(!startRun()) continue;
                 fd_write_out = fopen(FILENAME,"w");
                 if(fd_write_out == NULL) {
                     fprintf(stderr, "Could not open file for writing\n");
                     printf("ESTR:\n");
+                    printf("STPD:\n");
                     continue;
                 } else {
-                    if(MPU6050_start_fifos(ODR,FS_GYRO,FS_ACCEL) == 0){
-                        LOOPSLEEP = 4000000/ODR;
-                        RUNNING = 1;
-                        OUT_COUNT = 0;
-//                        angle_correction = 0.0;
-                        smoothedAccn = 0.0;
-                        smoothedAngle = start_angle;
-                        smoothedRate = 0.0;
-                        printf("STRT:\n");
-                        //stabilise EKF
-                        for(int stab=0;stab<100;stab++){
-							usleep(LOOPSLEEP);
-							MPU6050_pull_data(2);
-						}
-                    } else {
-                        printf("EFIF:\n");
-                        printf("STPD:\n");
-                    }
+                    printf("STRT:\n");
+                    OUT_COUNT = 0;
                 }
                 continue;
             }
             if(strcmp("STOP:", command) == 0) {
                 if(fd_write_out != NULL){
-                    MPU6050_pull_data(1);
                     fflush(fd_write_out);
                     fclose(fd_write_out);
                     fd_write_out = NULL;
                 }
-                MPU6050_stop_fifos();
                 RUNNING = 0;
-                LOOPSLEEP = 100000;
-                printf("STPD:%d\n", OUT_COUNT);
+//                calibrationSetup(1,1,1);
+                
+                printf("STPD:%d\n",OUT_COUNT);
                 continue;
             }
             if(strcmp("LOAD:", command) == 0 && RUNNING == 0) {
@@ -418,6 +379,10 @@ int main(int argc, char const *argv[]){
                     printf("ESTR:\n");
                     continue;
                 }
+                start(0); // if we don't do this the fifos overflow and the device is reset
+                collectPacket();// collect feature status reports and dump them
+                collectPacket();
+                collectPacket();
                 FILE *fd_read_in;
                 fd_read_in = fopen(FILENAME,"r");
                 if(fd_read_in == NULL) {
@@ -442,6 +407,7 @@ int main(int argc, char const *argv[]){
                     printf("LFIN:%d\n", counter);
                 }
                 fclose(fd_read_in);
+                start(ODR); // restart
                 continue;
             }
             if(strcmp("SHDN:", command) == 0) {
@@ -453,893 +419,895 @@ int main(int argc, char const *argv[]){
         }
     }
     if(fd_write_out != NULL) {
-        MPU6050_pull_data(1);
         fflush(fd_write_out);
         fclose(fd_write_out);
     }
-    MPU6050_stop_fifos();
-    system("/usr/bin/touch /var/lib/systemd/clock");
+    start(0);
+    collectPacket();// collect the three feature status reports and dump them
+    collectPacket();
+    collectPacket();
+    bcm2835_spi_end();
+    bcm2835_close();
     return 0;
 }
 
-int MPU6050_test(void){
-    if (MPU6050_1_fd != -1) return -10;
-    if ((MPU6050_1_fd = open(I2CDEV, O_RDWR)) < 0) {
-        MPU6050_1_fd = -1;
-        return -1;
-    }
-    if (ioctl(MPU6050_1_fd, I2C_SLAVE, MPU6050_1_I2C_ADDRESS) < 0) {
-        close(MPU6050_1_fd);
-        MPU6050_1_fd = -1;
-        return -2;
-    }
-    if (i2c_smbus_read_byte_data(MPU6050_1_fd, MPU6050_RA_WHO_AM_I) != 104) {
-        close(MPU6050_1_fd);
-        MPU6050_1_fd = -1;
-        return -3;
-    }
-    close(MPU6050_1_fd);
-    MPU6050_1_fd = -1;
+int startRun(void){
 
-    if (MPU6050_2_fd != -1) return -11;
-    if ((MPU6050_2_fd = open(I2CDEV, O_RDWR)) < 0) {
-        MPU6050_2_fd = -1;
-        return -4;
-    }
-    if (ioctl(MPU6050_2_fd, I2C_SLAVE, MPU6050_2_I2C_ADDRESS) < 0) {
-        close(MPU6050_2_fd);
-        MPU6050_2_fd = -1;
-        return -5;
-    }
-    if (i2c_smbus_read_byte_data(MPU6050_2_fd, MPU6050_RA_WHO_AM_I) != 104){
-        close(MPU6050_2_fd);
-        MPU6050_2_fd = -1;
-        return -6;
-    }
-    close(MPU6050_2_fd);
-    MPU6050_2_fd = -1;
+// reset fifo
+    gyroIntegratedRotationVectorData.head = 1;
+    gyroIntegratedRotationVectorData.tail = 1;
+    gyroIntegratedRotationVectorData.available = 0;
 
-    return 0;
-}
-
-int MPU6050_fifo_timer(void){
-    float result1 = 0.0, result2 = 0.0;
-    if (MPU6050_start_fifos(ODR,500,2) < 0){
-        MPU6050_stop_fifos();
-        return -1;
+    if(stabilityData.status != 1 && stabilityData.status != 2) {
+        printf("EMOV:\n"); // bell is moving
+        return(0);
     }
-    result1 = MPU6050_timer(MPU6050_1_fd);
-    result2 = MPU6050_timer(MPU6050_2_fd);
-    MPU6050_stop_fifos();
-    sample_period = (result1 > result2) ? result1 : result2;
-    return 0;
-}
-
-float MPU6050_timer(int dfd){
-    struct timeval start, stop;
-    int cco, loops;
-    float dummy[6];
-    float result = 0.0;
-    loops = (int)(ODR/25);
-    for(int i = 0; i < loops; ++i){
-        while (MPU6050_read_fifo_count(dfd) != 0) MPU6050_read_fifo_data(dfd, dummy);
-        while (MPU6050_read_fifo_count(dfd) == 0);
-        gettimeofday(&start, NULL);
-        MPU6050_read_fifo_data(dfd, dummy);
-        while (MPU6050_read_fifo_count(dfd) < (26 * 12)) usleep((int)((2/ODR)*1000000));  // sleep for about 2 periods
-        while(1){
-            cco = MPU6050_read_fifo_count(dfd);
-            if(cco == (30 * 12)) {
-                gettimeofday(&stop, NULL);
-                result += (float)((stop.tv_sec-start.tv_sec)+(float)(stop.tv_usec-start.tv_usec)/1000000.0);
-                break;
-            }
-            if(cco > (30 * 12)) {
-                i -= 1;
-                break;
-            }
-        }
+    if(abs(gyroIntegratedRotationVectorData.lastRoll) < 160 || abs(gameRotationVectorData.lastRoll) > 178){
+        printf("ESTD:\n"); // bell not at stand
+        return(0);
     }
-    return result/(30*loops);
-}
-
-
-float MPU6050_get_orientation(void){
-    int count;
-    float u0=0.0, u1=0.0, u2=0.0, z0=0.0, z1=0.0, z2=0.0;
-    float fifo_returns[6];
     
-    if (MPU6050_start_fifos(ODR,FS_GYRO,FS_ACCEL) < 0){
-        MPU6050_stop_fifos();
-        return -999;
-    }
-
-    usleep(50000); // ditch a few samples
-    while (MPU6050_read_fifo_count(MPU6050_2_fd) != 0) MPU6050_read_fifo_data(MPU6050_2_fd, fifo_returns);
-    while (MPU6050_read_fifo_count(MPU6050_1_fd) != 0) MPU6050_read_fifo_data(MPU6050_1_fd, fifo_returns);
-
-    GYRO_BIAS_1[0] = 0.0;
-    GYRO_BIAS_1[1] = 0.0;
-    GYRO_BIAS_1[2] = 0.0;
-    GYRO_BIAS_2[0] = 0.0;
-    GYRO_BIAS_2[1] = 0.0;
-    GYRO_BIAS_2[2] = 0.0;
- 
-    for(count = 0; count < 100; ++count){
-        while (MPU6050_read_fifo_count(MPU6050_2_fd) == 0) usleep(5000);
-        MPU6050_read_fifo_data(MPU6050_2_fd, fifo_returns);
-
-        z0 += fifo_returns[0];
-        z1 += fifo_returns[1];
-        z2 += fifo_returns[2];
-        u0 += fifo_returns[3];
-        u1 += fifo_returns[4];
-        u2 += fifo_returns[5];
-        
-        while (MPU6050_read_fifo_count(MPU6050_1_fd) == 0) usleep(5000);
-        MPU6050_read_fifo_data(MPU6050_1_fd, fifo_returns);
-        GYRO_BIAS_1[0] += fifo_returns[3];
-        GYRO_BIAS_1[1] += fifo_returns[4];
-        GYRO_BIAS_1[2] += fifo_returns[5];
-
-    }
-    u0 /= 100.0;
-    u1 /= 100.0;
-    u2 /= 100.0;
-    z0 /= 100.0;
-    z1 /= 100.0;
-    z2 /= 100.0;
-    
-    GYRO_BIAS_2[0] = u0;
-    GYRO_BIAS_2[1] = u1;
-    GYRO_BIAS_2[2] = u2;
-    
-    GYRO_BIAS_1[0] /= 100.0;
-    GYRO_BIAS_1[1] /= 100.0;
-    GYRO_BIAS_1[2] /= 100.0;
-    
-    
- //   printf("GXB:%+07.1f GYB:%+07.1f GZB:%+07.1f\n", u0,u1,u2); 
-    MPU6050_stop_fifos();
-  
-    return atan2(z1, z2) * RADIANS_TO_DEGREES_MULTIPLIER;
-}
-
-int MPU6050_start_fifos(int ODR, int gyro_fs, int accel_fs){
-    if (MPU6050_1_fd != -1) return -1;
-    if ((MPU6050_1_fd = open(I2CDEV, O_RDWR)) < 0) {
-        MPU6050_1_fd = -1;
-        return -1;
-    }
-    if (ioctl(MPU6050_1_fd, I2C_SLAVE, MPU6050_1_I2C_ADDRESS) < 0) {
-        close(MPU6050_1_fd);
-        MPU6050_1_fd = -1;
-        return -1;
-    }
-
-    if (MPU6050_2_fd != -1) return -1;
-    if ((MPU6050_2_fd = open(I2CDEV, O_RDWR)) < 0) {
-        MPU6050_2_fd = -1;
-        return -1;
-    }
-    if (ioctl(MPU6050_2_fd, I2C_SLAVE, MPU6050_2_I2C_ADDRESS) < 0) {
-        close(MPU6050_2_fd);
-        MPU6050_2_fd = -1;
-        return -1;
-    }
-
-    // reset device
-    __u8 rtemp = i2c_smbus_read_byte_data(MPU6050_1_fd, MPU6050_RA_PWR_MGMT_1);
-    i2cWriteByteData(MPU6050_1_fd, MPU6050_RA_PWR_MGMT_1, rtemp | 0x80);
-    rtemp = i2c_smbus_read_byte_data(MPU6050_2_fd, MPU6050_RA_PWR_MGMT_1);
-    i2cWriteByteData(MPU6050_2_fd, MPU6050_RA_PWR_MGMT_1, rtemp | 0x80);
-    usleep(500000);
-
-    // take out of sleep
-    rtemp = i2c_smbus_read_byte_data(MPU6050_1_fd, MPU6050_RA_PWR_MGMT_1);
-    i2cWriteByteData(MPU6050_1_fd, MPU6050_RA_PWR_MGMT_1, rtemp & 0xBF);
-    rtemp = i2c_smbus_read_byte_data(MPU6050_2_fd, MPU6050_RA_PWR_MGMT_1);
-    i2cWriteByteData(MPU6050_2_fd, MPU6050_RA_PWR_MGMT_1, rtemp & 0xBF);
-
-    // set clock source to xgyro
-    rtemp = i2c_smbus_read_byte_data(MPU6050_1_fd, MPU6050_RA_PWR_MGMT_1) & 0xF8;
-    i2cWriteByteData(MPU6050_1_fd, MPU6050_RA_PWR_MGMT_1, rtemp | 0x01);
-    rtemp = i2c_smbus_read_byte_data(MPU6050_2_fd, MPU6050_RA_PWR_MGMT_1) & 0xF8;
-    i2cWriteByteData(MPU6050_2_fd, MPU6050_RA_PWR_MGMT_1, rtemp | 0x01);
-
-    switch(accel_fs){
-        case 4:
-            i2cWriteByteData(MPU6050_1_fd,MPU6050_RA_ACCEL_CONFIG, 0x08);  
-            i2cWriteByteData(MPU6050_2_fd,MPU6050_RA_ACCEL_CONFIG, 0x08);
-            MPU6050_accel_scale_factor = MPU6050_ACCEL_SCALE_MODIFIER_4G;
-            break;
-        case 2:
-            i2cWriteByteData(MPU6050_1_fd,MPU6050_RA_ACCEL_CONFIG, 0x00);  
-            i2cWriteByteData(MPU6050_2_fd,MPU6050_RA_ACCEL_CONFIG, 0x00);
-            MPU6050_accel_scale_factor = MPU6050_ACCEL_SCALE_MODIFIER_2G;
-    }
-
-    switch(gyro_fs){
-        case 1000:
-            i2cWriteByteData(MPU6050_1_fd,MPU6050_RA_GYRO_CONFIG, 0x10);  
-            i2cWriteByteData(MPU6050_2_fd,MPU6050_RA_GYRO_CONFIG, 0x10);
-            MPU6050_gyro_scale_factor = MPU6050_GYRO_SCALE_MODIFIER_1000DEG;
-            break;
-        case 500:
-            i2cWriteByteData(MPU6050_1_fd,MPU6050_RA_GYRO_CONFIG, 0x08);  
-            i2cWriteByteData(MPU6050_2_fd,MPU6050_RA_GYRO_CONFIG, 0x08);
-            MPU6050_gyro_scale_factor = MPU6050_GYRO_SCALE_MODIFIER_500DEG;
-            break;
-        }
-
-    // LPF to 188Hz
-    i2cWriteByteData(MPU6050_1_fd, MPU6050_RA_CONFIG, 0x01);
-    i2cWriteByteData(MPU6050_2_fd, MPU6050_RA_CONFIG, 0x01);
-
-    switch(ODR){
-        case 500:
-            i2cWriteByteData(MPU6050_1_fd,MPU6050_RA_SMPLRT_DIV, 1);
-            i2cWriteByteData(MPU6050_2_fd,MPU6050_RA_SMPLRT_DIV, 1);
-            break;
-        case 200:
-            i2cWriteByteData(MPU6050_1_fd,MPU6050_RA_SMPLRT_DIV, 4);
-            i2cWriteByteData(MPU6050_2_fd,MPU6050_RA_SMPLRT_DIV, 4);
-            break;
-        case 100:
-            i2cWriteByteData(MPU6050_1_fd,MPU6050_RA_SMPLRT_DIV, 9);
-            i2cWriteByteData(MPU6050_2_fd,MPU6050_RA_SMPLRT_DIV, 9);
-            break;
-        case 50:
-            i2cWriteByteData(MPU6050_1_fd,MPU6050_RA_SMPLRT_DIV, 19);
-            i2cWriteByteData(MPU6050_2_fd,MPU6050_RA_SMPLRT_DIV, 19);
-            break;
-    }    
-    // select accel and gyro to go into FIFO
-    i2cWriteByteData(MPU6050_1_fd,MPU6050_RA_FIFO_EN, 0x78);
-    i2cWriteByteData(MPU6050_2_fd,MPU6050_RA_FIFO_EN, 0x78);
-
-    // start FIFO
-    i2cWriteByteData(MPU6050_1_fd, MPU6050_RA_USER_CTRL, 0x40);
-    i2cWriteByteData(MPU6050_2_fd, MPU6050_RA_USER_CTRL, 0x40);
-
-
-    return 0;
-}
-
-void MPU6050_stop_fifos(){
-    __u8 rtemp;
-    if (MPU6050_1_fd != -1){
-        rtemp = i2c_smbus_read_byte_data(MPU6050_1_fd, MPU6050_RA_USER_CTRL);
-        i2cWriteByteData(MPU6050_1_fd, MPU6050_RA_USER_CTRL, (rtemp & 0xBF));
-        i2cWriteByteData(MPU6050_1_fd, MPU6050_RA_USER_CTRL, (rtemp | 0x04));
-        close(MPU6050_1_fd);
-        MPU6050_1_fd = -1;
-    }
-
-    if (MPU6050_2_fd != -1){
-        rtemp = i2c_smbus_read_byte_data(MPU6050_2_fd, MPU6050_RA_USER_CTRL);
-        i2cWriteByteData(MPU6050_2_fd, MPU6050_RA_USER_CTRL, (rtemp & 0xBF));
-        i2cWriteByteData(MPU6050_2_fd, MPU6050_RA_USER_CTRL, (rtemp | 0x04));
-        close(MPU6050_2_fd);
-        MPU6050_2_fd = -1;
-    }
-
-}
-// arugument (command) =0 normal running =1 cleanup =2 stabilise (don't write anything)
-void MPU6050_pull_data(int command){
-    float fifo_data_1[6];
-    float fifo_data_2[6];
-    float combined_data[6];
-    float accTang;
-    static float last_x_gyro = 0.0;
-    static float last_angle = 0.0; 
-    static float nudgeAngle = 0.0;
-    static int nudgeCount = 0;   
-    int count_1, count_2, i, duplicate, number_to_pull;
-
-    static char local_outbuf[65000];
-    static char remote_outbuf[1500];
-    static char local_outbuf_line[150];
-    static char remote_outbuf_line[150];
-    static int local_count = 0;
-    int remote_count = 0;
-
-    if(command == 1){
-        if(local_count != 0) fputs(local_outbuf, fd_write_out);
-        fflush(fd_write_out);
-        local_count = 0;
-        return;
-    }        
-
-    if (MPU6050_1_fd == -1 || MPU6050_2_fd == -1 || fd_write_out == NULL) {
-        fprintf(stderr,"Fifos not started or can't write to file\n");
-        printf("EFIF:\n");
-        printf("STPD:\n");
-        MPU6050_stop_fifos();
-        RUNNING = 0;
-        LOOPSLEEP = 100000;
-        if(fd_write_out != NULL){
-            if(local_count != 0) fputs(local_outbuf, fd_write_out);
-            fflush(fd_write_out);
-            fclose(fd_write_out);
-            local_count = 0;
-            fd_write_out = NULL;
-        }
-        return;
-    }
-    count_1 = MPU6050_read_fifo_count(MPU6050_1_fd);
-    count_2 = MPU6050_read_fifo_count(MPU6050_2_fd);
-    if(count_1 == 0 || count_2 == 0) return;
-
-    if (count_1 > 1000 || count_2 >= 1000){ // overflow (or nearly so)
-        printf("\nEOVF:\n");
-        if (local_count + 8 > (sizeof local_outbuf -2)) {
-            fputs(local_outbuf, fd_write_out);
-            local_count = 0;
-        }
-        local_count += sprintf(&local_outbuf[local_count],"\nEOVF:\n");
-        // some sort of recovery algorithm would be nice...
-    }
-
-    // ditch a sample if one fifo is running faster then the other
-    if ((count_1 - count_2) >=24){
-        MPU6050_read_fifo_data(MPU6050_1_fd, fifo_data_1);
-        count_1 -= 12;
-    } else if ((count_2 - count_1) >=24){
-        MPU6050_read_fifo_data(MPU6050_2_fd, fifo_data_2);
-        count_2 -= 12;
-    }
-    OUT_COUNT += (count_1 > count_2) ? (count_2 / 12) : (count_1 / 12);
-    while(count_1 >=12 && count_2 >= 12){
-        count_1 -= 12;
-        count_2 -= 12;
-        MPU6050_read_fifo_data(MPU6050_1_fd, fifo_data_1);
-        MPU6050_read_fifo_data(MPU6050_2_fd, fifo_data_2);
-        combined_data[0] = (fifo_data_2[0] - fifo_data_1[0]) / 2.0;
-        combined_data[1] = (fifo_data_2[1] + fifo_data_1[1]) / 2.0;
-        combined_data[2] = (fifo_data_2[2] - fifo_data_1[2]) / 2.0;
-        combined_data[3] = (fifo_data_2[3] - fifo_data_1[3]) / 2.0;
-        combined_data[4] = (fifo_data_2[4] + fifo_data_1[4]) / 2.0;
-        combined_data[5] = (fifo_data_2[5] - fifo_data_1[5]) / 2.0;
-
-//        for(i=0; i<6; ++i) combined_data[i] = (fifo_data_2[i] - fifo_data_1[i]) / 2.0;
-               
-        calculate(combined_data[3],combined_data[4],combined_data[5], combined_data[0],combined_data[1],combined_data[2],sample_period);
-        accTang = (combined_data[3] - last_x_gyro)/sample_period;         // assumes rotation of bell is around x axis
-        roll -= SIDEMOUNT;
-//        roll += angle_correction;                                     // need to correct reported angles to match
-//        if ((last_angle - roll) > 250 && angle_correction != 360){    // the system we are using 0 degrees = bell at
-//            angle_correction = 360;                                   // balance at handstroke, 360 degrees = bell at
-//            roll += 360.0;                                            // balance at backstroke. 180 degrees = BDC. 
-//        } else if ((last_angle - roll) < -250 && angle_correction != 0) {                                                 
-//            angle_correction = 0;
-//            roll -= 360.0;
-//        }
-
-        float newSmoothedAccn = smoothFactor*smoothedAccn + (1.0-smoothFactor)* accTang;
-        float newSmoothedAngle = (smoothFactor*smoothedAngle + (1.0-smoothFactor)*roll);
-        smoothedRate = smoothFactor*smoothedRate + (1.0-smoothFactor)*((combined_data[3] + last_x_gyro)/2.0);
-
-// this section calculates a correction to the angle readings when the bell *should be* at BDC when the bell moves from acceleration to deceleration
-        if((smoothedAccn * newSmoothedAccn) < 0.0 && newSmoothedAngle > 170.0 && newSmoothedAngle < 190.0  && nudgeCount == 0) {
-            float nudgeFactor = smoothedAccn/(smoothedAccn - newSmoothedAccn);
-            float angleDiffFrom180 = (smoothedAngle + nudgeFactor*(newSmoothedAngle-smoothedAngle)) - 180.0;
-            if(nudgeAngle != 0.0){
-                nudgeAngle = 0.75*nudgeAngle + 0.25*angleDiffFrom180; // apply a bit of smoothing
-            } else {
-                nudgeAngle = angleDiffFrom180;
-            }
-            nudgeCount = 5;
-        } 
-        if(nudgeCount != 0) nudgeCount -= 1; // don't do this twice in one half stroke
-        smoothedAngle = newSmoothedAngle;
-        smoothedAccn = newSmoothedAccn;
-// TODO: make writes to stdout and SD card threaded
-        if(command != 2){
-            sprintf(remote_outbuf_line, "LIVE:A:%+07.1f,R:%+07.1f,C:%+07.1f\n", smoothedAngle-nudgeAngle, smoothedRate, smoothedAccn);
-            if (remote_count + strlen(remote_outbuf_line) > (sizeof remote_outbuf -2)) {
-                printf("%s",remote_outbuf);
-                remote_count = 0;
-            }
-            remote_count += sprintf(&remote_outbuf[remote_count],remote_outbuf_line);
-     
-            sprintf(local_outbuf_line,"A:%+07.1f,R:%+07.1f,C:%+07.1f,NA:%+05.1f\n", smoothedAngle-nudgeAngle, smoothedRate, smoothedAccn, nudgeAngle);
-            if (local_count + strlen(local_outbuf_line) > (sizeof local_outbuf -2)) {
-                fputs(local_outbuf, fd_write_out);
-                fflush(fd_write_out);
-                local_count = 0;
-            }
-            local_count += sprintf(&local_outbuf[local_count],local_outbuf_line);
-       }
-//        fprintf(fd_write_out,"A:%+07.1f,R:%+07.1f,C:%+07.1f,P:%+07.1f,Y:%+07.1f,AX:%+06.3f,AY:%+06.3f,AZ:%+06.3f,GX:%+07.1f,GY:%+07.1f,GZ:%+07.1f,X:%+06.3f,Y:%+06.3f,Z:%+06.3f\n", roll, (gyro_data[0] + last_x_gyro)/2.0, accTang, pitch, yaw, accel_data[0], accel_data[1], accel_data[2], gyro_data[0], gyro_data[1], gyro_data[2],a[0],a[1],a[2]);
-        last_x_gyro = combined_data[3];
-        last_angle = roll;
-    }
-    if(remote_count != 0) printf("%s",remote_outbuf);
-//    if(local_count != 0) fputs(local_outbuf, fd_write_out);
-   
-}
-
-void MPU6050_read_fifo_data(int dfd, float *values){
-    __u8 returns[12];
-    i2cReadBlockData(dfd, MPU6050_RA_FIFO_R_W, 12, returns);
-    values[0]=(float)((returns[0] << 8) + returns[1]); 
-    values[1]=(float)((returns[2] << 8) + returns[3]);
-    values[2]=(float)((returns[4] << 8) + returns[5]);
-    values[3]=(float)((returns[6] << 8) + returns[7]); 
-    values[4]=(float)((returns[8] << 8) + returns[9]);
-    values[5]=(float)((returns[10] << 8) + returns[11]);
-    for(int i=0; i<3; ++i){
-        if(values[i] >= 0x8000) values[i] -= 0x10000;
-        values[i] /= MPU6050_accel_scale_factor;
-    }
-    if(dfd == MPU6050_1_fd){
-        values[1] += yoffset_1;
-        values[1] *= yscale_1;
-        values[2] += zoffset_1;
-        values[2] *= zscale_1;
+    if(gyroIntegratedRotationVectorData.lastRoll < 0) {  // this bit works out which way the bell rose and adjusts accordingly
+        gyroIntegratedRotationVectorData.direction = -1;
+        gyroIntegratedRotationVectorData.angleBuffer[0] = -180.0-gyroIntegratedRotationVectorData.lastRoll;
     } else {
-        values[1] += yoffset_2;
-        values[1] *= yscale_2;
-        values[2] += zoffset_2;
-        values[2] *= zscale_2;
+        gyroIntegratedRotationVectorData.direction = +1;
+        gyroIntegratedRotationVectorData.angleBuffer[0] = gyroIntegratedRotationVectorData.lastRoll-180.0;
     }
-    for(int i=0; i<3; ++i){
-        values[i] *= ROTATIONS[i];
+    
+    RUNNING = 1;
+    return(1);
+}
+
+void handleEvent(void){
+    if(!collectPacket()) return;
+    if(spiRead.dataLength != 0) {
+        parseEvent();
+        pushData();
     }
-   
-    for(int i=3; i<6; ++i){
-        if(values[i] >= 0x8000) values[i] -= 0x10000;
-        values[i] /= MPU6050_gyro_scale_factor;
-        values[i] *= ROTATIONS[i-3];
-        if(dfd == MPU6050_1_fd){
-            values[i] -= GYRO_BIAS_1[i-3];
-        } else {
-            values[i] -= GYRO_BIAS_2[i-3];
+}
+
+void pushData(void){
+    static char output[2048];
+    int outputCount = 0;
+
+    if (gyroIntegratedRotationVectorData.available >= PUSHBATCH){
+        for(int counter = 0; counter < PUSHBATCH; ++counter){
+            outputCount += sprintf(&output[outputCount],"LIVE:A:%+07.1f,R:%+07.1f,C:%+07.1f\n", 
+                gyroIntegratedRotationVectorData.angleBuffer[gyroIntegratedRotationVectorData.tail], 
+                gyroIntegratedRotationVectorData.rateBuffer[gyroIntegratedRotationVectorData.tail]*gyroIntegratedRotationVectorData.direction,
+                gyroIntegratedRotationVectorData.accnBuffer[gyroIntegratedRotationVectorData.tail]*gyroIntegratedRotationVectorData.direction);
+            gyroIntegratedRotationVectorData.tail = (gyroIntegratedRotationVectorData.tail + 1) % BUFFERSIZE;
         }
+        gyroIntegratedRotationVectorData.available -= PUSHBATCH;
+        OUT_COUNT += PUSHBATCH;
+        
+        if (outputCount % 4 == 0) printf("%s",output); // for the moment only write one in 4 samples to browser
+        fputs(output,fd_write_out);
+        fflush(fd_write_out);
     }
 }
 
-int MPU6050_read_fifo_count(int dfd){
-    __u32 high = i2c_smbus_read_byte_data(dfd, MPU6050_RA_FIFO_COUNTH);
-    return ((high << 8) + i2c_smbus_read_byte_data(dfd, MPU6050_RA_FIFO_COUNTL)) & 0x07FF;
+void parseEvent(void){
+    if(spiRead.channel == CHANNEL_REPORTS) {
+        switch(spiRead.buffer[5]) {
+            case SENSOR_REPORTID_GAME_ROTATION_VECTOR:                  parseGameRotationVector(); break;
+            case SENSOR_REPORTID_ARVR_STABILIZED_ROTATION_VECTOR:       parseStabilisedRotationVector(); break;
+            case SENSOR_REPORTID_ARVR_STABILIZED_GAME_ROTATION_VECTOR:  parseStabilisedGameRotationVector(); break;
+            case SENSOR_REPORTID_GYROSCOPE_CALIBRATED:                  parseCalibratedGyroscope(); break;
+            case SENSOR_REPORTID_ACCELEROMETER:                         parseAccelerometer(); break;
+            case SENSOR_REPORTID_LINEAR_ACCELERATION:                   parseLinearAccelerometer(); break;
+            case SENSOR_REPORTID_STABILITY_CLASSIFIER:                  parseStability(); break;
+            default: printf("Unhandled report event: CHANNEL: %02X, SEQUENCE: %02X BYTES: %02X, %02X, %02X, %02X, %02X, %02X, %02X, %02X, %02X\n", spiRead.channel, spiRead.sequence, spiRead.buffer[0], spiRead.buffer[1], spiRead.buffer[2], spiRead.buffer[3], spiRead.buffer[4], spiRead.buffer[5], spiRead.buffer[6], spiRead.buffer[7], spiRead.buffer[8]);
+        }
+        return;
+    }
+
+    if(spiRead.channel == CHANNEL_CONTROL) {
+        switch(spiRead.buffer[0]) {
+            case SHTP_REPORT_COMMAND_RESPONSE:      reportCommandResponse(); break;
+            case SHTP_REPORT_GET_FEATURE_RESPONSE:  reportFeatureResponse(); break;
+            case SHTP_REPORT_PRODUCT_ID_RESPONSE:   break; // ignore this
+            case SHTP_REPORT_FRS_WRITE_RESPONSE:    break; // sometimes get a few of these for each write - ignore them
+            default: printf("Unhandled control event: CHANNEL: %02X, SEQUENCE: %02X BYTES: %02X, %02X, %02X, %02X, %02X, %02X, %02X, %02X, %02X\n", spiRead.channel, spiRead.sequence, spiRead.buffer[0], spiRead.buffer[1], spiRead.buffer[2], spiRead.buffer[3], spiRead.buffer[4], spiRead.buffer[5], spiRead.buffer[6], spiRead.buffer[7], spiRead.buffer[8]);
+        }
+        return;
+    }
+    
+    if(spiRead.channel == CHANNEL_GYRO) parseGyroIntegratedRotationVector();
 }
 
-/* 
-This function does some magic with an Extended Kalman Filter to produce roll
-pitch and yaw measurements from accelerometer/gyro data.  Of the filters tested,
-it produced the best results.
+void reportFeatureResponse(void){
+    unsigned int reportInterval = (spiRead.buffer[8 ] << 24) + (spiRead.buffer[7 ] << 16) + (spiRead.buffer[6 ] << 8) + spiRead.buffer[5];
+    unsigned int batchInterval =  (spiRead.buffer[12] << 24) + (spiRead.buffer[11] << 16) + (spiRead.buffer[10] << 8) + spiRead.buffer[9];
+    switch(spiRead.buffer[1]){
+        case SENSOR_REPORTID_GAME_ROTATION_VECTOR:  
+            gameRotationVectorData.reportInterval = reportInterval; 
+            if(gameRotationVectorData.reportInterval != gameRotationVectorData.requestedInterval) printf("Warning: GRV data rate mismatch. Req: %d, Rep: %d\n",gameRotationVectorData.requestedInterval,reportInterval);
+            break;
+        case SENSOR_REPORTID_GYROSCOPE_CALIBRATED:  
+            gyroData.reportInterval = reportInterval;
+            if(gyroData.reportInterval != gyroData.requestedInterval) printf("Warning: Gyro data rate mismatch. Req: %d, Rep: %d\n",gyroData.requestedInterval,reportInterval);
+            break;
+        case SENSOR_REPORTID_LINEAR_ACCELERATION:   
+            linearAccelerometerData.reportInterval = reportInterval;
+            if(linearAccelerometerData.reportInterval != linearAccelerometerData.requestedInterval) printf("Warning: LinAcc data rate mismatch. Req: %d, Rep: %d\n", linearAccelerometerData.requestedInterval,reportInterval);
+            break;
+        case SENSOR_REPORTID_ACCELEROMETER:         
+            accelerometerData.reportInterval = reportInterval; 
+            if(accelerometerData.reportInterval != accelerometerData.requestedInterval) printf("Warning: Acc data rate mismatch. Req: %d, Rep: %d\n",accelerometerData.requestedInterval,reportInterval);
+            break;
+        case SENSOR_REPORTID_STABILITY_CLASSIFIER:  
+            stabilityData.reportInterval = reportInterval; 
+            if(stabilityData.reportInterval != stabilityData.requestedInterval) printf("Warning: Stability data rate mismatch. Req: %d, Rep: %d\n",stabilityData.requestedInterval,reportInterval);
+            break;
+        case SENSOR_REPORTID_GYRO_INTEGRATED_ROTATION_VECTOR: 
+            gyroIntegratedRotationVectorData.reportInterval = reportInterval;
+            if(gyroIntegratedRotationVectorData.reportInterval != gyroIntegratedRotationVectorData.requestedInterval) printf("Warning: GIRV data rate mismatch. Req: %d, Rep: %d\n",gyroIntegratedRotationVectorData.requestedInterval,reportInterval);
+            break;
+        default: printf("Unhandled FR event: CHANNEL: %02X, SEQUENCE: %02X BYTES: %02X, %02X, %02X, %02X, %02X, %02X, %02X, %02X, %02X\n", spiRead.channel, spiRead.sequence, spiRead.buffer[0], spiRead.buffer[1], spiRead.buffer[2], spiRead.buffer[3], spiRead.buffer[4], spiRead.buffer[5], spiRead.buffer[6], spiRead.buffer[7], spiRead.buffer[8]);
+    }
+}
 
-Github is here: https://github.com/hhyyti/dcm-imu 
+void reportCommandResponse(void){
+    switch(spiRead.buffer[2]){
+        case 0x84: printf("Error: device has reinitialised!\n"); break;  // bit 7 set indicates autonomous response 0x04 = Initialisation.  Sometimes caused by too much data being pushed.
+        case 0x06: printf("Save DCD.  Success: %d\n", spiRead.buffer[5] ); break;
+        case 0xFD: printf("FRS Write response\n"); break;  // is this correct???
+        case COMMAND_ME_CALIBRATE: break;
+        default: printf("Unhandled CR event: CHANNEL: %02X, SEQUENCE: %02X BYTES: %02X, %02X, %02X, %02X, %02X, %02X, %02X, %02X, %02X\n", spiRead.channel, spiRead.sequence, spiRead.buffer[0], spiRead.buffer[1], spiRead.buffer[2], spiRead.buffer[3], spiRead.buffer[4], spiRead.buffer[5], spiRead.buffer[6], spiRead.buffer[7], spiRead.buffer[8]);
+    }
+}
 
-MIT licence but the readme includes this line:
-    If you use the algorithm in any scientific context, please cite: Heikki Hyyti and Arto Visala, 
-    "A DCM Based Attitude Estimation Algorithm for Low-Cost MEMS IMUs," International Journal 
-    of Navigation and Observation, vol. 2015, Article ID 503814, 18 pages, 2015. http://dx.doi.org/10.1155/2015/503814
+void parseGyroIntegratedRotationVector(void){
 
-function inputs are 
-Xgyro (u0 - in degrees/sec), Ygyro (u1 - in degrees/sec), Zgyro (u2 - in degrees/sec), 
-Xaccel (z0 - in g), Yaccel (z1 - in g), Zaccel (z2 - in g),
-interval (h - in seconds from the last time the function was called)
+    float Qx = (spiRead.buffer[1] << 8) + spiRead.buffer[0];
+    float Qy = (spiRead.buffer[3] << 8) + spiRead.buffer[2];
+    float Qz = (spiRead.buffer[5] << 8) + spiRead.buffer[4];
+    float Qw = (spiRead.buffer[7] << 8) + spiRead.buffer[6];
+    
+    if(Qx >= 0x8000) Qx -= 0x10000;
+    if(Qy >= 0x8000) Qy -= 0x10000;
+    if(Qz >= 0x8000) Qz -= 0x10000;
+    if(Qw >= 0x8000) Qw -= 0x10000;
+
+    Qx *= QP(14);
+    Qy *= QP(14);
+    Qz *= QP(14);
+    Qw *= QP(14);
+
+    float yaw   =  atan2((Qx * Qy + Qw * Qz), ((Qw * Qw + Qx * Qx) - 0.5f)) * RADIANS_TO_DEGREES_MULTIPLIER;   
+    float pitch = -asin(2.0f * (Qx * Qz - Qw * Qy))* RADIANS_TO_DEGREES_MULTIPLIER;
+    float roll  =  atan2((Qw * Qx + Qy * Qz), ((Qw * Qw + Qz * Qz) - 0.5f))* RADIANS_TO_DEGREES_MULTIPLIER;
+    
+    roll -= gyroIntegratedRotationVectorData.tareValue; 
+
+    float Gx = (float)((spiRead.buffer[9 ] << 8) + spiRead.buffer[8]);
+    float Gy = (float)((spiRead.buffer[11] << 8) + spiRead.buffer[10]);
+    float Gz = (float)((spiRead.buffer[13] << 8) + spiRead.buffer[12]);
+    
+    if(Gx >= 0x8000) Gx -= 0x10000;
+    if(Gy >= 0x8000) Gy -= 0x10000;
+    if(Gz >= 0x8000) Gz -= 0x10000;
+
+    Gx *= QP(10) * RADIANS_TO_DEGREES_MULTIPLIER;
+    Gy *= QP(10) * RADIANS_TO_DEGREES_MULTIPLIER;
+    Gz *= QP(10) * RADIANS_TO_DEGREES_MULTIPLIER;
+ 
+    float rolldiff = roll - gyroIntegratedRotationVectorData.lastRoll;
+    if(rolldiff > 250.0) {
+        rolldiff -= 360.0;
+    } else if (rolldiff < -250.0) {
+        rolldiff += 360.0;
+    }
+    
+    gyroIntegratedRotationVectorData.lastRoll = roll;
+    gyroIntegratedRotationVectorData.lastPitch = pitch;
+    gyroIntegratedRotationVectorData.lastYaw = yaw;
+
+    gyroIntegratedRotationVectorData.averageAngle = 0.99*gyroIntegratedRotationVectorData.averageAngle + 0.01*roll;
+    
+    gyroIntegratedRotationVectorData.lastX = Gx;
+    gyroIntegratedRotationVectorData.lastY = Gy;
+    gyroIntegratedRotationVectorData.lastZ = Gz;
+
+    if(!RUNNING) return;  // only push data to fifo if we are on a run
+
+    if (gyroIntegratedRotationVectorData.available == (BUFFERSIZE - 2)) {
+        printf("Rate buffer full.  Ditching oldest sample\n");
+        gyroIntegratedRotationVectorData.tail = (gyroIntegratedRotationVectorData.tail + 1) % BUFFERSIZE;
+        gyroIntegratedRotationVectorData.available -= 1;
+    }
+            
+    gyroIntegratedRotationVectorData.rateBuffer[gyroIntegratedRotationVectorData.head] = Gx;
+    gyroIntegratedRotationVectorData.accnBuffer[gyroIntegratedRotationVectorData.head] = (Gx-gyroIntegratedRotationVectorData.lastRate)*ODR;
+    gyroIntegratedRotationVectorData.lastRate = Gx;
+    unsigned int lastHead = (gyroIntegratedRotationVectorData.head == 0) ? BUFFERSIZE-1 : gyroIntegratedRotationVectorData.head -1;
+    gyroIntegratedRotationVectorData.angleBuffer[gyroIntegratedRotationVectorData.head] = gyroIntegratedRotationVectorData.angleBuffer[lastHead] + gyroIntegratedRotationVectorData.direction*rolldiff;
+    gyroIntegratedRotationVectorData.head = (gyroIntegratedRotationVectorData.head + 1) % BUFFERSIZE;
+    gyroIntegratedRotationVectorData.available += 1;
+}
+
+void parseGameRotationVector(void){
+    uint8_t newSequence = spiRead.buffer[5 + 1];
+    if(newSequence == gameRotationVectorData.lastSequence) return; // sometimes HINT is not brought high quickly, this checks to see if we are reading a report we have already seen.
+    gameRotationVectorData.lastSequence = newSequence;
+
+    gameRotationVectorData.status = spiRead.buffer[5 + 2] & 0x03;
+   
+    float Qx = (float)((spiRead.buffer[5 + 5] << 8) + spiRead.buffer[5 + 4]);
+    float Qy = (float)((spiRead.buffer[5 + 7] << 8) + spiRead.buffer[5 + 6]);
+    float Qz = (float)((spiRead.buffer[5 + 9] << 8) + spiRead.buffer[5 + 8]);
+    float Qw = (float)((spiRead.buffer[5 + 11] << 8) + spiRead.buffer[5 + 10]);
+    
+    if(Qx >= 0x8000) Qx -= 0x10000;
+    if(Qy >= 0x8000) Qy -= 0x10000;
+    if(Qz >= 0x8000) Qz -= 0x10000;
+    if(Qw >= 0x8000) Qw -= 0x10000;
+
+    Qx *= QP(14);
+    Qy *= QP(14);
+    Qz *= QP(14);
+    Qw *= QP(14);
+
+// remap axes
+//        Qw = Qw * Q_remap.w - Qx * Q_remap.x - Qy * Q_remap.y - Qz * Q_remap.z; 
+//        Qx = Qw * Q_remap.x + Qx * Q_remap.w + Qy * Q_remap.z - Qz * Q_remap.y; 
+//        Qy = Qw * Q_remap.y - Qx * Q_remap.z + Qy * Q_remap.w + Qz * Q_remap.x;
+//        Qz = Qw * Q_remap.z + Qx * Q_remap.y - Qy * Q_remap.x + Qz * Q_remap.w;
+
+// https://forums.adafruit.com/viewtopic.php?t=131484
+// https://mbientlab.com/community/discussion/2036/taring-quaternion-attitude
+/*    if (torn < 100) {
+        torn += 1;
+        Q_tare.x = Qx;  // note that normally the conjugate is calculated the functions below alreasy have the sign swaps
+        Q_tare.y = Qy;
+        Q_tare.z = Qz;
+        Q_tare.w = Qw;
+        double magnit = sqrt(Q_tare.w * Q_tare.w + Q_tare.x * Q_tare.x + Q_tare.y * Q_tare.y + Q_tare.z * Q_tare.z);
+        Q_tare.w /= magnit;
+        Q_tare.x /= magnit;
+        Q_tare.y /= magnit;
+        Q_tare.z /= magnit;
+    } else {
+        Qw =  Qw * Q_tare.w + Qx * Q_tare.x + Qy * Q_tare.y + Qz * Q_tare.z; 
+        Qx = -Qw * Q_tare.x + Qx * Q_tare.w - Qy * Q_tare.z + Qz * Q_tare.y; 
+        Qy = -Qw * Q_tare.y + Qx * Q_tare.z + Qy * Q_tare.w - Qz * Q_tare.x;
+        Qz = -Qw * Q_tare.z - Qx * Q_tare.y + Qy * Q_tare.x + Qz * Q_tare.w;
+    }
+//    float norm = sqrt(Qw*Qw + Qx*Qx + Qy*Qy + Qz*Qz);
+
 */
 
-void calculate(float u0, float u1, float u2, float z0, float z1,float z2, float h){
+// https://math.stackexchange.com/questions/687964/getting-euler-tait-bryan-angles-from-quaternion-representation
+//    float yaw   =  atan2(Qx * Qy + Qw * Qz, 0.5 - (Qw * Qw + Qx * Qx)) * RADIANS_TO_DEGREES_MULTIPLIER;   
+//    float pitch = asin(-2.0 * (Qx * Qz - Qw * Qy))* RADIANS_TO_DEGREES_MULTIPLIER;
+//    float roll  =  atan2(Qw * Qx + Qy * Qz, 0.5 - (Qw * Qw + Qz * Qz))* RADIANS_TO_DEGREES_MULTIPLIER;
 
-    static float x[] = {0.0, 0.0, 1.0, 0.0, 0.0, 0.0};
 
-    static float P[6][6] = {    {1.0, 0.0, 0.0, 0.0, 0.0, 0.0},
-                                {0.0, 1.0, 0.0, 0.0, 0.0, 0.0},
-                                {0.0, 0.0, 1.0, 0.0, 0.0, 0.0},
-                                {0.0, 0.0, 0.0, 1.0, 0.0, 0.0},
-                                {0.0, 0.0, 0.0, 0.0, 1.0, 0.0},
-                                {0.0, 0.0, 0.0, 0.0, 0.0, 1.0}};
+    float yaw   =  atan2(Qx * Qy + Qw * Qz, (Qw * Qw + Qx * Qx) - 0.5) * RADIANS_TO_DEGREES_MULTIPLIER;   
+    float pitch = -asin(2.0 * (Qx * Qz - Qw * Qy)) * RADIANS_TO_DEGREES_MULTIPLIER;
+    float roll  =  atan2(Qw * Qx + Qy * Qz, (Qw * Qw + Qz * Qz) - 0.5) * RADIANS_TO_DEGREES_MULTIPLIER;
 
-// convert units
-    u0 = u0 * DEGREES_TO_RADIANS_MULTIPLIER;
-    u1 = u1 * DEGREES_TO_RADIANS_MULTIPLIER;
-    u2 = u2 * DEGREES_TO_RADIANS_MULTIPLIER;
-    
-    z0 = z0 * g0;
-    z1 = z1 * g0;
-    z2 = z2 * g0;
-    
-    float x_last[] = {x[0], x[1], x[2]};
-    float x_0 = x[0]-h*(u1*x[2]-u2*x[1]+x[1]*x[5]-x[2]*x[4]);
-    float x_1 = x[1]+h*(u0*x[2]-u2*x[0]+x[0]*x[5]-x[2]*x[3]);
-    float x_2 = x[2]-h*(u0*x[1]-u1*x[0]+x[0]*x[4]-x[1]*x[3]);
-    float x_3 = x[3];
-    float x_4 = x[4];
-    float x_5 = x[5];
-
-    float hh = h*h;
-    float P_00 = P[0][0]-h*(P[0][5]*x[1]-P[0][4]*x[2]-P[4][0]*x[2]+P[5][0]*x[1]+P[0][2]*(u1-x[4])+P[2][0]*(u1-x[4])-P[0][1]*(u2-x[5])-P[1][0]*(u2-x[5]))+hh*(q_dcm2-x[1]*(P[4][5]*x[2]-P[5][5]*x[1]-P[2][5]*(u1-x[4])+P[1][5]*(u2-x[5]))+x[2]*(P[4][4]*x[2]-P[5][4]*x[1]-P[2][4]*(u1-x[4])+P[1][4]*(u2-x[5]))-(u1-x[4])*(P[4][2]*x[2]-P[5][2]*x[1]-P[2][2]*(u1-x[4])+P[1][2]*(u2-x[5]))+(u2-x[5])*(P[4][1]*x[2]-P[5][1]*x[1]-P[2][1]*(u1-x[4])+P[1][1]*(u2-x[5])));
-    float P_01 = P[0][1]+h*(P[0][5]*x[0]-P[0][3]*x[2]+P[4][1]*x[2]-P[5][1]*x[1]+P[0][2]*(u0-x[3])-P[0][0]*(u2-x[5])-P[2][1]*(u1-x[4])+P[1][1]*(u2-x[5]))+hh*(x[0]*(P[4][5]*x[2]-P[5][5]*x[1]-P[2][5]*(u1-x[4])+P[1][5]*(u2-x[5]))-x[2]*(P[4][3]*x[2]-P[5][3]*x[1]-P[2][3]*(u1-x[4])+P[1][3]*(u2-x[5]))+(u0-x[3])*(P[4][2]*x[2]-P[5][2]*x[1]-P[2][2]*(u1-x[4])+P[1][2]*(u2-x[5]))-(u2-x[5])*(P[4][0]*x[2]-P[5][0]*x[1]-P[2][0]*(u1-x[4])+P[1][0]*(u2-x[5])));
-    float P_02 = P[0][2]-h*(P[0][4]*x[0]-P[0][3]*x[1]-P[4][2]*x[2]+P[5][2]*x[1]+P[0][1]*(u0-x[3])-P[0][0]*(u1-x[4])+P[2][2]*(u1-x[4])-P[1][2]*(u2-x[5]))-hh*(x[0]*(P[4][4]*x[2]-P[5][4]*x[1]-P[2][4]*(u1-x[4])+P[1][4]*(u2-x[5]))-x[1]*(P[4][3]*x[2]-P[5][3]*x[1]-P[2][3]*(u1-x[4])+P[1][3]*(u2-x[5]))+(u0-x[3])*(P[4][1]*x[2]-P[5][1]*x[1]-P[2][1]*(u1-x[4])+P[1][1]*(u2-x[5]))-(u1-x[4])*(P[4][0]*x[2]-P[5][0]*x[1]-P[2][0]*(u1-x[4])+P[1][0]*(u2-x[5])));
-    float P_03 = P[0][3]+h*(P[4][3]*x[2]-P[5][3]*x[1]-P[2][3]*(u1-x[4])+P[1][3]*(u2-x[5]));
-    float P_04 = P[0][4]+h*(P[4][4]*x[2]-P[5][4]*x[1]-P[2][4]*(u1-x[4])+P[1][4]*(u2-x[5]));
-    float P_05 = P[0][5]+h*(P[4][5]*x[2]-P[5][5]*x[1]-P[2][5]*(u1-x[4])+P[1][5]*(u2-x[5]));
-    float P_10 = P[1][0]-h*(P[1][5]*x[1]-P[1][4]*x[2]+P[3][0]*x[2]-P[5][0]*x[0]-P[2][0]*(u0-x[3])+P[1][2]*(u1-x[4])+P[0][0]*(u2-x[5])-P[1][1]*(u2-x[5]))+hh*(x[1]*(P[3][5]*x[2]-P[5][5]*x[0]-P[2][5]*(u0-x[3])+P[0][5]*(u2-x[5]))-x[2]*(P[3][4]*x[2]-P[5][4]*x[0]-P[2][4]*(u0-x[3])+P[0][4]*(u2-x[5]))+(u1-x[4])*(P[3][2]*x[2]-P[5][2]*x[0]-P[2][2]*(u0-x[3])+P[0][2]*(u2-x[5]))-(u2-x[5])*(P[3][1]*x[2]-P[5][1]*x[0]-P[2][1]*(u0-x[3])+P[0][1]*(u2-x[5])));
-    float P_11 = P[1][1]+h*(P[1][5]*x[0]-P[1][3]*x[2]-P[3][1]*x[2]+P[5][1]*x[0]+P[1][2]*(u0-x[3])+P[2][1]*(u0-x[3])-P[0][1]*(u2-x[5])-P[1][0]*(u2-x[5]))+hh*(q_dcm2-x[0]*(P[3][5]*x[2]-P[5][5]*x[0]-P[2][5]*(u0-x[3])+P[0][5]*(u2-x[5]))+x[2]*(P[3][3]*x[2]-P[5][3]*x[0]-P[2][3]*(u0-x[3])+P[0][3]*(u2-x[5]))-(u0-x[3])*(P[3][2]*x[2]-P[5][2]*x[0]-P[2][2]*(u0-x[3])+P[0][2]*(u2-x[5]))+(u2-x[5])*(P[3][0]*x[2]-P[5][0]*x[0]-P[2][0]*(u0-x[3])+P[0][0]*(u2-x[5])));
-    float P_12 = P[1][2]-h*(P[1][4]*x[0]-P[1][3]*x[1]+P[3][2]*x[2]-P[5][2]*x[0]+P[1][1]*(u0-x[3])-P[2][2]*(u0-x[3])-P[1][0]*(u1-x[4])+P[0][2]*(u2-x[5]))+hh*(x[0]*(P[3][4]*x[2]-P[5][4]*x[0]-P[2][4]*(u0-x[3])+P[0][4]*(u2-x[5]))-x[1]*(P[3][3]*x[2]-P[5][3]*x[0]-P[2][3]*(u0-x[3])+P[0][3]*(u2-x[5]))+(u0-x[3])*(P[3][1]*x[2]-P[5][1]*x[0]-P[2][1]*(u0-x[3])+P[0][1]*(u2-x[5]))-(u1-x[4])*(P[3][0]*x[2]-P[5][0]*x[0]-P[2][0]*(u0-x[3])+P[0][0]*(u2-x[5])));
-    float P_13 = P[1][3]-h*(P[3][3]*x[2]-P[5][3]*x[0]-P[2][3]*(u0-x[3])+P[0][3]*(u2-x[5]));
-    float P_14 = P[1][4]-h*(P[3][4]*x[2]-P[5][4]*x[0]-P[2][4]*(u0-x[3])+P[0][4]*(u2-x[5]));
-    float P_15 = P[1][5]-h*(P[3][5]*x[2]-P[5][5]*x[0]-P[2][5]*(u0-x[3])+P[0][5]*(u2-x[5]));
-    float P_20 = P[2][0]-h*(P[2][5]*x[1]-P[3][0]*x[1]+P[4][0]*x[0]-P[2][4]*x[2]+P[1][0]*(u0-x[3])-P[0][0]*(u1-x[4])+P[2][2]*(u1-x[4])-P[2][1]*(u2-x[5]))-hh*(x[1]*(P[3][5]*x[1]-P[4][5]*x[0]-P[1][5]*(u0-x[3])+P[0][5]*(u1-x[4]))-x[2]*(P[3][4]*x[1]-P[4][4]*x[0]-P[1][4]*(u0-x[3])+P[0][4]*(u1-x[4]))+(u1-x[4])*(P[3][2]*x[1]-P[4][2]*x[0]-P[1][2]*(u0-x[3])+P[0][2]*(u1-x[4]))-(u2-x[5])*(P[3][1]*x[1]-P[4][1]*x[0]-P[1][1]*(u0-x[3])+P[0][1]*(u1-x[4])));
-    float P_21 = P[2][1]+h*(P[2][5]*x[0]+P[3][1]*x[1]-P[4][1]*x[0]-P[2][3]*x[2]-P[1][1]*(u0-x[3])+P[0][1]*(u1-x[4])+P[2][2]*(u0-x[3])-P[2][0]*(u2-x[5]))+hh*(x[0]*(P[3][5]*x[1]-P[4][5]*x[0]-P[1][5]*(u0-x[3])+P[0][5]*(u1-x[4]))-x[2]*(P[3][3]*x[1]-P[4][3]*x[0]-P[1][3]*(u0-x[3])+P[0][3]*(u1-x[4]))+(u0-x[3])*(P[3][2]*x[1]-P[4][2]*x[0]-P[1][2]*(u0-x[3])+P[0][2]*(u1-x[4]))-(u2-x[5])*(P[3][0]*x[1]-P[4][0]*x[0]-P[1][0]*(u0-x[3])+P[0][0]*(u1-x[4])));
-    float P_22 = P[2][2]-h*(P[2][4]*x[0]-P[2][3]*x[1]-P[3][2]*x[1]+P[4][2]*x[0]+P[1][2]*(u0-x[3])+P[2][1]*(u0-x[3])-P[0][2]*(u1-x[4])-P[2][0]*(u1-x[4]))+hh*(q_dcm2-x[0]*(P[3][4]*x[1]-P[4][4]*x[0]-P[1][4]*(u0-x[3])+P[0][4]*(u1-x[4]))+x[1]*(P[3][3]*x[1]-P[4][3]*x[0]-P[1][3]*(u0-x[3])+P[0][3]*(u1-x[4]))-(u0-x[3])*(P[3][1]*x[1]-P[4][1]*x[0]-P[1][1]*(u0-x[3])+P[0][1]*(u1-x[4]))+(u1-x[4])*(P[3][0]*x[1]-P[4][0]*x[0]-P[1][0]*(u0-x[3])+P[0][0]*(u1-x[4])));
-    float P_23 = P[2][3]+h*(P[3][3]*x[1]-P[4][3]*x[0]-P[1][3]*(u0-x[3])+P[0][3]*(u1-x[4]));
-    float P_24 = P[2][4]+h*(P[3][4]*x[1]-P[4][4]*x[0]-P[1][4]*(u0-x[3])+P[0][4]*(u1-x[4]));
-    float P_25 = P[2][5]+h*(P[3][5]*x[1]-P[4][5]*x[0]-P[1][5]*(u0-x[3])+P[0][5]*(u1-x[4]));
-    float P_30 = P[3][0]-h*(P[3][5]*x[1]-P[3][4]*x[2]+P[3][2]*(u1-x[4])-P[3][1]*(u2-x[5]));
-    float P_31 = P[3][1]+h*(P[3][5]*x[0]-P[3][3]*x[2]+P[3][2]*(u0-x[3])-P[3][0]*(u2-x[5]));
-    float P_32 = P[3][2]-h*(P[3][4]*x[0]-P[3][3]*x[1]+P[3][1]*(u0-x[3])-P[3][0]*(u1-x[4]));
-    float P_33 = P[3][3]+hh*q_gyro_bias2;
-    float P_34 = P[3][4];
-    float P_35 = P[3][5];
-    float P_40 = P[4][0]-h*(P[4][5]*x[1]-P[4][4]*x[2]+P[4][2]*(u1-x[4])-P[4][1]*(u2-x[5]));
-    float P_41 = P[4][1]+h*(P[4][5]*x[0]-P[4][3]*x[2]+P[4][2]*(u0-x[3])-P[4][0]*(u2-x[5]));
-    float P_42 = P[4][2]-h*(P[4][4]*x[0]-P[4][3]*x[1]+P[4][1]*(u0-x[3])-P[4][0]*(u1-x[4]));
-    float P_43 = P[4][3];
-    float P_44 = P[4][4]+hh*q_gyro_bias2;
-    float P_45 = P[4][5];
-    float P_50 = P[5][0]-h*(P[5][5]*x[1]-P[5][4]*x[2]+P[5][2]*(u1-x[4])-P[5][1]*(u2-x[5]));
-    float P_51 = P[5][1]+h*(P[5][5]*x[0]-P[5][3]*x[2]+P[5][2]*(u0-x[3])-P[5][0]*(u2-x[5]));
-    float P_52 = P[5][2]-h*(P[5][4]*x[0]-P[5][3]*x[1]+P[5][1]*(u0-x[3])-P[5][0]*(u1-x[4]));
-    float P_53 = P[5][3];
-    float P_54 = P[5][4];
-    float P_55 = P[5][5]+hh*q_gyro_bias2;
-
-    // kalman innovation
-    float y0 = z0-g0*x_0;
-    float y1 = z1-g0*x_1;
-    float y2 = z2-g0*x_2;
-
-    float a_len = sqrt(y0*y0+y1*y1+y2*y2);
-
-    float S00 = r_acc2+a_len*r_a2+P_00*g0_2;
-    float S01 = P_01*g0_2;
-    float S02 = P_02*g0_2;
-    float S10 = P_10*g0_2;
-    float S11 = r_acc2+a_len*r_a2+P_11*g0_2;
-    float S12 = P_12*g0_2;
-    float S20 = P_20*g0_2;
-    float S21 = P_21*g0_2;
-    float S22 = r_acc2+a_len*r_a2+P_22*g0_2;
-
-    // Kalman gain
-    float invPart = 1.0 / (S00*S11*S22-S00*S12*S21-S01*S10*S22+S01*S12*S20+S02*S10*S21-S02*S11*S20);
-    float K00 = (g0*(P_02*S10*S21-P_02*S11*S20-P_01*S10*S22+P_01*S12*S20+P_00*S11*S22-P_00*S12*S21))*invPart;
-    float K01 = -(g0*(P_02*S00*S21-P_02*S01*S20-P_01*S00*S22+P_01*S02*S20+P_00*S01*S22-P_00*S02*S21))*invPart;
-    float K02 = (g0*(P_02*S00*S11-P_02*S01*S10-P_01*S00*S12+P_01*S02*S10+P_00*S01*S12-P_00*S02*S11))*invPart;
-    float K10 = (g0*(P_12*S10*S21-P_12*S11*S20-P_11*S10*S22+P_11*S12*S20+P_10*S11*S22-P_10*S12*S21))*invPart;
-    float K11 = -(g0*(P_12*S00*S21-P_12*S01*S20-P_11*S00*S22+P_11*S02*S20+P_10*S01*S22-P_10*S02*S21))*invPart;
-    float K12 = (g0*(P_12*S00*S11-P_12*S01*S10-P_11*S00*S12+P_11*S02*S10+P_10*S01*S12-P_10*S02*S11))*invPart;
-    float K20 = (g0*(P_22*S10*S21-P_22*S11*S20-P_21*S10*S22+P_21*S12*S20+P_20*S11*S22-P_20*S12*S21))*invPart;
-    float K21 = -(g0*(P_22*S00*S21-P_22*S01*S20-P_21*S00*S22+P_21*S02*S20+P_20*S01*S22-P_20*S02*S21))*invPart;
-    float K22 = (g0*(P_22*S00*S11-P_22*S01*S10-P_21*S00*S12+P_21*S02*S10+P_20*S01*S12-P_20*S02*S11))*invPart;
-    float K30 = (g0*(P_32*S10*S21-P_32*S11*S20-P_31*S10*S22+P_31*S12*S20+P_30*S11*S22-P_30*S12*S21))*invPart;
-    float K31 = -(g0*(P_32*S00*S21-P_32*S01*S20-P_31*S00*S22+P_31*S02*S20+P_30*S01*S22-P_30*S02*S21))*invPart;
-    float K32 = (g0*(P_32*S00*S11-P_32*S01*S10-P_31*S00*S12+P_31*S02*S10+P_30*S01*S12-P_30*S02*S11))*invPart;
-    float K40 = (g0*(P_42*S10*S21-P_42*S11*S20-P_41*S10*S22+P_41*S12*S20+P_40*S11*S22-P_40*S12*S21))*invPart;
-    float K41 = -(g0*(P_42*S00*S21-P_42*S01*S20-P_41*S00*S22+P_41*S02*S20+P_40*S01*S22-P_40*S02*S21))*invPart;
-    float K42 = (g0*(P_42*S00*S11-P_42*S01*S10-P_41*S00*S12+P_41*S02*S10+P_40*S01*S12-P_40*S02*S11))*invPart;
-    float K50 = (g0*(P_52*S10*S21-P_52*S11*S20-P_51*S10*S22+P_51*S12*S20+P_50*S11*S22-P_50*S12*S21))*invPart;
-    float K51 = -(g0*(P_52*S00*S21-P_52*S01*S20-P_51*S00*S22+P_51*S02*S20+P_50*S01*S22-P_50*S02*S21))*invPart;
-    float K52 = (g0*(P_52*S00*S11-P_52*S01*S10-P_51*S00*S12+P_51*S02*S10+P_50*S01*S12-P_50*S02*S11))*invPart;
-
-    // update a posteriori
-    x[0] = x_0+K00*y0+K01*y1+K02*y2;
-    x[1] = x_1+K10*y0+K11*y1+K12*y2;
-    x[2] = x_2+K20*y0+K21*y1+K22*y2;
-    x[3] = x_3+K30*y0+K31*y1+K32*y2;
-    x[4] = x_4+K40*y0+K41*y1+K42*y2;
-    x[5] = x_5+K50*y0+K51*y1+K52*y2;
-
-    //  update a posteriori covariance
-    float r_adab = (r_acc2+a_len*r_a2);
-    float P__00 = P_00-g0*(K00*P_00*2.0+K01*P_01+K01*P_10+K02*P_02+K02*P_20)+(K00*K00)*r_adab+(K01*K01)*r_adab+(K02*K02)*r_adab+g0_2*(K00*(K00*P_00+K01*P_10+K02*P_20)+K01*(K00*P_01+K01*P_11+K02*P_21)+K02*(K00*P_02+K01*P_12+K02*P_22));
-    float P__01 = P_01-g0*(K00*P_01+K01*P_11+K02*P_21+K10*P_00+K11*P_01+K12*P_02)+g0_2*(K10*(K00*P_00+K01*P_10+K02*P_20)+K11*(K00*P_01+K01*P_11+K02*P_21)+K12*(K00*P_02+K01*P_12+K02*P_22))+K00*K10*r_adab+K01*K11*r_adab+K02*K12*r_adab;
-    float P__02 = P_02-g0*(K00*P_02+K01*P_12+K02*P_22+K20*P_00+K21*P_01+K22*P_02)+g0_2*(K20*(K00*P_00+K01*P_10+K02*P_20)+K21*(K00*P_01+K01*P_11+K02*P_21)+K22*(K00*P_02+K01*P_12+K02*P_22))+K00*K20*r_adab+K01*K21*r_adab+K02*K22*r_adab;
-    float P__03 = P_03-g0*(K00*P_03+K01*P_13+K02*P_23+K30*P_00+K31*P_01+K32*P_02)+g0_2*(K30*(K00*P_00+K01*P_10+K02*P_20)+K31*(K00*P_01+K01*P_11+K02*P_21)+K32*(K00*P_02+K01*P_12+K02*P_22))+K00*K30*r_adab+K01*K31*r_adab+K02*K32*r_adab;
-    float P__04 = P_04-g0*(K00*P_04+K01*P_14+K02*P_24+K40*P_00+K41*P_01+K42*P_02)+g0_2*(K40*(K00*P_00+K01*P_10+K02*P_20)+K41*(K00*P_01+K01*P_11+K02*P_21)+K42*(K00*P_02+K01*P_12+K02*P_22))+K00*K40*r_adab+K01*K41*r_adab+K02*K42*r_adab;
-    float P__05 = P_05-g0*(K00*P_05+K01*P_15+K02*P_25+K50*P_00+K51*P_01+K52*P_02)+g0_2*(K50*(K00*P_00+K01*P_10+K02*P_20)+K51*(K00*P_01+K01*P_11+K02*P_21)+K52*(K00*P_02+K01*P_12+K02*P_22))+K00*K50*r_adab+K01*K51*r_adab+K02*K52*r_adab;
-    float P__10 = P_10-g0*(K00*P_10+K01*P_11+K02*P_12+K10*P_00+K11*P_10+K12*P_20)+g0_2*(K00*(K10*P_00+K11*P_10+K12*P_20)+K01*(K10*P_01+K11*P_11+K12*P_21)+K02*(K10*P_02+K11*P_12+K12*P_22))+K00*K10*r_adab+K01*K11*r_adab+K02*K12*r_adab;
-    float P__11 = P_11-g0*(K10*P_01+K10*P_10+K11*P_11*2.0+K12*P_12+K12*P_21)+(K10*K10)*r_adab+(K11*K11)*r_adab+(K12*K12)*r_adab+g0_2*(K10*(K10*P_00+K11*P_10+K12*P_20)+K11*(K10*P_01+K11*P_11+K12*P_21)+K12*(K10*P_02+K11*P_12+K12*P_22));
-    float P__12 = P_12-g0*(K10*P_02+K11*P_12+K12*P_22+K20*P_10+K21*P_11+K22*P_12)+g0_2*(K20*(K10*P_00+K11*P_10+K12*P_20)+K21*(K10*P_01+K11*P_11+K12*P_21)+K22*(K10*P_02+K11*P_12+K12*P_22))+K10*K20*r_adab+K11*K21*r_adab+K12*K22*r_adab;
-    float P__13 = P_13-g0*(K10*P_03+K11*P_13+K12*P_23+K30*P_10+K31*P_11+K32*P_12)+g0_2*(K30*(K10*P_00+K11*P_10+K12*P_20)+K31*(K10*P_01+K11*P_11+K12*P_21)+K32*(K10*P_02+K11*P_12+K12*P_22))+K10*K30*r_adab+K11*K31*r_adab+K12*K32*r_adab;
-    float P__14 = P_14-g0*(K10*P_04+K11*P_14+K12*P_24+K40*P_10+K41*P_11+K42*P_12)+g0_2*(K40*(K10*P_00+K11*P_10+K12*P_20)+K41*(K10*P_01+K11*P_11+K12*P_21)+K42*(K10*P_02+K11*P_12+K12*P_22))+K10*K40*r_adab+K11*K41*r_adab+K12*K42*r_adab;
-    float P__15 = P_15-g0*(K10*P_05+K11*P_15+K12*P_25+K50*P_10+K51*P_11+K52*P_12)+g0_2*(K50*(K10*P_00+K11*P_10+K12*P_20)+K51*(K10*P_01+K11*P_11+K12*P_21)+K52*(K10*P_02+K11*P_12+K12*P_22))+K10*K50*r_adab+K11*K51*r_adab+K12*K52*r_adab;
-    float P__20 = P_20-g0*(K00*P_20+K01*P_21+K02*P_22+K20*P_00+K21*P_10+K22*P_20)+g0_2*(K00*(K20*P_00+K21*P_10+K22*P_20)+K01*(K20*P_01+K21*P_11+K22*P_21)+K02*(K20*P_02+K21*P_12+K22*P_22))+K00*K20*r_adab+K01*K21*r_adab+K02*K22*r_adab;
-    float P__21 = P_21-g0*(K10*P_20+K11*P_21+K12*P_22+K20*P_01+K21*P_11+K22*P_21)+g0_2*(K10*(K20*P_00+K21*P_10+K22*P_20)+K11*(K20*P_01+K21*P_11+K22*P_21)+K12*(K20*P_02+K21*P_12+K22*P_22))+K10*K20*r_adab+K11*K21*r_adab+K12*K22*r_adab;
-    float P__22 = P_22-g0*(K20*P_02+K20*P_20+K21*P_12+K21*P_21+K22*P_22*2.0)+(K20*K20)*r_adab+(K21*K21)*r_adab+(K22*K22)*r_adab+g0_2*(K20*(K20*P_00+K21*P_10+K22*P_20)+K21*(K20*P_01+K21*P_11+K22*P_21)+K22*(K20*P_02+K21*P_12+K22*P_22));
-    float P__23 = P_23-g0*(K20*P_03+K21*P_13+K22*P_23+K30*P_20+K31*P_21+K32*P_22)+g0_2*(K30*(K20*P_00+K21*P_10+K22*P_20)+K31*(K20*P_01+K21*P_11+K22*P_21)+K32*(K20*P_02+K21*P_12+K22*P_22))+K20*K30*r_adab+K21*K31*r_adab+K22*K32*r_adab;
-    float P__24 = P_24-g0*(K20*P_04+K21*P_14+K22*P_24+K40*P_20+K41*P_21+K42*P_22)+g0_2*(K40*(K20*P_00+K21*P_10+K22*P_20)+K41*(K20*P_01+K21*P_11+K22*P_21)+K42*(K20*P_02+K21*P_12+K22*P_22))+K20*K40*r_adab+K21*K41*r_adab+K22*K42*r_adab;
-    float P__25 = P_25-g0*(K20*P_05+K21*P_15+K22*P_25+K50*P_20+K51*P_21+K52*P_22)+g0_2*(K50*(K20*P_00+K21*P_10+K22*P_20)+K51*(K20*P_01+K21*P_11+K22*P_21)+K52*(K20*P_02+K21*P_12+K22*P_22))+K20*K50*r_adab+K21*K51*r_adab+K22*K52*r_adab;
-    float P__30 = P_30-g0*(K00*P_30+K01*P_31+K02*P_32+K30*P_00+K31*P_10+K32*P_20)+g0_2*(K00*(K30*P_00+K31*P_10+K32*P_20)+K01*(K30*P_01+K31*P_11+K32*P_21)+K02*(K30*P_02+K31*P_12+K32*P_22))+K00*K30*r_adab+K01*K31*r_adab+K02*K32*r_adab;
-    float P__31 = P_31-g0*(K10*P_30+K11*P_31+K12*P_32+K30*P_01+K31*P_11+K32*P_21)+g0_2*(K10*(K30*P_00+K31*P_10+K32*P_20)+K11*(K30*P_01+K31*P_11+K32*P_21)+K12*(K30*P_02+K31*P_12+K32*P_22))+K10*K30*r_adab+K11*K31*r_adab+K12*K32*r_adab;
-    float P__32 = P_32-g0*(K20*P_30+K21*P_31+K22*P_32+K30*P_02+K31*P_12+K32*P_22)+g0_2*(K20*(K30*P_00+K31*P_10+K32*P_20)+K21*(K30*P_01+K31*P_11+K32*P_21)+K22*(K30*P_02+K31*P_12+K32*P_22))+K20*K30*r_adab+K21*K31*r_adab+K22*K32*r_adab;
-    float P__33 = P_33-g0*(K30*P_03+K31*P_13+K30*P_30+K31*P_31+K32*P_23+K32*P_32)+(K30*K30)*r_adab+(K31*K31)*r_adab+(K32*K32)*r_adab+g0_2*(K30*(K30*P_00+K31*P_10+K32*P_20)+K31*(K30*P_01+K31*P_11+K32*P_21)+K32*(K30*P_02+K31*P_12+K32*P_22));
-    float P__34 = P_34-g0*(K30*P_04+K31*P_14+K32*P_24+K40*P_30+K41*P_31+K42*P_32)+g0_2*(K40*(K30*P_00+K31*P_10+K32*P_20)+K41*(K30*P_01+K31*P_11+K32*P_21)+K42*(K30*P_02+K31*P_12+K32*P_22))+K30*K40*r_adab+K31*K41*r_adab+K32*K42*r_adab;
-    float P__35 = P_35-g0*(K30*P_05+K31*P_15+K32*P_25+K50*P_30+K51*P_31+K52*P_32)+g0_2*(K50*(K30*P_00+K31*P_10+K32*P_20)+K51*(K30*P_01+K31*P_11+K32*P_21)+K52*(K30*P_02+K31*P_12+K32*P_22))+K30*K50*r_adab+K31*K51*r_adab+K32*K52*r_adab;
-    float P__40 = P_40-g0*(K00*P_40+K01*P_41+K02*P_42+K40*P_00+K41*P_10+K42*P_20)+g0_2*(K00*(K40*P_00+K41*P_10+K42*P_20)+K01*(K40*P_01+K41*P_11+K42*P_21)+K02*(K40*P_02+K41*P_12+K42*P_22))+K00*K40*r_adab+K01*K41*r_adab+K02*K42*r_adab;
-    float P__41 = P_41-g0*(K10*P_40+K11*P_41+K12*P_42+K40*P_01+K41*P_11+K42*P_21)+g0_2*(K10*(K40*P_00+K41*P_10+K42*P_20)+K11*(K40*P_01+K41*P_11+K42*P_21)+K12*(K40*P_02+K41*P_12+K42*P_22))+K10*K40*r_adab+K11*K41*r_adab+K12*K42*r_adab;
-    float P__42 = P_42-g0*(K20*P_40+K21*P_41+K22*P_42+K40*P_02+K41*P_12+K42*P_22)+g0_2*(K20*(K40*P_00+K41*P_10+K42*P_20)+K21*(K40*P_01+K41*P_11+K42*P_21)+K22*(K40*P_02+K41*P_12+K42*P_22))+K20*K40*r_adab+K21*K41*r_adab+K22*K42*r_adab;
-    float P__43 = P_43-g0*(K30*P_40+K31*P_41+K32*P_42+K40*P_03+K41*P_13+K42*P_23)+g0_2*(K30*(K40*P_00+K41*P_10+K42*P_20)+K31*(K40*P_01+K41*P_11+K42*P_21)+K32*(K40*P_02+K41*P_12+K42*P_22))+K30*K40*r_adab+K31*K41*r_adab+K32*K42*r_adab;
-    float P__44 = P_44-g0*(K40*P_04+K41*P_14+K40*P_40+K42*P_24+K41*P_41+K42*P_42)+(K40*K40)*r_adab+(K41*K41)*r_adab+(K42*K42)*r_adab+g0_2*(K40*(K40*P_00+K41*P_10+K42*P_20)+K41*(K40*P_01+K41*P_11+K42*P_21)+K42*(K40*P_02+K41*P_12+K42*P_22));
-    float P__45 = P_45-g0*(K40*P_05+K41*P_15+K42*P_25+K50*P_40+K51*P_41+K52*P_42)+g0_2*(K50*(K40*P_00+K41*P_10+K42*P_20)+K51*(K40*P_01+K41*P_11+K42*P_21)+K52*(K40*P_02+K41*P_12+K42*P_22))+K40*K50*r_adab+K41*K51*r_adab+K42*K52*r_adab;
-    float P__50 = P_50-g0*(K00*P_50+K01*P_51+K02*P_52+K50*P_00+K51*P_10+K52*P_20)+g0_2*(K00*(K50*P_00+K51*P_10+K52*P_20)+K01*(K50*P_01+K51*P_11+K52*P_21)+K02*(K50*P_02+K51*P_12+K52*P_22))+K00*K50*r_adab+K01*K51*r_adab+K02*K52*r_adab;
-    float P__51 = P_51-g0*(K10*P_50+K11*P_51+K12*P_52+K50*P_01+K51*P_11+K52*P_21)+g0_2*(K10*(K50*P_00+K51*P_10+K52*P_20)+K11*(K50*P_01+K51*P_11+K52*P_21)+K12*(K50*P_02+K51*P_12+K52*P_22))+K10*K50*r_adab+K11*K51*r_adab+K12*K52*r_adab;
-    float P__52 = P_52-g0*(K20*P_50+K21*P_51+K22*P_52+K50*P_02+K51*P_12+K52*P_22)+g0_2*(K20*(K50*P_00+K51*P_10+K52*P_20)+K21*(K50*P_01+K51*P_11+K52*P_21)+K22*(K50*P_02+K51*P_12+K52*P_22))+K20*K50*r_adab+K21*K51*r_adab+K22*K52*r_adab;
-    float P__53 = P_53-g0*(K30*P_50+K31*P_51+K32*P_52+K50*P_03+K51*P_13+K52*P_23)+g0_2*(K30*(K50*P_00+K51*P_10+K52*P_20)+K31*(K50*P_01+K51*P_11+K52*P_21)+K32*(K50*P_02+K51*P_12+K52*P_22))+K30*K50*r_adab+K31*K51*r_adab+K32*K52*r_adab;
-    float P__54 = P_54-g0*(K40*P_50+K41*P_51+K42*P_52+K50*P_04+K51*P_14+K52*P_24)+g0_2*(K40*(K50*P_00+K51*P_10+K52*P_20)+K41*(K50*P_01+K51*P_11+K52*P_21)+K42*(K50*P_02+K51*P_12+K52*P_22))+K40*K50*r_adab+K41*K51*r_adab+K42*K52*r_adab;
-    float P__55 = P_55-g0*(K50*P_05+K51*P_15+K52*P_25+K50*P_50+K51*P_51+K52*P_52)+(K50*K50)*r_adab+(K51*K51)*r_adab+(K52*K52)*r_adab+g0_2*(K50*(K50*P_00+K51*P_10+K52*P_20)+K51*(K50*P_01+K51*P_11+K52*P_21)+K52*(K50*P_02+K51*P_12+K52*P_22));
-
-    float xlen = sqrt(x[0]*x[0]+x[1]*x[1]+x[2]*x[2]);
-    float invlen3 = 1.0/(xlen*xlen*xlen);
-    float invlen32 = (invlen3*invlen3);
-
-    float x1_x2 = (x[1]*x[1]+x[2]*x[2]);
-    float x0_x2 = (x[0]*x[0]+x[2]*x[2]);
-    float x0_x1 = (x[0]*x[0]+x[1]*x[1]);
-
-    // normalized a posteriori covariance
-    P[0][0] = invlen32*(-x1_x2*(-P__00*x1_x2+P__10*x[0]*x[1]+P__20*x[0]*x[2])+x[0]*x[1]*(-P__01*x1_x2+P__11*x[0]*x[1]+P__21*x[0]*x[2])+x[0]*x[2]*(-P__02*x1_x2+P__12*x[0]*x[1]+P__22*x[0]*x[2]));
-    P[0][1] = invlen32*(-x0_x2*(-P__01*x1_x2+P__11*x[0]*x[1]+P__21*x[0]*x[2])+x[0]*x[1]*(-P__00*x1_x2+P__10*x[0]*x[1]+P__20*x[0]*x[2])+x[1]*x[2]*(-P__02*x1_x2+P__12*x[0]*x[1]+P__22*x[0]*x[2]));
-    P[0][2] = invlen32*(-x0_x1*(-P__02*x1_x2+P__12*x[0]*x[1]+P__22*x[0]*x[2])+x[0]*x[2]*(-P__00*x1_x2+P__10*x[0]*x[1]+P__20*x[0]*x[2])+x[1]*x[2]*(-P__01*x1_x2+P__11*x[0]*x[1]+P__21*x[0]*x[2]));
-    P[0][3] = -invlen3*(-P__03*x1_x2+P__13*x[0]*x[1]+P__23*x[0]*x[2]);
-    P[0][4] = -invlen3*(-P__04*x1_x2+P__14*x[0]*x[1]+P__24*x[0]*x[2]);
-    P[0][5] = -invlen3*(-P__05*x1_x2+P__15*x[0]*x[1]+P__25*x[0]*x[2]);
-    P[1][0] = invlen32*(-x1_x2*(-P__10*x0_x2+P__00*x[0]*x[1]+P__20*x[1]*x[2])+x[0]*x[1]*(-P__11*x0_x2+P__01*x[0]*x[1]+P__21*x[1]*x[2])+x[0]*x[2]*(-P__12*x0_x2+P__02*x[0]*x[1]+P__22*x[1]*x[2]));
-    P[1][1] = invlen32*(-x0_x2*(-P__11*x0_x2+P__01*x[0]*x[1]+P__21*x[1]*x[2])+x[0]*x[1]*(-P__10*x0_x2+P__00*x[0]*x[1]+P__20*x[1]*x[2])+x[1]*x[2]*(-P__12*x0_x2+P__02*x[0]*x[1]+P__22*x[1]*x[2]));
-    P[1][2] = invlen32*(-x0_x1*(-P__12*x0_x2+P__02*x[0]*x[1]+P__22*x[1]*x[2])+x[0]*x[2]*(-P__10*x0_x2+P__00*x[0]*x[1]+P__20*x[1]*x[2])+x[1]*x[2]*(-P__11*x0_x2+P__01*x[0]*x[1]+P__21*x[1]*x[2]));
-    P[1][3] = -invlen3*(-P__13*x0_x2+P__03*x[0]*x[1]+P__23*x[1]*x[2]);
-    P[1][4] = -invlen3*(-P__14*x0_x2+P__04*x[0]*x[1]+P__24*x[1]*x[2]);
-    P[1][5] = -invlen3*(-P__15*x0_x2+P__05*x[0]*x[1]+P__25*x[1]*x[2]);
-    P[2][0] = invlen32*(-x1_x2*(-P__20*x0_x1+P__00*x[0]*x[2]+P__10*x[1]*x[2])+x[0]*x[1]*(-P__21*x0_x1+P__01*x[0]*x[2]+P__11*x[1]*x[2])+x[0]*x[2]*(-P__22*x0_x1+P__02*x[0]*x[2]+P__12*x[1]*x[2]));
-    P[2][1] = invlen32*(-x0_x2*(-P__21*x0_x1+P__01*x[0]*x[2]+P__11*x[1]*x[2])+x[0]*x[1]*(-P__20*x0_x1+P__00*x[0]*x[2]+P__10*x[1]*x[2])+x[1]*x[2]*(-P__22*x0_x1+P__02*x[0]*x[2]+P__12*x[1]*x[2]));
-    P[2][2] = invlen32*(-x0_x1*(-P__22*x0_x1+P__02*x[0]*x[2]+P__12*x[1]*x[2])+x[0]*x[2]*(-P__20*x0_x1+P__00*x[0]*x[2]+P__10*x[1]*x[2])+x[1]*x[2]*(-P__21*x0_x1+P__01*x[0]*x[2]+P__11*x[1]*x[2]));
-    P[2][3] = -invlen3*(-P__23*x0_x1+P__03*x[0]*x[2]+P__13*x[1]*x[2]);
-    P[2][4] = -invlen3*(-P__24*x0_x1+P__04*x[0]*x[2]+P__14*x[1]*x[2]);
-    P[2][5] = -invlen3*(-P__25*x0_x1+P__05*x[0]*x[2]+P__15*x[1]*x[2]);
-    P[3][0] = -invlen3*(-P__30*x1_x2+P__31*x[0]*x[1]+P__32*x[0]*x[2]);
-    P[3][1] = -invlen3*(-P__31*x0_x2+P__30*x[0]*x[1]+P__32*x[1]*x[2]);
-    P[3][2] = -invlen3*(-P__32*x0_x1+P__30*x[0]*x[2]+P__31*x[1]*x[2]);
-    P[3][3] = P__33;
-    P[3][4] = P__34;
-    P[3][5] = P__35;
-    P[4][0] = -invlen3*(-P__40*x1_x2+P__41*x[0]*x[1]+P__42*x[0]*x[2]);
-    P[4][1] = -invlen3*(-P__41*x0_x2+P__40*x[0]*x[1]+P__42*x[1]*x[2]);
-    P[4][2] = -invlen3*(-P__42*x0_x1+P__40*x[0]*x[2]+P__41*x[1]*x[2]);
-    P[4][3] = P__43;
-    P[4][4] = P__44;
-    P[4][5] = P__45;
-    P[5][0] = -invlen3*(-P__50*x1_x2+P__51*x[0]*x[1]+P__52*x[0]*x[2]);
-    P[5][1] = -invlen3*(-P__51*x0_x2+P__50*x[0]*x[1]+P__52*x[1]*x[2]);
-    P[5][2] = -invlen3*(-P__52*x0_x1+P__50*x[0]*x[2]+P__51*x[1]*x[2]);
-    P[5][3] = P__53;
-    P[5][4] = P__54;
-    P[5][5] = P__55;
-
-    // normalized a posteriori state
-    x[0] = x[0]/xlen;
-    x[1] = x[1]/xlen;
-    x[2] = x[2]/xlen;
-
-    // compute Euler angles (not exactly a part of the extended Kalman filter)
-    // yaw integration through full rotation matrix
-    float u_nb1 = u1 - x[4];
-    float u_nb2 = u2 - x[5];
-
-    float cy = cos(yaw); //old angles (last state before integration)
-    float sy = sin(yaw);
-    float d = sqrt(x_last[1]*x_last[1] + x_last[2]*x_last[2]);
-    float d_inv = 1.0 / d;
-
-    // compute needed parts of rotation matrix R (state and angle based version, equivalent with the commented version above)
-    float R11 = cy * d;
-    float R12 = -(x_last[2]*sy + x_last[0]*x_last[1]*cy) * d_inv;
-    float R13 = (x_last[1]*sy - x_last[0]*x_last[2]*cy) * d_inv;
-    float R21 = sy * d;
-    float R22 = (x_last[2]*cy - x_last[0]*x_last[1]*sy) * d_inv;
-    float R23 = -(x_last[1]*cy + x_last[0]*x_last[2]*sy) * d_inv;
-
-    // update needed parts of R for yaw computation
-    float R11_new = R11 + h*(u_nb2*R12 - u_nb1*R13);
-    float R21_new = R21 + h*(u_nb2*R22 - u_nb1*R23);
-    yaw = atan2(R21_new,R11_new) * RADIANS_TO_DEGREES_MULTIPLIER;
-
-    // compute new pitch and roll angles from a posteriori states
-    pitch = asin(-x[0]) * RADIANS_TO_DEGREES_MULTIPLIER;
-    
-    
-    // need to correct reported angles to match
-    // the system we are using 0 degrees = bell at
-    // balance at handstroke, 360 degrees = bell at
-    // balance at backstroke. 180 degrees = BDC. 
-    
-    float rolldiff = (atan2(x[1],x[2]) * RADIANS_TO_DEGREES_MULTIPLIER) - roll;
+    float rolldiff = roll - gameRotationVectorData.lastRoll;
     if(rolldiff > 250.0) {
         rolldiff -= 360.0;
     } else if (rolldiff < -250.0) {
         rolldiff += 360.0;
     }    
-    roll = roll + rolldiff;
 
-    // save the estimated non-gravitational acceleration
-    a[0] = z0-x[0]*g0;
-    a[1] = z1-x[1]*g0;
-    a[2] = z2-x[2]*g0;
+    gameRotationVectorData.lastRoll = roll;
+    gameRotationVectorData.lastPitch = pitch;
+    gameRotationVectorData.lastYaw = yaw;
 
-}
+    if(!RUNNING) return;  // only push data to fifo if we are on a run
 
-/*
-  i2c functions
-*/
-
-
-__s32 i2cReadInt(int fd, __u8 address) {
-    __s32 res = i2c_smbus_read_word_data(fd, address);
-    if (0 > res) {
-        close(fd);
-        exit(1);
+    if (gameRotationVectorData.available == (BUFFERSIZE - 2)) {
+        printf("Angle buffer full.  Ditching oldest sample\n");
+        gameRotationVectorData.tail = (gameRotationVectorData.tail + 1) % BUFFERSIZE;
+        gameRotationVectorData.available -= 1;
     }
-    res = ((res<<8) & 0xFF00) | ((res>>8) & 0xFF);
-    return res;
+
+    unsigned int lastHead = (gameRotationVectorData.head == 0) ? BUFFERSIZE-1 : gameRotationVectorData.head -1;
+    gameRotationVectorData.angleBuffer[gameRotationVectorData.head] =  gameRotationVectorData.angleBuffer[lastHead] + gameRotationVectorData.direction*rolldiff;
+    gameRotationVectorData.head = (gameRotationVectorData.head + 1) % BUFFERSIZE;
+    gameRotationVectorData.available += 1;
 }
 
-//Write a byte
-void i2cWriteByteData(int fd, __u8 address, __u8 value) {
-    if (0 > i2c_smbus_write_byte_data(fd, address, value)) {
-        close(fd);
-        exit(1);
-    }
-}
+void parseLinearAccelerometer(void){
+    uint8_t newSequence = spiRead.buffer[5 + 1];
+    if(newSequence == linearAccelerometerData.lastSequence) return; // sometimes HINT is not brought high quickly, this checks to see if we are reading a report we have already seen.
+    linearAccelerometerData.lastSequence = newSequence;
 
-// Read a block of data
-void i2cReadBlockData(int fd, __u8 address, __u8 length, __u8 *values) {
-    if (0 > i2c_smbus_read_i2c_block_data(fd, address,length,values)) {
-        close(fd);
-        exit(1);
-    }
-}
+    linearAccelerometerData.status = spiRead.buffer[5 + 2] & 0x03;
     
-__s32 i2c_smbus_access(int file, char read_write, __u8 command, int size, union i2c_smbus_data *data) {
-    struct i2c_smbus_ioctl_data args;
-    __s32 err;
-    args.read_write = read_write;
-    args.command = command;
-    args.size = size;
-    args.data = data;
-    err = ioctl(file, I2C_SMBUS, &args);
-    if (err == -1)
-        err = -errno;
-    return err;
+    float Ax = (spiRead.buffer[5 + 5] << 8) + spiRead.buffer[5 + 4];
+    float Ay = (spiRead.buffer[5 + 7] << 8) + spiRead.buffer[5 + 6];
+    float Az = (spiRead.buffer[5 + 9] << 8) + spiRead.buffer[5 + 8];
+    
+    if(Ax >= 0x8000) Ax -= 0x10000;
+    if(Ay >= 0x8000) Ay -= 0x10000;
+    if(Az >= 0x8000) Az -= 0x10000;
+
+    Ax *= QP(8) * 100;
+    Ay *= QP(8) * 100;
+    Az *= QP(8) * 100;
+
+    if(!RUNNING) return;  // only push data to fifo if we are on a run
+
+    if (linearAccelerometerData.available == (BUFFERSIZE - 2)) {
+        printf("Lin Acc buffer full.  Ditching oldest sample\n");
+        linearAccelerometerData.tail = (linearAccelerometerData.tail + 1) % BUFFERSIZE;
+        linearAccelerometerData.available -= 1;
+    }
+    linearAccelerometerData.XBuffer[linearAccelerometerData.head] = Ax;
+    linearAccelerometerData.YBuffer[linearAccelerometerData.head] = Ay;
+    linearAccelerometerData.ZBuffer[linearAccelerometerData.head] = Az;
+    linearAccelerometerData.head = (linearAccelerometerData.head + 1) % BUFFERSIZE;
+    linearAccelerometerData.available += 1;
 }
 
-__s32 i2c_smbus_write_quick(int file, __u8 value) {
-    return i2c_smbus_access(file, value, 0, I2C_SMBUS_QUICK, NULL);
+void parseAccelerometer(void){
+    uint8_t newSequence = spiRead.buffer[5 + 1];
+    if(newSequence == accelerometerData.lastSequence) return; // sometimes HINT is not brought high quickly, this checks to see if we are reading a report we have already seen.
+    accelerometerData.lastSequence = newSequence;
+
+    accelerometerData.status = spiRead.buffer[5 + 2] & 0x03;
+    
+    float Ax = (spiRead.buffer[5 + 5] << 8) + spiRead.buffer[5 + 4];
+    float Ay = (spiRead.buffer[5 + 7] << 8) + spiRead.buffer[5 + 6];
+    float Az = (spiRead.buffer[5 + 9] << 8) + spiRead.buffer[5 + 8];
+    
+    if(Ax >= 0x8000) Ax -= 0x10000;
+    if(Ay >= 0x8000) Ay -= 0x10000;
+    if(Az >= 0x8000) Az -= 0x10000;
+
+    Ax *= QP(8) * 100;
+    Ay *= QP(8) * 100;
+    Az *= QP(8) * 100;
+
+    if(!RUNNING) return;  // only push data to fifo if we are on a run
+
+    if (accelerometerData.available == (BUFFERSIZE - 2)) {
+        printf("Acc buffer full.  Ditching oldest sample\n");
+        accelerometerData.tail = (accelerometerData.tail + 1) % BUFFERSIZE;
+        accelerometerData.available -= 1;
+    }
+    accelerometerData.XBuffer[accelerometerData.head] = Ax;
+    accelerometerData.YBuffer[accelerometerData.head] = Ay;
+    accelerometerData.ZBuffer[accelerometerData.head] = Az;
+    accelerometerData.head = (accelerometerData.head + 1) % BUFFERSIZE;
+    accelerometerData.available += 1;
+    
 }
 
-__s32 i2c_smbus_read_byte(int file) {
-    union i2c_smbus_data data;
-    int err;
-    err = i2c_smbus_access(file, I2C_SMBUS_READ, 0, I2C_SMBUS_BYTE, &data);
-    if (err < 0)
-        return err;
-    return 0x0FF & data.byte;
+void parseCalibratedGyroscope(void){
+    uint8_t newSequence = spiRead.buffer[5 + 1];
+    if(newSequence == gyroData.lastSequence) return; // sometimes HINT is not brought high quickly, this checks to see if we are reading a report we have already seen.
+    gyroData.lastSequence = newSequence;
+
+    gyroData.status = spiRead.buffer[5 + 2] & 0x03;
+
+    float Gx = (spiRead.buffer[5 + 5] << 8) + spiRead.buffer[5 + 4];
+    float Gy = (spiRead.buffer[5 + 7] << 8) + spiRead.buffer[5 + 6];
+    float Gz = (spiRead.buffer[5 + 9] << 8) + spiRead.buffer[5 + 8];
+    
+    if(Gx >= 0x8000) Gx -= 0x10000;
+    if(Gy >= 0x8000) Gy -= 0x10000;
+    if(Gz >= 0x8000) Gz -= 0x10000;
+
+    Gx *= QP(9) * RADIANS_TO_DEGREES_MULTIPLIER;
+    Gy *= QP(9) * RADIANS_TO_DEGREES_MULTIPLIER;
+    Gz *= QP(9) * RADIANS_TO_DEGREES_MULTIPLIER;
+
+    gyroData.lastX = Gx;
+    gyroData.lastY = Gy;
+    gyroData.lastZ = Gz;
+
+    if(!RUNNING) return;  // only push data to fifo if we are on a run
+
+    if (gyroData.available == (BUFFERSIZE - 2)) {
+        printf("Rate buffer full.  Ditching oldest sample\n");
+        gyroData.tail = (gyroData.tail + 1) % BUFFERSIZE;
+        gyroData.available -= 1;
+    }
+    gyroData.rateBuffer[gyroData.head] = Gx;
+    gyroData.accnBuffer[gyroData.head] = (Gx-gyroData.lastRate)*ODR;
+    gyroData.lastRate = Gx;
+    gyroData.head = (gyroData.head + 1) % BUFFERSIZE;
+    gyroData.available += 1;
 }
 
-__s32 i2c_smbus_write_byte(int file, __u8 value) {
-    return i2c_smbus_access(file, I2C_SMBUS_WRITE, value, I2C_SMBUS_BYTE, NULL);
+void parseStability(void){    
+    uint8_t newSequence = spiRead.buffer[5 + 1];
+    if(newSequence == stabilityData.lastSequence) return; // sometimes HINT is not brought high quickly, this checks to see if we are reading a report we have already seen.
+    stabilityData.lastSequence = newSequence;
+
+    stabilityData.status = spiRead.buffer[5+4];
 }
 
-__s32 i2c_smbus_read_byte_data(int file, __u8 command) {
-    union i2c_smbus_data data;
-    int err;
-    err = i2c_smbus_access(file, I2C_SMBUS_READ, command, I2C_SMBUS_BYTE_DATA, &data);
-    if (err < 0)
-        return err;
-    return 0x0FF & data.byte;
+void parseStabilisedRotationVector(void){
+    printf("Not yet\n");
 }
 
-__s32 i2c_smbus_write_byte_data(int file, __u8 command, __u8 value) {
-    union i2c_smbus_data data;
-    data.byte = value;
-    return i2c_smbus_access(file, I2C_SMBUS_WRITE, command, I2C_SMBUS_BYTE_DATA, &data);
+void parseStabilisedGameRotationVector(void){
+    printf("Not yet\n");
 }
 
-__s32 i2c_smbus_read_word_data(int file, __u8 command) {
-    union i2c_smbus_data data;
-    int err;
-    err = i2c_smbus_access(file, I2C_SMBUS_READ, command, I2C_SMBUS_WORD_DATA, &data);
-    if (err < 0)
-        return err;
-    return 0x0FFFF & data.word;
+void setStandardOrientation(void){
+    reorient(R2O2,0,-R2O2,0);  // side mount connectors down
+//    reorient(0,-R2O2,0,-R2O2);  // side mount connectors up
+//    reorient(R2O2,0,-R2O2,0); // top mount
 }
 
-__s32 i2c_smbus_write_word_data(int file, __u8 command, __u16 value){
-    union i2c_smbus_data data;
-    data.word = value;
-    return i2c_smbus_access(file, I2C_SMBUS_WRITE, command, I2C_SMBUS_WORD_DATA, &data);
+int reorient(float w, float x, float y, float z){
+    uint16_t W = (int16_t)(w/QP(14));
+    uint16_t X = (int16_t)(x/QP(14));
+    uint16_t Y = (int16_t)(y/QP(14));
+    uint16_t Z = (int16_t)(z/QP(14));
+
+    spiWrite.buffer[0] = SHTP_REPORT_COMMAND_REQUEST; // set feature
+    spiWrite.buffer[1] = SEQUENCENUMBER[6]++;
+    spiWrite.buffer[2] = 0x03; // Tare command
+    spiWrite.buffer[3] = 0x02; // reorient
+    spiWrite.buffer[4] = X & 0x00FF; // X LSB
+    spiWrite.buffer[5] = X >> 8; // X MSB
+    spiWrite.buffer[6] = Y & 0x00FF; // Y LSB
+    spiWrite.buffer[7] = Y >> 8; // Y MSB
+    spiWrite.buffer[8] = Z & 0x00FF; // Z LSB
+    spiWrite.buffer[9] = Z >> 8; // Z MSB
+    spiWrite.buffer[10]= W & 0x00FF; // W LSB
+    spiWrite.buffer[11]= W >> 8; // W MSB
+    return(sendPacket(CHANNEL_CONTROL, 12));
 }
 
-__s32 i2c_smbus_process_call(int file, __u8 command, __u16 value) {
-    union i2c_smbus_data data;
-    data.word = value;
-    if (i2c_smbus_access(file, I2C_SMBUS_WRITE, command, I2C_SMBUS_PROC_CALL, &data))
-        return -1;
-    else
-        return 0x0FFFF & data.word;
+void clearPersistentTare(void){
+//    writeFrsWord(SYSTEM_ORIENTATION,0,0);
+//    writeFrsWord(SYSTEM_ORIENTATION,1,0);
+//    writeFrsWord(SYSTEM_ORIENTATION,2,0);
+//    writeFrsWord(SYSTEM_ORIENTATION,3,0);
+    eraseFrsRecord(SYSTEM_ORIENTATION);
+    setStandardOrientation();
 }
 
-/* Returns the number of read bytes */
-__s32 i2c_smbus_read_block_data(int file, __u8 command, __u8 *values){
-    union i2c_smbus_data data;
-    int i, err;
-    err = i2c_smbus_access(file, I2C_SMBUS_READ, command, I2C_SMBUS_BLOCK_DATA, &data);
-    if (err < 0)
-        return err;
-
-    for (i = 1; i <= data.block[0]; i++)
-        values[i-1] = data.block[i];
-    return data.block[0];
+void tare(void){
+    spiWrite.buffer[0] = SHTP_REPORT_COMMAND_REQUEST; // set feature
+    spiWrite.buffer[1] = SEQUENCENUMBER[6]++; 
+    spiWrite.buffer[2] = 0x03; // Tare command
+    spiWrite.buffer[3] = 0x00; // perform Tare now
+    spiWrite.buffer[4] = 0x07; // all axes
+    spiWrite.buffer[5] = 0x01; // use gaming rotation vector
+    spiWrite.buffer[6] = 0x00; // reserved
+    spiWrite.buffer[7] = 0x00;
+    spiWrite.buffer[8] = 0x00;
+    spiWrite.buffer[9] = 0x00;
+    spiWrite.buffer[10]= 0x00;
+    spiWrite.buffer[11]= 0x00;
+    sendPacket(CHANNEL_CONTROL, 12);
+    spiWrite.buffer[0] = SHTP_REPORT_COMMAND_REQUEST; // set feature
+    spiWrite.buffer[1] = SEQUENCENUMBER[6]++;
+    spiWrite.buffer[2] = 0x03; // Tare command
+    spiWrite.buffer[3] = 0x01; // persist tare
+    spiWrite.buffer[4] = 0x00; 
+    spiWrite.buffer[5] = 0x00;
+    spiWrite.buffer[6] = 0x00;
+    spiWrite.buffer[7] = 0x00;
+    spiWrite.buffer[8] = 0x00;
+    spiWrite.buffer[9] = 0x00;
+    spiWrite.buffer[10]= 0x00;
+    spiWrite.buffer[11]= 0x00;
+    sendPacket(CHANNEL_CONTROL, 12);
 }
 
-__s32 i2c_smbus_write_block_data(int file, __u8 command, __u8 length, const __u8 *values) {
-    union i2c_smbus_data data;
-    int i;
-    if (length > I2C_SMBUS_BLOCK_MAX)
-        length = I2C_SMBUS_BLOCK_MAX;
-    for (i = 1; i <= length; i++)
-        data.block[i] = values[i-1];
-    data.block[0] = length;
-    return i2c_smbus_access(file, I2C_SMBUS_WRITE, command,
-                I2C_SMBUS_BLOCK_DATA, &data);
+void calibrationSetup(char accel, char gyro, char mag){
+    spiWrite.buffer[0] = SHTP_REPORT_COMMAND_REQUEST; // set feature
+    spiWrite.buffer[1] = SEQUENCENUMBER[6]++; // sequence number
+    spiWrite.buffer[2] = COMMAND_ME_CALIBRATE; // ME calibration
+    spiWrite.buffer[3] = accel; // accel 1=enabled 0=disabled
+    spiWrite.buffer[4] = gyro; // gyro 1=enabled 0=disabled
+    spiWrite.buffer[5] = mag; // mag 1=enabled 0=disabled
+    spiWrite.buffer[6] = 0x00; 
+    spiWrite.buffer[7] = 0x00; // planar calibration
+    spiWrite.buffer[8] = 0x00; // reserved
+    spiWrite.buffer[9] = 0x00; // reserved
+    spiWrite.buffer[10]= 0x00; // reserved
+    spiWrite.buffer[11]= 0x00; // reserved
+    sendPacket(CHANNEL_CONTROL, 12);
 }
 
-/* Returns the number of read bytes */
-__s32 i2c_smbus_read_i2c_block_data(int file, __u8 command, __u8 length, __u8 *values) {
-    union i2c_smbus_data data;
-    int i, err;
-    if (length > I2C_SMBUS_BLOCK_MAX)
-        length = I2C_SMBUS_BLOCK_MAX;
-    data.block[0] = length;
-    err = i2c_smbus_access(file, I2C_SMBUS_READ, command,
-                   length == 32 ? I2C_SMBUS_I2C_BLOCK_BROKEN :
-                I2C_SMBUS_I2C_BLOCK_DATA, &data);
-    if (err < 0)
-        return err;
-    for (i = 1; i <= data.block[0]; i++)
-        values[i-1] = data.block[i];
-    return data.block[0];
+void saveCalibration(void){
+    spiWrite.buffer[0] = SHTP_REPORT_COMMAND_REQUEST; // set feature
+    spiWrite.buffer[1] = SEQUENCENUMBER[6]++; 
+    spiWrite.buffer[2] = 0x06; // Save DCD
+    spiWrite.buffer[3] = 0x00; // reserved
+    spiWrite.buffer[4] = 0x00;  
+    spiWrite.buffer[5] = 0x00; 
+    spiWrite.buffer[6] = 0x00; 
+    spiWrite.buffer[7] = 0x00;
+    spiWrite.buffer[8] = 0x00;
+    spiWrite.buffer[9] = 0x00;
+    spiWrite.buffer[10]= 0x00;
+    spiWrite.buffer[11]= 0x00;
+    sendPacket(CHANNEL_CONTROL, 12);
+
+    int timeout = 0;
+    int counter = 0;
+    while(timeout < 1000){
+        timeout +=1;
+        usleep(50);
+        while(bcm2835_gpio_lev(INTPIN) == 0) {
+            collectPacket();
+            if(spiRead.buffer[2] != 0x06) {parseEvent(); break;}
+            if(spiRead.buffer[5] != 0) printf("Calibration save error\n");
+            return;
+        }
+    }
+    printf("Calibration save timeout\n");
 }
 
-__s32 i2c_smbus_write_i2c_block_data(int file, __u8 command, __u8 length, const __u8 *values) {
-    union i2c_smbus_data data;
-    int i;
-    if (length > I2C_SMBUS_BLOCK_MAX)
-        length = I2C_SMBUS_BLOCK_MAX;
-    for (i = 1; i <= length; i++)
-        data.block[i] = values[i-1];
-    data.block[0] = length;
-    return i2c_smbus_access(file, I2C_SMBUS_WRITE, command,
-                I2C_SMBUS_I2C_BLOCK_BROKEN, &data);
+int configureFeatureReport(uint8_t report, uint32_t reportPeriod){
+    spiWrite.buffer[0] = SHTP_REPORT_SET_FEATURE_COMMAND; // set feature
+    spiWrite.buffer[1] = report;
+    spiWrite.buffer[2] = 0x00; // feature flags
+    spiWrite.buffer[3] = 0x00; // change sensitivity LSB
+    spiWrite.buffer[4] = 0x00; // change sensitivity MSB
+    spiWrite.buffer[5] =  reportPeriod & 0x000000FF;       // report interval (LSB)
+    spiWrite.buffer[6] = (reportPeriod & 0x0000FF00) >> 8;
+    spiWrite.buffer[7] = (reportPeriod & 0x00FF0000) >> 16;
+    spiWrite.buffer[8] = (reportPeriod & 0xFF000000) >> 24;// report interval (MSB)
+    spiWrite.buffer[9] = 0x00;  // batch interval (LSB)
+    spiWrite.buffer[10]= 0x00;
+    spiWrite.buffer[11]= 0x00;
+    spiWrite.buffer[12]= 0x00;  // batch interval (MSB)
+    spiWrite.buffer[13]= 0x00;  // sensor specific config word (LSB)
+    spiWrite.buffer[14]= 0x00;
+    spiWrite.buffer[15]= 0x00;
+    spiWrite.buffer[16]= 0x00;  // sensor specific config word (MSB)
+    return(sendPacket(CHANNEL_CONTROL, 17));
 }
 
-/* Returns the number of read bytes */
-__s32 i2c_smbus_block_process_call(int file, __u8 command, __u8 length, __u8 *values) {
-    union i2c_smbus_data data;
-    int i, err;
-    if (length > I2C_SMBUS_BLOCK_MAX)
-        length = I2C_SMBUS_BLOCK_MAX;
-    for (i = 1; i <= length; i++)
-        data.block[i] = values[i-1];
-    data.block[0] = length;
-    err = i2c_smbus_access(file, I2C_SMBUS_WRITE, command,
-                   I2C_SMBUS_BLOCK_PROC_CALL, &data);
-    if (err < 0)
-        return err;
-    for (i = 1; i <= data.block[0]; i++)
-        values[i-1] = data.block[i];
-    return data.block[0];
+int readFrsRecord(uint16_t recordType){
+    spiWrite.buffer[0] = SHTP_REPORT_FRS_READ_REQUEST;
+    spiWrite.buffer[1] = 0x00;
+    spiWrite.buffer[2] = 0x00; 
+    spiWrite.buffer[3] = 0x00; 
+    spiWrite.buffer[4] = (char)(recordType & 0x00FF);
+    spiWrite.buffer[5] = (char)(recordType >> 8);
+    spiWrite.buffer[6] = 0x00; 
+    spiWrite.buffer[7] = 0x00; 
+    sendPacket(CHANNEL_CONTROL, 8);
+
+    int timeout = 0;
+    int counter = 0;
+    while(timeout < 1000){
+        timeout +=1;
+        usleep(50);
+        while(bcm2835_gpio_lev(INTPIN) == 0) {
+            collectPacket();
+            if(spiRead.buffer[0] != SHTP_REPORT_FRS_READ_RESPONSE) {parseEvent(); break;}
+            if(((spiRead.buffer[1] & 0x0F) == 1) || ((spiRead.buffer[1] & 0x0F) == 2) || ((spiRead.buffer[1] & 0x0F) == 4) || \
+                ((spiRead.buffer[1] & 0x0F) == 5) || ((spiRead.buffer[1] & 0x0F) == 8)) {
+                printf("FRS Read error, %02X\n",spiRead.buffer[1] & 0x0F);
+                return(-1);
+            }
+            FRS_READ_BUFFER[counter] = (uint32_t)spiRead.buffer[7] << 24 | (uint32_t)spiRead.buffer[6] << 16 | (uint32_t)spiRead.buffer[5] << 8 | (uint32_t)spiRead.buffer[4];
+            FRS_READ_BUFFER[counter] = (uint32_t)spiRead.buffer[11] << 24 | (uint32_t)spiRead.buffer[10] << 16 | (uint32_t)spiRead.buffer[9] << 8 | (uint32_t)spiRead.buffer[8];
+            counter += 2;
+            if(((spiRead.buffer[1] & 0x0F) == 3) || ((spiRead.buffer[1] & 0x0F) == 6) || ((spiRead.buffer[1] & 0x0F) == 7)) return(counter);
+        }
+    }
+    printf("FRS Read timeout");
+    return(0);
+}
+
+int eraseFrsRecord(uint16_t recordType){
+    spiWrite.buffer[0] = SHTP_REPORT_FRS_WRITE_REQUEST;
+    spiWrite.buffer[1] = 0x00;
+    spiWrite.buffer[2] = 0x00;//length lsb 
+    spiWrite.buffer[3] = 0x00;//length msb
+    spiWrite.buffer[4] = recordType & 0x00FF;
+    spiWrite.buffer[5] = recordType >> 8;
+    if (!sendPacket(CHANNEL_CONTROL, 6)) return(0);
+    return(1);
+}
+
+int writeFrsWord(uint16_t recordType, uint32_t offset, uint32_t data){
+    spiWrite.buffer[0] = SHTP_REPORT_FRS_WRITE_REQUEST;
+    spiWrite.buffer[1] = 0x00;
+    spiWrite.buffer[2] = 0x01;//length lsb 
+    spiWrite.buffer[3] = 0x00;//length msb
+    spiWrite.buffer[4] = recordType & 0x00FF;
+    spiWrite.buffer[5] = recordType >> 8;
+    if (!sendPacket(CHANNEL_CONTROL, 6)) return(0);
+
+    spiWrite.buffer[0] = SHTP_REPORT_FRS_WRITE_DATA_REQUEST;
+    spiWrite.buffer[1] = 0x00;
+    spiWrite.buffer[2] = offset & 0x00FF;  //offset lsb
+    spiWrite.buffer[3] = offset >> 8;//offset msb
+    spiWrite.buffer[4] =  data & 0x000000FF;       // word 1 (LSB)
+    spiWrite.buffer[5] = (data & 0x0000FF00) >> 8;
+    spiWrite.buffer[6] = (data & 0x00FF0000) >> 16;
+    spiWrite.buffer[7] = data >> 24; // word 1 (MSB)
+    spiWrite.buffer[8] = 0x00;  // word 2 lsb
+    spiWrite.buffer[9] = 0x00;
+    spiWrite.buffer[10]= 0x00;
+    spiWrite.buffer[11]= 0x00;
+    if(!sendPacket(CHANNEL_CONTROL, 12)) return(0);
+
+    for(int i = 0; i<2000; i++){
+        usleep(100);
+        while(bcm2835_gpio_lev(INTPIN) == 0) {
+            collectPacket();
+            if(spiRead.buffer[0] != SHTP_REPORT_FRS_WRITE_RESPONSE) {parseEvent(); continue;}
+            if(spiRead.buffer[1] != 3) {
+                continue;
+            } else {
+                return(1);
+            }
+        }
+    }
+    printf("FRS Write timeout\n");
+    return(0);
+}
+
+int readFrsWord(uint16_t recordType, uint32_t offset, uint32_t* result){
+    spiWrite.buffer[0] = SHTP_REPORT_FRS_READ_REQUEST;
+    spiWrite.buffer[1] = 0x00;
+    spiWrite.buffer[2] = offset & 0x00FF; 
+    spiWrite.buffer[3] = offset >> 8; 
+    spiWrite.buffer[4] = recordType & 0x00FF;
+    spiWrite.buffer[5] = recordType >> 8;
+    spiWrite.buffer[6] = 0x01; 
+    spiWrite.buffer[7] = 0x00; 
+    if (!sendPacket(CHANNEL_CONTROL, 6)) return(0);
+
+    int timeout = 0;
+    while(timeout < 1000){
+        timeout +=1;
+        usleep(50);
+        while(bcm2835_gpio_lev(INTPIN) == 0) {
+            collectPacket();
+            if(spiRead.buffer[0] != SHTP_REPORT_FRS_READ_RESPONSE) {parseEvent(); continue;}
+            if(((spiRead.buffer[1] & 0x0F) == 1) || ((spiRead.buffer[1] & 0x0F) == 2) || ((spiRead.buffer[1] & 0x0F) == 4) || \
+                ((spiRead.buffer[1] & 0x0F) == 5) || ((spiRead.buffer[1] & 0x0F) == 8)) {
+                printf("FRS Read error, %02X\n",spiRead.buffer[1] & 0x0F);
+                return(0);
+            }
+            *result = ((uint32_t)spiRead.buffer[7] << 24) | ((uint32_t)spiRead.buffer[6] << 16) | ((uint32_t)spiRead.buffer[5] << 8) | (uint32_t)spiRead.buffer[4];
+            if(((spiRead.buffer[1] & 0x0F) == 3) || ((spiRead.buffer[1] & 0x0F) == 6) || ((spiRead.buffer[1] & 0x0F) == 7)) return(1);
+        }
+    }
+    printf("FRS Read timeout\n");
+    return(0);
+}
+
+void start(uint32_t dataRate){ // set datarate to zero to stop sensors
+    uint32_t odrPeriodMicrosecs = 0;
+    if(dataRate != 0) odrPeriodMicrosecs = 1000000/dataRate; 
+
+// enable calibration (we should be stationary)  // TODO: check stationary
+    calibrationSetup(1,1,1);
+
+    configureFeatureReport(SENSOR_REPORTID_GYRO_INTEGRATED_ROTATION_VECTOR, odrPeriodMicrosecs);
+    gyroIntegratedRotationVectorData.requestedInterval=odrPeriodMicrosecs;
+    gyroIntegratedRotationVectorData.direction = 0;
+
+    configureFeatureReport(SENSOR_REPORTID_STABILITY_CLASSIFIER, 500000);// two reports per second
+    stabilityData.requestedInterval=500000;
+/*
+    configureFeatureReport(SENSOR_REPORTID_GAME_ROTATION_VECTOR, odrPeriodMicrosecs);
+    gameRotationVectorData.requestedInterval=odrPeriodMicrosecs;
+    gameRotationVectorData.direction=0;
+    
+    configureFeatureReport(SENSOR_REPORTID_GYROSCOPE_CALIBRATED, odrPeriodMicrosecs);
+    gyroData.requestedInterval=odrPeriodMicrosecs;
+
+
+    configureFeatureReport(SENSOR_REPORTID_ACCELEROMETER, odrPeriodMicrosecs);
+    accelerometerData.requestedInterval=odrPeriodMicrosecs;
+
+    configureFeatureReport(SENSOR_REPORTID_LINEAR_ACCELERATION, odrPeriodMicrosecs);
+    linearAccelerometerData.requestedInterval=odrPeriodMicrosecs;
+*/
+}
+
+void setupStabilityClassifierFrs(float threshold){
+    threshold /= QP(24);
+    uint32_t result;
+    readFrsWord(STABILITY_DETECTOR_CONFIG,0,&result);
+    if (threshold != result) writeFrsWord(STABILITY_DETECTOR_CONFIG,0,threshold);
+
+// for some reason the duration word does not seem to want to take
+//    readFrsWord(STABILITY_DETECTOR_CONFIG,1,&result);
+//    if (duration != result) writeFrsWord(STABILITY_DETECTOR_CONFIG,1,duration);
+}
+
+void setup(void){
+    if (!bcm2835_init()){
+        printf("Unable to inititalise bcm2835\n");
+        exit(1);
+    }
+    bcm2835_gpio_fsel(RESETPIN, BCM2835_GPIO_FSEL_OUTP); // reset
+    bcm2835_gpio_set(RESETPIN);
+    bcm2835_gpio_fsel(WAKPS0PIN, BCM2835_GPIO_FSEL_OUTP); // WAKPS0
+    bcm2835_gpio_set(WAKPS0PIN);
+    bcm2835_gpio_fsel(INTPIN, BCM2835_GPIO_FSEL_INPT); // INT
+    bcm2835_gpio_set_pud(INTPIN, BCM2835_GPIO_PUD_UP);
+
+    
+// setup SPI
+    if (!bcm2835_spi_begin()){
+      printf("bcm2835_spi_begin failed. \n");
+      exit(1);
+    }
+    bcm2835_spi_setBitOrder(BCM2835_SPI_BIT_ORDER_MSBFIRST);
+    bcm2835_spi_setDataMode(BCM2835_SPI_MODE3);
+    bcm2835_spi_set_speed_hz(3000000);
+    bcm2835_spi_chipSelect(BCM2835_SPI_CS0);
+    bcm2835_spi_setChipSelectPolarity(BCM2835_SPI_CS0, LOW);
+
+//    reset device
+    bcm2835_gpio_clr(RESETPIN);
+    usleep(20000);
+    bcm2835_gpio_set(RESETPIN);
+    int waitCount = 0;
+    while ((bcm2835_gpio_lev(INTPIN) == 1) && (waitCount < 1000)){ // should only be called when int is low so not really needed
+        usleep(500);
+        waitCount += 1;
+    }
+    if(waitCount == 1000)  {printf("Device did not wake on reset\n"); exit(1);}
+    if(!collectPacket()) {printf("Reset packet not received\n"); exit(1);}
+
+    usleep(5000);
+    if(!collectPacket()) {printf("Unsolicited packet not received\n"); exit(1);}
+
+    spiWrite.buffer[0] = SHTP_REPORT_PRODUCT_ID_REQUEST; //Request the product ID and reset info
+    spiWrite.buffer[1] = 0; //Reserved
+    if(!sendPacket(CHANNEL_CONTROL, 2)) {printf("Cannot send ID request\n"); exit(1);}
+
+    if(!collectPacket()) {printf("Cannot receive ID response"); exit(1);}
+    
+    if(spiRead.buffer[0] != SHTP_REPORT_PRODUCT_ID_RESPONSE){
+        printf("Cannot communicate with BNO080: got %02X DATALENGTH %04X \n",spiRead.buffer[0],spiRead.dataLength);
+        exit(1);
+    }
+    setupStabilityClassifierFrs(2.5);  // used to check if bell is moving.  2.5m/s2 allows some small movement
+    setStandardOrientation();
+    for(uint32_t i=0; i<sizeof(SEQUENCENUMBER); i++) SEQUENCENUMBER[i] = 0;
+
+}
+
+int32_t collectPacket(void){
+    int waitCount = 0;
+    volatile uint32_t* paddr = bcm2835_spi0 + BCM2835_SPI0_CS/4;
+    volatile uint32_t* fifo = bcm2835_spi0 + BCM2835_SPI0_FIFO/4;
+    uint32_t RXCnt=0;
+    uint32_t TXCnt=0;
+    spiRead.dataLength = 0;
+    spiRead.sequence = 0;
+    spiRead.channel = 9;
+
+    while ((bcm2835_gpio_lev(INTPIN) == 1) && (waitCount < 100)){ // should only be called when int is low so not really needed
+        usleep(500);
+        waitCount += 1;
+    }
+    if(waitCount == 100) return(0);  // timeout
+
+    bcm2835_peri_set_bits(paddr, BCM2835_SPI0_CS_CLEAR, BCM2835_SPI0_CS_CLEAR);
+    bcm2835_peri_set_bits(paddr, BCM2835_SPI0_CS_TA, BCM2835_SPI0_CS_TA);
+    while((TXCnt < 4)||(RXCnt < 4)){
+        while(((bcm2835_peri_read(paddr) & BCM2835_SPI0_CS_TXD))&&(TXCnt < 4 )){
+            bcm2835_peri_write_nb(fifo, 0);
+            TXCnt++;
+        }
+        while(((bcm2835_peri_read(paddr) & BCM2835_SPI0_CS_RXD))&&( RXCnt < 4 )){
+            spiRead.buffer[RXCnt] = bcm2835_peri_read_nb(fifo);
+            RXCnt++;
+        }
+    }
+    
+    spiRead.dataLength = (uint16_t)spiRead.buffer[1] << 8 | (uint16_t)spiRead.buffer[0];
+    spiRead.sequence = spiRead.buffer[3];
+    spiRead.channel = spiRead.buffer[2];
+    if(spiRead.dataLength == 0) return(-1); // nothing collected
+//    if(spiRead.dataLength > 0x7FFF) printf("Continuation\n"); 
+    spiRead.dataLength = spiRead.dataLength & ~(1 << 15); //Clear the MSbit - no idea what to do with a continuation (yuk)
+    while((TXCnt < spiRead.dataLength)||(RXCnt < spiRead.dataLength)){
+        while(((bcm2835_peri_read(paddr) & BCM2835_SPI0_CS_TXD))&&(TXCnt < spiRead.dataLength )){
+            bcm2835_peri_write_nb(fifo, 0);
+            TXCnt++;
+        }
+        while(((bcm2835_peri_read(paddr) & BCM2835_SPI0_CS_RXD))&&( RXCnt < spiRead.dataLength )){
+            spiRead.buffer[RXCnt - 4] = bcm2835_peri_read_nb(fifo); // -4 as we don't need to keep the header
+            RXCnt++;
+        }
+    }
+    
+    while (!(bcm2835_peri_read_nb(paddr) & BCM2835_SPI0_CS_DONE));
+    bcm2835_peri_set_bits(paddr, 0, BCM2835_SPI0_CS_TA);
+    spiRead.dataLength -= 4;
+    return(1);
+}
+
+int32_t sendPacket(uint32_t channelNumber, uint32_t dataLength){
+    unsigned int header[4];
+    int waitCount = 0;
+    volatile uint32_t* paddr = bcm2835_spi0 + BCM2835_SPI0_CS/4;
+    volatile uint32_t* fifo = bcm2835_spi0 + BCM2835_SPI0_FIFO/4;
+    uint32_t TXCnt = 0;
+    uint32_t RXCnt = 0;
+    spiRead.dataLength = 0;
+    spiRead.sequence = 0;
+    spiRead.channel = 9;
+
+    bcm2835_gpio_clr(WAKPS0PIN);  // wake the thing up
+    dataLength += 4;    
+    header[0] = dataLength & 0xFF;
+    header[1] = dataLength >> 8;
+    header[2] = channelNumber;
+    header[3] = SEQUENCENUMBER[channelNumber]++;
+    usleep(2000);  // makes things much more reliable - thankfully we are only sending commands infrequently
+
+    while ((bcm2835_gpio_lev(INTPIN) == 1) && (waitCount < 200)){
+        usleep(500);
+        waitCount += 1;
+    }
+    
+    if(waitCount == 200) return(0);
+
+    bcm2835_peri_set_bits(paddr, BCM2835_SPI0_CS_CLEAR, BCM2835_SPI0_CS_CLEAR);
+    bcm2835_peri_set_bits(paddr, BCM2835_SPI0_CS_TA, BCM2835_SPI0_CS_TA);
+
+    // send header
+    while((TXCnt < 4)||(RXCnt < 4)){
+        while(((bcm2835_peri_read(paddr) & BCM2835_SPI0_CS_TXD))&&(TXCnt < 4 )){
+            bcm2835_peri_write_nb(fifo, header[TXCnt]);
+            TXCnt++;
+        }
+        while(((bcm2835_peri_read(paddr) & BCM2835_SPI0_CS_RXD))&&( RXCnt < 4 )) {
+            spiRead.buffer[RXCnt] = bcm2835_peri_read_nb(fifo);
+            RXCnt++;
+        }
+    }
+    // physically possible that data will be received at the same time so have a look
+    spiRead.sequence = spiRead.buffer[3];
+    spiRead.channel = spiRead.buffer[2];
+    spiRead.dataLength = ((uint16_t)spiRead.buffer[1] << 8 | (uint16_t)spiRead.buffer[0]);
+    spiRead.dataLength = spiRead.dataLength & ~(1 << 15); //Clear the MSbit
+
+    bcm2835_gpio_set(WAKPS0PIN);  // probably OK to remove wake signal now
+
+    // now send rest of TX packet
+    while((TXCnt < dataLength)||(RXCnt < dataLength))
+    {
+        while(((bcm2835_peri_read(paddr) & BCM2835_SPI0_CS_TXD))&&(TXCnt < dataLength )){
+            bcm2835_peri_write_nb(fifo, spiWrite.buffer[TXCnt-4]);
+            TXCnt++;
+        }
+        while(((bcm2835_peri_read(paddr) & BCM2835_SPI0_CS_RXD))&&( RXCnt < dataLength )){
+            spiRead.buffer[RXCnt-4] = bcm2835_peri_read_nb(fifo);  // -4 as we don't need header
+            RXCnt++;
+        }
+    }
+    // check to see if we are reading a longer packet than sent by us
+
+    if(spiRead.dataLength > dataLength){
+        while((TXCnt < spiRead.dataLength)||(RXCnt < spiRead.dataLength)){
+            while(((bcm2835_peri_read(paddr) & BCM2835_SPI0_CS_TXD))&&(TXCnt < spiRead.dataLength )){
+                bcm2835_peri_write_nb(fifo, 0); // send padding zeros
+                TXCnt++;
+            }
+            while(((bcm2835_peri_read(paddr) & BCM2835_SPI0_CS_RXD))&&( RXCnt < spiRead.dataLength )){
+                spiRead.buffer[RXCnt-4] = bcm2835_peri_read_nb(fifo);  // -4 as we don't need header
+                RXCnt++;
+            }
+        }
+    }
+    while (!(bcm2835_peri_read_nb(paddr) & BCM2835_SPI0_CS_DONE));
+    bcm2835_peri_set_bits(paddr, 0, BCM2835_SPI0_CS_TA);
+
+    if(spiRead.dataLength != 0) { spiRead.dataLength -= 4; parseEvent(); }
+
+    return(1);
+
 }
