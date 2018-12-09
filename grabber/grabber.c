@@ -294,7 +294,7 @@ int main(int argc, char const *argv[]){
                 continue;
             }
             if(strcmp("SAMP:", command) == 0) {
-                printf("SAMP:%f\n",5.0/ODR); // temporary reduction in sample rate
+                printf("SAMP:%f\n",4.0/ODR); // temporary reduction in sample rate
                 continue;
             }
             if(strcmp("CALI:", command) == 0) {
@@ -469,20 +469,31 @@ void handleEvent(void){
 
 void pushData(void){
     static char output[2048];
+    static char output_line[100];
     int outputCount = 0;
 
     if (gyroIntegratedRotationVectorData.available >= PUSHBATCH){
         for(int counter = 0; counter < PUSHBATCH; ++counter){
+            sprintf(output_line,"LIVE:A:%+07.1f,R:%+07.1f,C:%+07.1f\n", 
+                gyroIntegratedRotationVectorData.angleBuffer[gyroIntegratedRotationVectorData.tail], 
+                gyroIntegratedRotationVectorData.rateBuffer[gyroIntegratedRotationVectorData.tail]*gyroIntegratedRotationVectorData.direction,
+                gyroIntegratedRotationVectorData.accnBuffer[gyroIntegratedRotationVectorData.tail]*gyroIntegratedRotationVectorData.direction);
+            outputCount += sprintf(output,output_line);
+            if (counter % 4 == 0) printf("%s",output_line); // for the moment only write one in 4 samples to browser
+
+/*
             outputCount += sprintf(&output[outputCount],"LIVE:A:%+07.1f,R:%+07.1f,C:%+07.1f\n", 
                 gyroIntegratedRotationVectorData.angleBuffer[gyroIntegratedRotationVectorData.tail], 
                 gyroIntegratedRotationVectorData.rateBuffer[gyroIntegratedRotationVectorData.tail]*gyroIntegratedRotationVectorData.direction,
                 gyroIntegratedRotationVectorData.accnBuffer[gyroIntegratedRotationVectorData.tail]*gyroIntegratedRotationVectorData.direction);
+                
+*/                
             gyroIntegratedRotationVectorData.tail = (gyroIntegratedRotationVectorData.tail + 1) % BUFFERSIZE;
         }
         gyroIntegratedRotationVectorData.available -= PUSHBATCH;
         OUT_COUNT += PUSHBATCH;
         
-        if (outputCount % 4 == 0) printf("%s",output); // for the moment only write one in 4 samples to browser
+//        printf("%s",output); // for the moment only write one in 4 samples to browser
         fputs(output,fd_write_out);
         fflush(fd_write_out);
     }

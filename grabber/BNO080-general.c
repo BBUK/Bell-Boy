@@ -21,7 +21,6 @@
 * Wire up the BNO080 device to the Pi as suggested by the setup() function.
 * Change the start() function to select the reports you want and the reporting rate.
 * Just prints output to the console.
-* I've not even tested if this compiles (but it is based on working code).
 * Uses the BCM2835 library from https://www.airspayce.com/mikem/bcm2835/ which must be installed first.
 * Compile instructions on the first line.
 */
@@ -157,7 +156,7 @@ int main(int argc, char const *argv[]){
     while(!sig_exit){
         usleep(LOOPSLEEP);
         while(bcm2835_gpio_lev(INTPIN) == 0) handleEvent();
-
+    }
     start(0);
     bcm2835_spi_end();
     bcm2835_close();
@@ -425,7 +424,7 @@ void parseCalibratedGyroscope(void){
     Gy *= QP(9) * RADIANS_TO_DEGREES_MULTIPLIER;
     Gz *= QP(9) * RADIANS_TO_DEGREES_MULTIPLIER;
 
-    gyrodata.status = status;
+    gyroData.status = status;
     gyroData.lastXRate = Gx;
     gyroData.lastYRate = Gy;
     gyroData.lastZRate = Gz;
