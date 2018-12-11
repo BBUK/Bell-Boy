@@ -299,6 +299,3 @@ echo "Type password for the image pack.  If you don't have the password, just pr
 unzip -q imagepack.zip
 
 sync && sync && poweroff
-#systemctl disable serial-getty@ttyAMA0.service 
-
-
