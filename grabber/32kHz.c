@@ -21,10 +21,7 @@
 * bell rope.  The Bell-Boy uses rotational acceleration of the bell as a proxy for force applied.  The
 * hardware is currently a Pi Zero running Arch Linux.
 
-* I pulled snippets of code from loads of places so if any of you recognise anything you wrote - thanks!
-
-* This program is creates a 32KHz square wave on GPIO 12 (BCM18).  It is used to replace a crystal for the BNO080
-* 
+* This program is creates a 32.76KHz square wave on GPIO 12 (BCM18).  It is used to replace a crystal for the BNO080
 
 */
 #include <stdio.h>
@@ -40,9 +37,9 @@
 #include "BNO080.h"
 #include <bcm2835.h>
 
-#define INTPIN 23
-#define RESETPIN 24
-#define WAKPS0PIN 25
+#define INTGPIO 23
+#define RESETGPIO 24
+#define WAKPS0GPIO 25
 
 int main(int argc, char const *argv[]){
 
@@ -50,12 +47,12 @@ int main(int argc, char const *argv[]){
         printf("Unable to inititalise bcm2835\n");
         exit(1);
     }
-    bcm2835_gpio_fsel(RESETPIN, BCM2835_GPIO_FSEL_OUTP); // reset
-    bcm2835_gpio_clr(RESETPIN);
-    bcm2835_gpio_fsel(WAKPS0PIN, BCM2835_GPIO_FSEL_OUTP); // WAKPS0
-    bcm2835_gpio_set(WAKPS0PIN);
-    bcm2835_gpio_fsel(INTPIN, BCM2835_GPIO_FSEL_INPT); // INT
-    bcm2835_gpio_set_pud(INTPIN, BCM2835_GPIO_PUD_UP);
+    bcm2835_gpio_fsel(RESETGPIO, BCM2835_GPIO_FSEL_OUTP); // reset
+    bcm2835_gpio_clr(RESETGPIO);
+    bcm2835_gpio_fsel(WAKPS0GPIO, BCM2835_GPIO_FSEL_OUTP); // WAKPS0
+    bcm2835_gpio_set(WAKPS0GPIO);
+    bcm2835_gpio_fsel(INTGPIO, BCM2835_GPIO_FSEL_INPT); // INT
+    bcm2835_gpio_set_pud(INTGPIO, BCM2835_GPIO_PUD_UP);
 
 // setup clock
     bcm2835_gpio_fsel(18,BCM2835_GPIO_FSEL_ALT5); // set gpio 18 (pin12) to alt 5 (pwm on channel 0)

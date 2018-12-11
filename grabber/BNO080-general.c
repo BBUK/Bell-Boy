@@ -48,10 +48,13 @@
 #endif
 
 #define DEGREES_TO_RADIANS_MULTIPLIER 0.017453 
-#define RADIANS_TO_DEGREES_MULTIPLIER 57.29578 
-#define INTPIN 23
-#define RESETPIN 24
-#define WAKPS0PIN 25
+#define RADIANS_TO_DEGREES_MULTIPLIER 57.29578
+ 
+// These are Broadcom GPIO numbers NOT Raspberry Pi pin numbers
+#define INTGPIO 23
+#define RESETGPIO 24
+#define WAKPS0GPIO 25
+
 #define QP(n) (pow(2,-n))
 #define R2O2 (sqrt(2)/2.0) // root two over two - used for reorientation.  See datasheet
 
@@ -155,7 +158,7 @@ int main(int argc, char const *argv[]){
 
     while(!sig_exit){
         usleep(LOOPSLEEP);
-        while(bcm2835_gpio_lev(INTPIN) == 0) handleEvent();
+        while(bcm2835_gpio_lev(INTGPIO) == 0) handleEvent();
     }
     start(0);
     bcm2835_spi_end();
@@ -525,7 +528,7 @@ void saveCalibration(void){
     while(timeout < 1000){
         timeout +=1;
         usleep(50);
-        while(bcm2835_gpio_lev(INTPIN) == 0) {
+        while(bcm2835_gpio_lev(INTGPIO) == 0) {
             collectPacket();
             if(spiRead.buffer[2] != 0x06) {parseEvent(); break;}
             if(spiRead.buffer[5] != 0) printf("Calibration save error\n");
@@ -593,7 +596,7 @@ int readFrsRecord(uint16_t recordType){
     while(timeout < 1000){
         timeout +=1;
         usleep(50);
-        while(bcm2835_gpio_lev(INTPIN) == 0) {
+        while(bcm2835_gpio_lev(INTGPIO) == 0) {
             collectPacket();
             if(spiRead.buffer[0] != SHTP_REPORT_FRS_READ_RESPONSE) {parseEvent(); break;}
             if(((spiRead.buffer[1] & 0x0F) == 1) || ((spiRead.buffer[1] & 0x0F) == 2) || ((spiRead.buffer[1] & 0x0F) == 4) || \
@@ -647,7 +650,7 @@ int writeFrsWord(uint16_t recordType, uint32_t offset, uint32_t data){
 
     for(int i = 0; i<2000; i++){
         usleep(100);
-        while(bcm2835_gpio_lev(INTPIN) == 0) {
+        while(bcm2835_gpio_lev(INTGPIO) == 0) {
             collectPacket();
             if(spiRead.buffer[0] != SHTP_REPORT_FRS_WRITE_RESPONSE) {parseEvent(); continue;}
             if(spiRead.buffer[1] != 3) {
@@ -676,7 +679,7 @@ int readFrsWord(uint16_t recordType, uint32_t offset, uint32_t* result){
     while(timeout < 1000){
         timeout +=1;
         usleep(50);
-        while(bcm2835_gpio_lev(INTPIN) == 0) {
+        while(bcm2835_gpio_lev(INTGPIO) == 0) {
             collectPacket();
             if(spiRead.buffer[0] != SHTP_REPORT_FRS_READ_RESPONSE) {parseEvent(); continue;}
             if(((spiRead.buffer[1] & 0x0F) == 1) || ((spiRead.buffer[1] & 0x0F) == 2) || ((spiRead.buffer[1] & 0x0F) == 4) || \
@@ -748,12 +751,12 @@ void setup(void){
         exit(1);
     }
     // the bcm2835 library uses BCM GPIO numbers not pin numbers
-    bcm2835_gpio_fsel(RESETPIN, BCM2835_GPIO_FSEL_OUTP); // reset
-    bcm2835_gpio_set(RESETPIN);
-    bcm2835_gpio_fsel(WAKPS0PIN, BCM2835_GPIO_FSEL_OUTP); // WAKPS0
-    bcm2835_gpio_set(WAKPS0PIN);
-    bcm2835_gpio_fsel(INTPIN, BCM2835_GPIO_FSEL_INPT); // INT
-    bcm2835_gpio_set_pud(INTPIN, BCM2835_GPIO_PUD_UP);
+    bcm2835_gpio_fsel(RESETGPIO, BCM2835_GPIO_FSEL_OUTP); // reset
+    bcm2835_gpio_set(RESETGPIO);
+    bcm2835_gpio_fsel(WAKPS0GPIO, BCM2835_GPIO_FSEL_OUTP); // WAKPS0
+    bcm2835_gpio_set(WAKPS0GPIO);
+    bcm2835_gpio_fsel(INTGPIO, BCM2835_GPIO_FSEL_INPT); // INT
+    bcm2835_gpio_set_pud(INTGPIO, BCM2835_GPIO_PUD_UP);
 
     if (!bcm2835_spi_begin()){
       printf("bcm2835_spi_begin failed. \n");
@@ -766,11 +769,11 @@ void setup(void){
     bcm2835_spi_setChipSelectPolarity(BCM2835_SPI_CS0, LOW);
 
 //    reset device
-    bcm2835_gpio_clr(RESETPIN);
+    bcm2835_gpio_clr(RESETGPIO);
     usleep(20000);
-    bcm2835_gpio_set(RESETPIN);
+    bcm2835_gpio_set(RESETGPIO);
     int waitCount = 0;
-    while ((bcm2835_gpio_lev(INTPIN) == 1) && (waitCount < 1000)){ // should only be called when int is low so not really needed
+    while ((bcm2835_gpio_lev(INTGPIO) == 1) && (waitCount < 1000)){ // should only be called when int is low so not really needed
         usleep(500);
         waitCount += 1;
     }
@@ -809,7 +812,7 @@ int32_t collectPacket(void){
     spiRead.sequence = 0;
     spiRead.channel = 9;
 
-    while ((bcm2835_gpio_lev(INTPIN) == 1) && (waitCount < 100)){ // should only be called when int is low so not really needed
+    while ((bcm2835_gpio_lev(INTGPIO) == 1) && (waitCount < 100)){ // should only be called when int is low so not really needed
         usleep(500);
         waitCount += 1;
     }
@@ -831,7 +834,7 @@ int32_t collectPacket(void){
     spiRead.dataLength = (uint16_t)spiRead.buffer[1] << 8 | (uint16_t)spiRead.buffer[0];
     spiRead.sequence = spiRead.buffer[3];
     spiRead.channel = spiRead.buffer[2];
-    if(spiRead.dataLength == 0) return(-1); // nothing collected
+    if(spiRead.dataLength == 0) return(0); // nothing collected
 //    if(spiRead.dataLength > 0x7FFF) printf("Continuation\n"); 
     spiRead.dataLength = spiRead.dataLength & ~(1 << 15); //Clear the MSbit - no idea what to do with a continuation (yuk)
     while((TXCnt < spiRead.dataLength)||(RXCnt < spiRead.dataLength)){
@@ -862,7 +865,7 @@ int32_t sendPacket(uint32_t channelNumber, uint32_t dataLength){
     spiRead.sequence = 0;
     spiRead.channel = 9;
 
-    bcm2835_gpio_clr(WAKPS0PIN);  // wake the thing up
+    bcm2835_gpio_clr(WAKPS0GPIO);  // wake the thing up
     dataLength += 4;    
     header[0] = dataLength & 0xFF;
     header[1] = dataLength >> 8;
@@ -870,7 +873,7 @@ int32_t sendPacket(uint32_t channelNumber, uint32_t dataLength){
     header[3] = SEQUENCENUMBER[channelNumber]++;
     usleep(2000);  // makes things much more reliable - thankfully we are only sending commands infrequently
 
-    while ((bcm2835_gpio_lev(INTPIN) == 1) && (waitCount < 200)){
+    while ((bcm2835_gpio_lev(INTGPIO) == 1) && (waitCount < 200)){
         usleep(500);
         waitCount += 1;
     }
@@ -897,7 +900,7 @@ int32_t sendPacket(uint32_t channelNumber, uint32_t dataLength){
     spiRead.dataLength = ((uint16_t)spiRead.buffer[1] << 8 | (uint16_t)spiRead.buffer[0]);
     spiRead.dataLength = spiRead.dataLength & ~(1 << 15); //Clear the MSbit
 
-    bcm2835_gpio_set(WAKPS0PIN);  // probably OK to remove wake signal now
+    bcm2835_gpio_set(WAKPS0GPIO);  // probably OK to remove wake signal now
 
     // now send rest of TX packet
     while((TXCnt < dataLength)||(RXCnt < dataLength))
