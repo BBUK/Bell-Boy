@@ -482,7 +482,7 @@ void pushData(void){
                 gyroIntegratedRotationVectorData.angleBuffer[gyroIntegratedRotationVectorData.tail], 
                 gyroIntegratedRotationVectorData.rateBuffer[gyroIntegratedRotationVectorData.tail]*gyroIntegratedRotationVectorData.direction,
                 gyroIntegratedRotationVectorData.accnBuffer[gyroIntegratedRotationVectorData.tail]*gyroIntegratedRotationVectorData.direction);
-            outputCount += sprintf(output,output_line);
+            outputCount += sprintf(&output[outputCount],output_line);
             if (counter % 4 == 0) printf("%s",output_line); // for the moment only write one in 4 samples to browser
 
 /*
