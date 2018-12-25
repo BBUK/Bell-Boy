@@ -59,6 +59,7 @@
 #define R2O2 (sqrt(2)/2.0) // root two over two - used for reorientation.  See datasheet
 
 uint32_t FRS_READ_BUFFER[64];
+uint32_t FRS_WRITE_BUFFER[64];
 
 uint8_t SEQUENCENUMBER[7];
 unsigned int LOOPSLEEP = 2000;  // in microseconds, change to suit the operational data rate
@@ -369,16 +370,16 @@ void parseLinearAccelerometer(void){
     if(Ay >= 0x8000) Ay -= 0x10000;
     if(Az >= 0x8000) Az -= 0x10000;
 
-    Ax *= QP(8) * 100;
-    Ay *= QP(8) * 100;
-    Az *= QP(8) * 100;
+    Ax *= QP(8);
+    Ay *= QP(8);
+    Az *= QP(8);
 
     linearAccelerometerData.status = status;
     linearAccelerometerData.lastX = Ax;
     linearAccelerometerData.lastY = Ay;
     linearAccelerometerData.lastZ = Az;
     
-    printf("Lin. Accel.  S: %d X:%+07.2f, Y:%+07.2f, Z:%+07.2f\n", status, Ax, Ay, Az);
+    printf("Lin. Accel.  S: %d X:%+07.3f, Y:%+07.3f, Z:%+07.3f\n", status, Ax, Ay, Az);
 }
 
 void parseAccelerometer(void){
@@ -396,16 +397,16 @@ void parseAccelerometer(void){
     if(Ay >= 0x8000) Ay -= 0x10000;
     if(Az >= 0x8000) Az -= 0x10000;
 
-    Ax *= QP(8) * 100;
-    Ay *= QP(8) * 100;
-    Az *= QP(8) * 100;
+    Ax *= QP(8);
+    Ay *= QP(8);
+    Az *= QP(8);
 
     accelerometerData.status = status;
     accelerometerData.lastX = Ax;
     accelerometerData.lastY = Ay;
     accelerometerData.lastZ = Az;
     
-    printf("Accel. S: %d X:%+07.2f, Y:%+07.2f, Z:%+07.2f\n", status, Ax, Ay, Az);
+    printf("Accel. S: %d X:%+07.3f, Y:%+07.3f, Z:%+07.3f\n", status, Ax, Ay, Az);
 }
 
 void parseCalibratedGyroscope(void){
@@ -605,7 +606,7 @@ int readFrsRecord(uint16_t recordType){
                 return(-1);
             }
             FRS_READ_BUFFER[counter] = (uint32_t)spiRead.buffer[7] << 24 | (uint32_t)spiRead.buffer[6] << 16 | (uint32_t)spiRead.buffer[5] << 8 | (uint32_t)spiRead.buffer[4];
-            FRS_READ_BUFFER[counter] = (uint32_t)spiRead.buffer[11] << 24 | (uint32_t)spiRead.buffer[10] << 16 | (uint32_t)spiRead.buffer[9] << 8 | (uint32_t)spiRead.buffer[8];
+            FRS_READ_BUFFER[counter+1] = (uint32_t)spiRead.buffer[11] << 24 | (uint32_t)spiRead.buffer[10] << 16 | (uint32_t)spiRead.buffer[9] << 8 | (uint32_t)spiRead.buffer[8];
             counter += 2;
             if(((spiRead.buffer[1] & 0x0F) == 3) || ((spiRead.buffer[1] & 0x0F) == 6) || ((spiRead.buffer[1] & 0x0F) == 7)) return(counter);
         }
@@ -634,20 +635,38 @@ int writeFrsWord(uint16_t recordType, uint32_t offset, uint32_t data){
     spiWrite.buffer[5] = recordType >> 8;
     if (!sendPacket(CHANNEL_CONTROL, 6)) return(0);
 
-    spiWrite.buffer[0] = SHTP_REPORT_FRS_WRITE_DATA_REQUEST;
-    spiWrite.buffer[1] = 0x00;
-    spiWrite.buffer[2] = offset & 0x00FF;  //offset lsb
-    spiWrite.buffer[3] = offset >> 8;//offset msb
-    spiWrite.buffer[4] =  data & 0x000000FF;       // word 1 (LSB)
-    spiWrite.buffer[5] = (data & 0x0000FF00) >> 8;
-    spiWrite.buffer[6] = (data & 0x00FF0000) >> 16;
-    spiWrite.buffer[7] = data >> 24; // word 1 (MSB)
-    spiWrite.buffer[8] = 0x00;  // word 2 lsb
-    spiWrite.buffer[9] = 0x00;
-    spiWrite.buffer[10]= 0x00;
-    spiWrite.buffer[11]= 0x00;
-    if(!sendPacket(CHANNEL_CONTROL, 12)) return(0);
+    writeFrsRecordWords(offset, data, 0);
+    
+    for(int i = 0; i<2000; i++){
+        usleep(100);
+        while(bcm2835_gpio_lev(INTGPIO) == 0) {
+            collectPacket();
+            if(spiRead.buffer[0] != SHTP_REPORT_FRS_WRITE_RESPONSE) {parseEvent(); continue;}
+//            printf("FRS: %d\n", spiRead.buffer[1] );
+            if(spiRead.buffer[1] != 3) {
+                continue;
+            } else {
+                return(1);
+            }
+        }
+    }
+    printf("FRS Write timeout\n");
+    return(0);
+}
 
+int writeFrsRecord(uint16_t recordType, uint32_t length){
+    spiWrite.buffer[0] = SHTP_REPORT_FRS_WRITE_REQUEST;
+    spiWrite.buffer[1] = 0x00;
+    spiWrite.buffer[2] = length & 0x00FF;//length lsb 
+    spiWrite.buffer[3] = length >> 8;    //length msb
+    spiWrite.buffer[4] = recordType & 0x00FF;
+    spiWrite.buffer[5] = recordType >> 8;
+    if (!sendPacket(CHANNEL_CONTROL, 6)) return(0);
+
+    for(int i=0; i<length; i+=2){
+        writeFrsRecordWords(i,FRS_WRITE_BUFFER[i], FRS_WRITE_BUFFER[i+1]);
+    }
+    
     for(int i = 0; i<2000; i++){
         usleep(100);
         while(bcm2835_gpio_lev(INTGPIO) == 0) {
@@ -664,6 +683,23 @@ int writeFrsWord(uint16_t recordType, uint32_t offset, uint32_t data){
     return(0);
 }
 
+int writeFrsRecordWords(uint32_t offset, uint32_t data0, uint32_t data1){
+    spiWrite.buffer[0] = SHTP_REPORT_FRS_WRITE_DATA_REQUEST;
+    spiWrite.buffer[1] = 0x00;
+    spiWrite.buffer[2] = offset & 0x00FF;  //offset lsb
+    spiWrite.buffer[3] = offset >> 8;//offset msb
+    spiWrite.buffer[4] =  data0 & 0x000000FF;       // word 1 (LSB)
+    spiWrite.buffer[5] = (data0 & 0x0000FF00) >> 8;
+    spiWrite.buffer[6] = (data0 & 0x00FF0000) >> 16;
+    spiWrite.buffer[7] = data0 >> 24; // word 1 (MSB)
+    spiWrite.buffer[8] = data1 & 0x000000FF;  // word 2 lsb
+    spiWrite.buffer[9] = (data1 & 0x0000FF00) >> 8;
+    spiWrite.buffer[10]= (data1 & 0x00FF0000) >> 16;
+    spiWrite.buffer[11]= data1 >> 24;
+    if(!sendPacket(CHANNEL_CONTROL, 12)) return(0);
+    return(1);
+}
+
 int readFrsWord(uint16_t recordType, uint32_t offset, uint32_t* result){
     spiWrite.buffer[0] = SHTP_REPORT_FRS_READ_REQUEST;
     spiWrite.buffer[1] = 0x00;
@@ -672,11 +708,11 @@ int readFrsWord(uint16_t recordType, uint32_t offset, uint32_t* result){
     spiWrite.buffer[4] = recordType & 0x00FF;
     spiWrite.buffer[5] = recordType >> 8;
     spiWrite.buffer[6] = 0x01; 
-    spiWrite.buffer[7] = 0x00; 
-    if (!sendPacket(CHANNEL_CONTROL, 6)) return(0);
+    spiWrite.buffer[7] = 0x00;
+    if (!sendPacket(CHANNEL_CONTROL, 8)) return(0);
 
     int timeout = 0;
-    while(timeout < 1000){
+    while(timeout < 2000){
         timeout +=1;
         usleep(50);
         while(bcm2835_gpio_lev(INTGPIO) == 0) {
@@ -685,6 +721,7 @@ int readFrsWord(uint16_t recordType, uint32_t offset, uint32_t* result){
             if(((spiRead.buffer[1] & 0x0F) == 1) || ((spiRead.buffer[1] & 0x0F) == 2) || ((spiRead.buffer[1] & 0x0F) == 4) || \
                 ((spiRead.buffer[1] & 0x0F) == 5) || ((spiRead.buffer[1] & 0x0F) == 8)) {
                 printf("FRS Read error, %02X\n",spiRead.buffer[1] & 0x0F);
+                *result = 0;
                 return(0);
             }
             *result = ((uint32_t)spiRead.buffer[7] << 24) | ((uint32_t)spiRead.buffer[6] << 16) | ((uint32_t)spiRead.buffer[5] << 8) | (uint32_t)spiRead.buffer[4];
@@ -692,6 +729,7 @@ int readFrsWord(uint16_t recordType, uint32_t offset, uint32_t* result){
         }
     }
     printf("FRS Read timeout\n");
+    *result = 0;
     return(0);
 }
 

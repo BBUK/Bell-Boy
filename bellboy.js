@@ -931,6 +931,10 @@ fileOpenButton.onclick = function() {
 }
 
 tareButton.onclick = function() {
+    if (nonLive){
+        alert("Not implemented for this demo");
+        return;
+    }
     if ((currentStatus & DOWNLOADINGFILE) != 0) return;
     if ((currentStatus & PLAYBACK) != 0) return;
     if ((currentStatus & HELPDISPLAYED) != 0) return;
@@ -939,19 +943,15 @@ tareButton.onclick = function() {
 };
 
 clearTareButton.onclick = function() {
+    if (nonLive){
+        alert("Not implemented for this demo");
+        return;
+    }
     if ((currentStatus & DOWNLOADINGFILE) != 0) return;
     if ((currentStatus & PLAYBACK) != 0) return;
     if ((currentStatus & HELPDISPLAYED) != 0) return;
     if ((currentStatus & RECORDINGSESSION) != 0) return
     ws.send("CLTA:");
-};
-
-doneTareButton.onclick = function() {
-    if ((currentStatus & DOWNLOADINGFILE) != 0) return;
-    if ((currentStatus & PLAYBACK) != 0) return;
-    if ((currentStatus & HELPDISPLAYED) != 0) return;
-    if ((currentStatus & RECORDINGSESSION) != 0) return
-    ws.send("DOTA:");
 };
 
 targetSelectHand.onchange = function() {

@@ -52,7 +52,6 @@
     from {opacity: 0}
     to {opacity: 1}
 }
-	/* Modal Content/Box */
 	.modal-content {
     background-color: #fefefe;
     border-radius: 25px 25px 25px 25px;
@@ -62,7 +61,6 @@
     width: 550px; /* Could be more or less, depending on screen size */
 	}
 
-	/* The Close Button */
 	.close {
     color: #aaa;
     float: right;
@@ -94,7 +92,7 @@
 	<TR><TH>Select the range of a stroke you would like the display to show (numbers are degrees from TDC)</TH><TH class="right">Angles:&nbsp;<select class="selectfile" id="zoomSelect"></select></TH></TR>
 	<TR><TH>Change the playback speed of a loaded file or a finished live recording</TH><TH class="right">Play speed:&nbsp;<select class="selectfile" id="speedSelect"></select></TH></TR>
     <TR><TH>Some bells will show a smaller "pull strength" measurement on the display.  This setting allows you to change the scale of the signals displayed (units are arbitary)</TH><TH class="right">Scale:&nbsp;<select class="selectfile" id="scaleSelect"></select></TH></TR>
-    <TR><TH>Click the button to the right to "tare" the bell.  You should only do this if the bell is down and stable.</TH><TH class="right"><button class="selectfile" id="tareButton">Tare</button><button class="selectfile" id="clearTareButton">Clear</button><button class="selectfile" id="doneTareButton">Done</button></TH></TR>
+    <TR><TH>Click the button to the right to "tare" the bell.  You should only do this if the bell is down and stable. If you applied tare in the wrong position and the bell is no longer down, you can also clear the tere (a standard tare value will be applied, which may be less accurate).</TH><TH class="right"><button class="selectfile" id="tareButton">Tare</button><button class="selectfile" id="clearTareButton">Clear</button></TH></TR>
 </TABLE>
 </div></div>
 <div style="margin-top: 0px; padding-bottom: 5px; padding-top: 5px; background: #686888; text-align:center; min-width: 800px;">

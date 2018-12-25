@@ -287,6 +287,13 @@ force user = root
 public = yes
 HDHD
 
+## Samba Fixes
+## Windows features -> SMB 1.0/CIFS File Sharing Support -> Turn on client
+## Powershell(as admin) -> Enable-WindowsOptionalFeature -Online -FeatureName "SMB1Protocol" -All
+## HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\LanmanWorkstation\Parameters AllowInsecureGuestAuth REG_DWORD -> 1
+## https://serverfault.com/questions/731038/windows-10-keeps-asking-for-authentication-for-public-samba-share
+
+
 systemctl enable bellboy
 systemctl enable ap0.timer
 systemctl enable ap1.timer
