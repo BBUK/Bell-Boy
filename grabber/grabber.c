@@ -68,9 +68,10 @@
 // at ODR values in which the game rotation vector is "uncomfortable"
 // (The game rotation vector is used for stabilisation of the GIRV.) 
 // An ODR of 400 is quite noisy but 200 works fine.
-#define ODR 200 
-#define BUFFERSIZE 64
-#define PUSHBATCH 20
+#define ODR 400 
+#define PUSHBATCH 40 // number of samples taken before pushing out
+#define PUSHDIVIDE 2 // proportion of samples to actually push out (so here effective ODR of 200 with 20 samples pushed out 10 times a second)
+#define BUFFERSIZE 64 // must be bigger than PUSHBATCH
 #define R2O2 (sqrt(2)/2.0)
 
 #define SMOOTHFACTOR 0.75
@@ -200,6 +201,11 @@ struct {
     float lastYaw;
     float lastPitch;
     float lastRoll;
+//    float lastQx;
+//    float lastQy;
+//    float lastQz;
+//    float lastQw;
+    unsigned int tareCount;
     unsigned int requestedInterval;
     unsigned int reportInterval;
 } gameRotationVectorData;
@@ -266,7 +272,7 @@ int main(int argc, char const *argv[]){
     fcntl(STDIN_FILENO, F_SETFL, fcntl(STDIN_FILENO, F_GETFL) | O_NONBLOCK);
 
     setup();
-    setGyroIntegratedRotationVectorFRS(0x0207,100,30); // these are the standards
+    setGyroIntegratedRotationVectorFRS(0x0207,100,10);
     start(ODR);
     
     FILE *fdTare;
@@ -295,21 +301,17 @@ int main(int argc, char const *argv[]){
                 continue;
             }
             if(strcmp("SAMP:", command) == 0) {
-                printf("SAMP:%f\n",1.0/ODR);
+                printf("SAMP:%f\n",(float)PUSHDIVIDE/ODR);
                 continue;
             }
             if(strcmp("CALI:", command) == 0) {
                 if(RUNNING) continue;
                 startCalibrating(10);
-//                printf("CALI: P:%+07.1f R:%+07.1f Y:%+07.1f, AA:%+07.1f, TV:%+07.1f\n",gyroIntegratedRotationVectorData.lastPitch,gyroIntegratedRotationVectorData.lastRoll, gyroIntegratedRotationVectorData.lastYaw, gyroIntegratedRotationVectorData.smoothAngle, gyroIntegratedRotationVectorData.tareValue);
-//                setGyroIntegratedRotationVectorFRS(0x0204,100,30); // use magnetometer for the moment
-//                tare();
+                gameRotationVectorData.tareCount = 0;
                 continue;
             }
             if(strcmp("STCA:", command) == 0) {
                 startCalibrating(0);
-//                setGyroIntegratedRotationVectorFRS(0x0207,100,30); // go back to game rotation vector
-//                setStandardOrientation();
                 continue;
             }
             if(strcmp("PFRS:", command) == 0) {
@@ -486,17 +488,19 @@ void pushData(void){
 
     if (gyroIntegratedRotationVectorData.available >= PUSHBATCH){
         for(int counter = 0; counter < PUSHBATCH; ++counter){
-            sprintf(outputLine,"A:%+07.1f,R:%+07.1f,C:%+07.1f\n", 
-                gyroIntegratedRotationVectorData.angleBuffer[gyroIntegratedRotationVectorData.tail], 
-                gyroIntegratedRotationVectorData.rateBuffer[gyroIntegratedRotationVectorData.tail],
-                gyroIntegratedRotationVectorData.accnBuffer[gyroIntegratedRotationVectorData.tail]);
-            outputCountLocal += sprintf(&outputLocal[outputCountLocal],outputLine);
-            outputCountRemote += sprintf(&outputRemote[outputCountRemote],"LIVE:%s", outputLine);
+            if(counter % PUSHDIVIDE == 0) { 
+                sprintf(outputLine,"A:%+07.1f,R:%+07.1f,C:%+07.1f\n", 
+                    gyroIntegratedRotationVectorData.angleBuffer[gyroIntegratedRotationVectorData.tail], 
+                    gyroIntegratedRotationVectorData.rateBuffer[gyroIntegratedRotationVectorData.tail],
+                    gyroIntegratedRotationVectorData.accnBuffer[gyroIntegratedRotationVectorData.tail]);
+                outputCountLocal += sprintf(&outputLocal[outputCountLocal],outputLine);
+                outputCountRemote += sprintf(&outputRemote[outputCountRemote],"LIVE:%s", outputLine);
+                OUT_COUNT += 1;
 
+            }
             gyroIntegratedRotationVectorData.tail = (gyroIntegratedRotationVectorData.tail + 1) % BUFFERSIZE;
         }
         gyroIntegratedRotationVectorData.available -= PUSHBATCH;
-        OUT_COUNT += PUSHBATCH;
         
         printf("%s",outputRemote);
         fputs(outputLocal,fd_write_out);
@@ -607,10 +611,29 @@ void parseGyroIntegratedRotationVector(void){
     Qz *= QP(14);
     Qw *= QP(14);
 
-    float yaw   =  atan2((Qx * Qy + Qw * Qz), ((Qw * Qw + Qx * Qx) - 0.5f)) * RADIANS_TO_DEGREES_MULTIPLIER;   
-    float pitch = -asin(2.0f * (Qx * Qz - Qw * Qy))* RADIANS_TO_DEGREES_MULTIPLIER;
-    float roll  =  atan2((Qw * Qx + Qy * Qz), ((Qw * Qw + Qz * Qz) - 0.5f))* RADIANS_TO_DEGREES_MULTIPLIER;
-    
+    float r31 = 2.0 * (Qx * Qz - Qw * Qy);
+    float roll = 0;
+    float pitch = 0;
+    float yaw = 0;
+    if(abs(r31) != 1.0){
+        pitch = -asin(r31);
+        roll = atan2((2.0*(Qy * Qz - Qw * Qx)) / cos(pitch), (1.0 - (2.0*(Qx * Qx + Qy * Qy))) / cos(pitch));
+        yaw =  atan2((2.0*(Qx * Qy - Qw * Qz)) / cos(pitch), (1.0 - (2.0*(Qy * Qy + Qz * Qz))) / cos(pitch));
+    } else {
+        yaw = 0;
+        if(r31 == -1){
+            pitch = 3.1415927/2.0;
+            roll = atan2(2.0*(Qx * Qy + Qw * Qz),2.0*(Qx * Qz - Qw * Qy));
+        } else {
+            pitch = -3.1415927/2.0;
+            roll = atan2(-2.0*(Qx * Qy + Qw * Qz),-2.0*(Qx * Qz - Qw * Qy));            
+        }
+    }
+
+    roll *= RADIANS_TO_DEGREES_MULTIPLIER;
+    pitch *= RADIANS_TO_DEGREES_MULTIPLIER;
+    yaw *= RADIANS_TO_DEGREES_MULTIPLIER;
+
     roll -= gyroIntegratedRotationVectorData.tareValue; 
 
     float Gx = (float)((spiRead.buffer[9 ] << 8) + spiRead.buffer[8]);
@@ -713,44 +736,46 @@ void parseGameRotationVector(void){
     Qz *= QP(14);
     Qw *= QP(14);
 
-// remap axes
-//        Qw = Qw * Q_remap.w - Qx * Q_remap.x - Qy * Q_remap.y - Qz * Q_remap.z; 
-//        Qx = Qw * Q_remap.x + Qx * Q_remap.w + Qy * Q_remap.z - Qz * Q_remap.y; 
-//        Qy = Qw * Q_remap.y - Qx * Q_remap.z + Qy * Q_remap.w + Qz * Q_remap.x;
-//        Qz = Qw * Q_remap.z + Qx * Q_remap.y - Qy * Q_remap.x + Qz * Q_remap.w;
+//    gameRotationVectorData.lastQx = Qx;
+//    gameRotationVectorData.lastQy = Qy;
+//    gameRotationVectorData.lastQz = Qz;
+//    gameRotationVectorData.lastQw = Qw;
 
+// http://www.euclideanspace.com/maths/geometry/rotations/conversions/quaternionToEuler/
 // https://forums.adafruit.com/viewtopic.php?t=131484
 // https://mbientlab.com/community/discussion/2036/taring-quaternion-attitude
-/*    if (torn < 100) {
-        torn += 1;
-        Q_tare.x = Qx;  // note that normally the conjugate is calculated the functions below alreasy have the sign swaps
-        Q_tare.y = Qy;
-        Q_tare.z = Qz;
-        Q_tare.w = Qw;
-        double magnit = sqrt(Q_tare.w * Q_tare.w + Q_tare.x * Q_tare.x + Q_tare.y * Q_tare.y + Q_tare.z * Q_tare.z);
-        Q_tare.w /= magnit;
-        Q_tare.x /= magnit;
-        Q_tare.y /= magnit;
-        Q_tare.z /= magnit;
-    } else {
-        Qw =  Qw * Q_tare.w + Qx * Q_tare.x + Qy * Q_tare.y + Qz * Q_tare.z; 
-        Qx = -Qw * Q_tare.x + Qx * Q_tare.w - Qy * Q_tare.z + Qz * Q_tare.y; 
-        Qy = -Qw * Q_tare.y + Qx * Q_tare.z + Qy * Q_tare.w - Qz * Q_tare.x;
-        Qz = -Qw * Q_tare.z - Qx * Q_tare.y + Qy * Q_tare.x + Qz * Q_tare.w;
-    }
-//    float norm = sqrt(Qw*Qw + Qx*Qx + Qy*Qy + Qz*Qz);
-
-*/
-
+// http://www.gregslabaugh.net/publications/euler.pdf
 // https://math.stackexchange.com/questions/687964/getting-euler-tait-bryan-angles-from-quaternion-representation
-//    float yaw   =  atan2(Qx * Qy + Qw * Qz, 0.5 - (Qw * Qw + Qx * Qx)) * RADIANS_TO_DEGREES_MULTIPLIER;   
-//    float pitch = asin(-2.0 * (Qx * Qz - Qw * Qy))* RADIANS_TO_DEGREES_MULTIPLIER;
-//    float roll  =  atan2(Qw * Qx + Qy * Qz, 0.5 - (Qw * Qw + Qz * Qz))* RADIANS_TO_DEGREES_MULTIPLIER;
 
+    float r31 = 2.0 * (Qx * Qz - Qw * Qy);
+    float roll = 0;
+    float pitch = 0;
+    float yaw = 0;
+    if(abs(r31) != 1.0){
+        pitch = -asin(r31);
+        roll = atan2((2.0*(Qy * Qz - Qw * Qx)) / cos(pitch), (1.0 - (2.0*(Qx * Qx + Qy * Qy))) / cos(pitch));
+        yaw =  atan2((2.0*(Qx * Qy - Qw * Qz)) / cos(pitch), (1.0 - (2.0*(Qy * Qy + Qz * Qz))) / cos(pitch));
+    } else {
+        yaw = 0;
+        if(r31 == -1){
+            pitch = 3.1415927/2.0;
+            roll = atan2(2.0*(Qx * Qy + Qw * Qz),2.0*(Qx * Qz - Qw * Qy));
+        } else {
+            pitch = -3.1415927/2.0;
+            roll = atan2(-2.0*(Qx * Qy + Qw * Qz),-2.0*(Qx * Qz - Qw * Qy));            
+        }
+    }
 
-    float yaw   =  atan2(Qx * Qy + Qw * Qz, (Qw * Qw + Qx * Qx) - 0.5) * RADIANS_TO_DEGREES_MULTIPLIER;   
-    float pitch = -asin(2.0 * (Qx * Qz - Qw * Qy)) * RADIANS_TO_DEGREES_MULTIPLIER;
-    float roll  =  atan2(Qw * Qx + Qy * Qz, (Qw * Qw + Qz * Qz) - 0.5) * RADIANS_TO_DEGREES_MULTIPLIER;
+    if(gameRotationVectorData.tareCount < 6) gameRotationVectorData.tareCount += 1;
+    if(gameRotationVectorData.tareCount == 5) tareZ();
+
+    roll *= RADIANS_TO_DEGREES_MULTIPLIER;
+    pitch *= RADIANS_TO_DEGREES_MULTIPLIER;
+    yaw *= RADIANS_TO_DEGREES_MULTIPLIER;
+
+//    float yaw   =  atan2(Qx * Qy + Qw * Qz, (Qw * Qw + Qx * Qx) - 0.5) * RADIANS_TO_DEGREES_MULTIPLIER;   
+//    float pitch = -asin(2.0 * (Qx * Qz - Qw * Qy)) * RADIANS_TO_DEGREES_MULTIPLIER;
+//    float roll  =  atan2(Qw * Qx + Qy * Qz, (Qw * Qw + Qz * Qz) - 0.5) * RADIANS_TO_DEGREES_MULTIPLIER;
 
     gameRotationVectorData.lastRoll = roll;
     gameRotationVectorData.lastPitch = pitch;
@@ -860,7 +885,11 @@ void parseCalibratedMagneticField(void){
     calibratedMagneticFieldData.lastY = My;
     calibratedMagneticFieldData.lastZ = Mz;
     
-    if(CALIBRATING) printf("CALI:%d, %d, %+07.1f, %+07.1f, %+07.1f\n", gameRotationVectorData.status, calibratedMagneticFieldData.status, gyroIntegratedRotationVectorData.lastRoll, gyroIntegratedRotationVectorData.lastPitch, gyroIntegratedRotationVectorData.lastYaw);
+//    if(CALIBRATING) printf("CALI:%d, %d, %+07.5f, %+07.5f, %+07.5f, %+07.5f\n", gameRotationVectorData.status, calibratedMagneticFieldData.status, gameRotationVectorData.lastQx, gameRotationVectorData.lastQy, gameRotationVectorData.lastQz, gameRotationVectorData.lastQw);
+    if(CALIBRATING) printf("CALI:%d, %d, %+07.5f, %+07.5f, %+07.5f\n", gameRotationVectorData.status, calibratedMagneticFieldData.status, gameRotationVectorData.lastRoll, gameRotationVectorData.lastPitch, gameRotationVectorData.lastYaw);
+//    if(CALIBRATING) printf("CALI:%d, %d, %+07.5f, %+07.5f, %+07.5f\n", gameRotationVectorData.status, calibratedMagneticFieldData.status, gyroIntegratedRotationVectorData.lastRoll, gyroIntegratedRotationVectorData.lastPitch, gyroIntegratedRotationVectorData.lastYaw);
+
+
 }
 
 void parseStabilisedRotationVector(void){
@@ -872,12 +901,28 @@ void parseStabilisedGameRotationVector(void){
 }
 
 void setStandardOrientation(void){
+//    reorient(0,0,0,0);
     reorient(R2O2,0,-R2O2,0);  // side mount connectors down
 //    reorient(0,-R2O2,0,-R2O2);  // side mount connectors up
 //    reorient(R2O2,0,-R2O2,0); // top mount
 }
 
 int reorient(float w, float x, float y, float z){
+    uint32_t W = (int32_t)round(w/QP(30));
+    uint32_t X = (int32_t)round(x/QP(30));
+    uint32_t Y = (int32_t)round(y/QP(30));
+    uint32_t Z = (int32_t)round(z/QP(30));
+
+    if (readFrsRecord(SYSTEM_ORIENTATION) !=0 && FRS_READ_BUFFER[0] == X && FRS_READ_BUFFER[1] == Y && FRS_READ_BUFFER[2] == Z && FRS_READ_BUFFER[3] == W ) return(0);
+    FRS_WRITE_BUFFER[0]=X;
+    FRS_WRITE_BUFFER[1]=Y;
+    FRS_WRITE_BUFFER[2]=Z;
+    FRS_WRITE_BUFFER[3]=W;
+    return(writeFrsRecord(SYSTEM_ORIENTATION,4));
+}
+
+
+int runtimeReorient(float w, float x, float y, float z){
     uint16_t W = (int16_t)(w/QP(14));
     uint16_t X = (int16_t)(x/QP(14));
     uint16_t Y = (int16_t)(y/QP(14));
@@ -902,6 +947,23 @@ void clearPersistentTare(void){
     eraseFrsRecord(SYSTEM_ORIENTATION);
     setStandardOrientation();
 }
+
+void tareZ(void){
+    spiWrite.buffer[0] = SHTP_REPORT_COMMAND_REQUEST; // set feature
+    spiWrite.buffer[1] = SEQUENCENUMBER[6]++; 
+    spiWrite.buffer[2] = 0x03; // Tare command
+    spiWrite.buffer[3] = 0x00; // perform Tare now
+    spiWrite.buffer[4] = 0x04; // Z axis
+    spiWrite.buffer[5] = 0x01; // use gaming rotation vector
+    spiWrite.buffer[6] = 0x00; // reserved
+    spiWrite.buffer[7] = 0x00;
+    spiWrite.buffer[8] = 0x00;
+    spiWrite.buffer[9] = 0x00;
+    spiWrite.buffer[10]= 0x00;
+    spiWrite.buffer[11]= 0x00;
+    sendPacket(CHANNEL_CONTROL, 12);
+}
+
 
 void tare(void){
     spiWrite.buffer[0] = SHTP_REPORT_COMMAND_REQUEST; // set feature
@@ -949,9 +1011,7 @@ void setupCalibration(char accel, char gyro, char mag){
 }
 
 void saveCalibration(void){
-    
-    setGyroIntegratedRotationVectorFRS(0x0204,100,30); // these are the standards
-    
+        
     spiWrite.buffer[0] = SHTP_REPORT_COMMAND_REQUEST; // set feature
     spiWrite.buffer[1] = SEQUENCENUMBER[6]++; 
     spiWrite.buffer[2] = 0x06; // Save DCD
@@ -1218,12 +1278,11 @@ int startCalibrating(uint32_t dataRate){
     uint32_t odrPeriodMicrosecs = 0;
     if(dataRate != 0) odrPeriodMicrosecs = 1000000/dataRate; 
 
-    // pass either 0x0204 (for 9 Axis) or 0x0207 (for 6 axis).  We are calibrating using 9 axis (bit pointless really tho)
-    if(dataRate == 0) {
-        writeFrsWord(GYRO_INTEGRATED_RV_CONFIG, 0, 0x0204);
-    } else {
-        writeFrsWord(GYRO_INTEGRATED_RV_CONFIG, 0, 0x0207);
-    }
+//    if(dataRate == 0) {
+//        setGyroIntegratedRotationVectorFRS(0x204, 100, 30.0);
+//    } else {
+//        setGyroIntegratedRotationVectorFRS(0x207, 100, 30.0);
+//    }
 
     configureFeatureReport(SENSOR_REPORTID_GAME_ROTATION_VECTOR, odrPeriodMicrosecs); // this is the interval between reports, expressed in microseconds
     gameRotationVectorData.requestedInterval=odrPeriodMicrosecs; 

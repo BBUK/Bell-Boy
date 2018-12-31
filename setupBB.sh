@@ -256,6 +256,7 @@ mv images/FileDownload.png /srv/http/
 mv images/StrokeByStroke.png /srv/http/
 mv images/StrokeComparison.png /srv/http/
 mv images/Settings.png /srv/http/
+mv images/*.jpg /srv/http
 
 cd ~
 

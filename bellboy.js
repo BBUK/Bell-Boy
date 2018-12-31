@@ -125,9 +125,6 @@ var halfAveragePullStrength=[];
 var TaveragePullStrength=[];
 var ThalfAveragePullStrength=[];
 
-
-
-
 ws = new WebSocket("ws://" + wsHost);
 
 ////////////////////////////////////////////////////////////////
@@ -184,8 +181,6 @@ ws.onopen = function(){
     if (!nonLive){
         ws.send("DATE:" + parseInt(d.getTime()/1000));
         ws.send("SAMP:");
-        ws.send("CALI:");
-        
     }
 };
 
@@ -333,15 +328,44 @@ function parseResult(dataBack) {
     }
     if (dataBack.slice(0,5) == "SAMP:"){
         sampleInterval = parseFloat(dataBack.slice(5))*1000;
-        setStatus("Received sample period of " + sampleInterval.toFixed(3) + "ms");
+//        setStatus("Received sample period of " + sampleInterval.toFixed(3) + "ms");
         return;
     }
     
     if (dataBack.slice(0,5) == "CALI:"){
-        setStatus("Calibration status " + dataBack.slice(5) + " (should be 133)");
-        return;
-    }
+        var entries = dataBack.split(",");
+        var grv = parseInt(entries[0].slice(5));
+        if(grv == 0) document.getElementById("grvIndicator").style.backgroundColor = "#F00";
+        if(grv == 1) document.getElementById("grvIndicator").style.backgroundColor = "#F80";
+        if(grv == 2) document.getElementById("grvIndicator").style.backgroundColor = "#FD0";
+        if(grv == 3) document.getElementById("grvIndicator").style.backgroundColor = "#0F0";
 
+        var roll  = 360-parseFloat(entries[2]);
+        var pitch = 360-parseFloat(entries[3]);
+        var yaw   = 360-parseFloat(entries[4]);
+        document.querySelector("section").style.transform= "rotateX(" + roll + "deg) rotateZ(" + pitch + "deg) rotateY(" + yaw + "deg)";
+        return;
+/*        var x = parseFloat(entries[2]);
+        var y = parseFloat(entries[3]);
+        var z = parseFloat(entries[4]);
+        var w = parseFloat(entries[5]);
+        var x2 = x + x;
+        var y2 = y + y;
+        var z2 = z + z;
+        var xx = x * x2;
+        var xy = x * y2;
+        var xz = x * z2;
+        var yy = y * y2;
+        var yz = y * z2;
+        var zz = z * z2;
+        var wx = w * x2;
+        var wy = w * y2;
+        var wz = w * z2;
+        document.querySelector("section").style.transform= "matrix3D(" + (1 - (yy + zz)) + "," + (xy + wz) + "," + (xz - wy) + "," + 0 + "," + (xy - wz) + "," + (1 - (xx + zz)) + "," + (yz + wx) + "," + 0 + "," + (xz + wy) + "," + (yz - wx) + "," + (1-(xx + yy)) + "," + 0 + "," + 0 + "," + 0 + "," + 0 + "," + 1 +")";
+//        document.querySelector("section").style.transform= "matrix3D(" + (1 - (yy + zz)) + "," + (xy - wz) + "," + (xz + wy) + "," + 0 + "," + (xy + wz) + "," + (1 - (xx + zz)) + "," + (yz - wx) + "," + 0 + "," + (xz - wy) + "," + (yz + wx) + "," + (1-(xx + yy)) + "," + 0 + "," + 0 + "," + 0 + "," + 0 + "," + 1 +")";
+
+        return;*/
+    }
 
     if (dataBack.slice(0,5) == "ESTD:"){
         setStatus("Bell not at stand.  Aborting");
@@ -452,7 +476,7 @@ function getAveragePullStrengths(){
         for (m=0;(k+m)<sample.length && (sample[k+m][0]-i) < 5; m++){ // add up accns to point 5 degrees forward from direction change
             totalPull += sample[k+m][2] - calibrationValue*Math.sin(sample[k+m][0]*3.1416/180);
         }
-        averagePullStrength[averagePullStrength.length] = totalPull/m;
+        averagePullStrength[averagePullStrength.length] = totalPull*m*sampleInterval/1000;
     }
     for (j=0; j<halfSwingStarts.length; j++){
         i=sample[halfSwingStarts[j]][0]; // angle at direction change
@@ -462,11 +486,9 @@ function getAveragePullStrengths(){
         for (m=0;(k+m)<sample.length && (i-sample[k+m][0]) < 5; m++){ // add up accns to point 5 degrees forward from direction change
             totalPull += sample[k+m][2]- calibrationValue*Math.sin(sample[k+m][0]*3.1416/180);
         }
-        halfAveragePullStrength[halfAveragePullStrength.length] = -totalPull/m;
+        halfAveragePullStrength[halfAveragePullStrength.length] = -totalPull*m*sampleInterval/1000;
     }
 }
-
-
 
 function showLive(){
 //    ws.send("LDAT:"); // consider removing this line.
@@ -665,11 +687,11 @@ function drawSamples(position,iterations){
                 continue; // for moment don't swap, just do nothing
             }
             if ((currentStatus & LASTHS1) == 0 ) { // clear highest part of this and previous ROI if this is the first time
-            if((currentStatus & WOBBLINGATSTAND) == 0){
-                drawHSpower(dataEntryCurrent[2],dataEntryCurrent[0]); // and also draw power indicator if not wobbling
-            } else {
-                currentStatus &= ~WOBBLINGATSTAND;
-            }
+                if((currentStatus & WOBBLINGATSTAND) == 0){
+                    drawHSpower(dataEntryCurrent[2],dataEntryCurrent[0]); // and also draw power indicator if not wobbling
+                } else {
+                    currentStatus &= ~WOBBLINGATSTAND;
+                }
                 var pixelsFromROIL = (ROIL - startAngle) * stepSize;
                 ctxBD.clearRect(posBS2 + pixelsFromROIL, 14, 2 * (BDwidth - pixelsFromROIL), ctxBD.canvas.height - 14 - 25);
                 if ((currentStatus & LASTBS2) != 0 ) {
@@ -938,8 +960,28 @@ tareButton.onclick = function() {
     if ((currentStatus & DOWNLOADINGFILE) != 0) return;
     if ((currentStatus & PLAYBACK) != 0) return;
     if ((currentStatus & HELPDISPLAYED) != 0) return;
-    if ((currentStatus & RECORDINGSESSION) != 0) return
+    if ((currentStatus & RECORDINGSESSION) != 0) return;
     ws.send("TARE:");
+};
+
+calibButton.onclick = function() {
+    if (nonLive){
+        alert("Not implemented for this demo");
+        return;
+    }
+    if ((currentStatus & DOWNLOADINGFILE) != 0) return;
+    if ((currentStatus & PLAYBACK) != 0) return;
+    if ((currentStatus & HELPDISPLAYED) != 0) return;
+    if ((currentStatus & RECORDINGSESSION) != 0) return;
+    var elem = document.getElementById("calibButton");
+    if (elem.innerText == "Start"){
+        elem.innerText = "Save";
+        ws.send("CALI:");
+    } else {
+        elem.innerText = "Start";
+        ws.send("SAVE:");
+        ws.send("STCA:");
+    }
 };
 
 clearTareButton.onclick = function() {
@@ -950,7 +992,7 @@ clearTareButton.onclick = function() {
     if ((currentStatus & DOWNLOADINGFILE) != 0) return;
     if ((currentStatus & PLAYBACK) != 0) return;
     if ((currentStatus & HELPDISPLAYED) != 0) return;
-    if ((currentStatus & RECORDINGSESSION) != 0) return
+    if ((currentStatus & RECORDINGSESSION) != 0) return;
     ws.send("CLTA:");
 };
 
@@ -1501,6 +1543,8 @@ openSpan.onclick = function() {
 
 settingsSpan.onclick = function() {
     settingsModal.style.display = "none";
+    document.getElementById("calibButton").innerText = "Start";
+    ws.send("STCA:");
 };
 
 recordSpan.onclick = function() {
@@ -1515,6 +1559,8 @@ window.onclick = function(event) {
     }
     if (event.target == settingsModal) {
         settingsModal.style.display = "none";
+        document.getElementById("calibButton").innerText = "Start";
+        ws.send("STCA:");
     }
     if (event.target == recordModal) {
         recordModal.style.display = "none";

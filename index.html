@@ -1,9 +1,10 @@
+<!DOCTYPE html>
 <html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
-<head><meta http-equiv="Content-Type" content="text/html; charset=windows-1252">
+<head><meta http-equiv="Content-Type" content="text/html; charset=utf-8">
 <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
 <link rel="icon" href="/favicon.ico" type="image/x-icon">
 <style type="text/css">
-    body{background-color: white; color: black; font-family: sans-serif;}
+    body{background-color: white; color: black; font-family: sans-serif; perspective:1500px;}
     a:hover{color: #000;}
     #header{width: 100%; height:155px;
     background: #777799;
@@ -14,7 +15,16 @@
 	tr:nth-child(odd) {background: #ddf}
     table {outline:1px solid gray; width: 730px;}
     th.right {text-align: right; width: 200px;}
-    
+
+    section { position:relative; width: 180px; height: 120px; transform-style:preserve-3d;}
+    div.face { position:absolute; top:50%; left:50%; background-size:cover;}
+    div.face-top    {width: 100px; height: 50px; background-image: url(top.jpg);    transform:translateX(-50%) translateY(-50%)                 translateZ(20px); }
+    div.face-bottom {width: 100px; height: 50px; background-image: url(bottom.jpg); transform:translateX(-50%) translateY(-50%) rotateY(180deg) translateZ(20px); }
+    div.face-side1  {width: 100px; height: 40px; background-image: url(side1.jpg);  transform:translateX(-50%) translateY(-50%) rotateX(90deg)  translateZ(25px); }
+    div.face-side2  {width: 100px; height: 40px; background-image: url(side2.jpg);  transform:translateX(-50%) translateY(-50%) rotateX(-90deg) translateZ(25px); }
+    div.face-end1   {width: 40px; height:  50px; background-image: url(end1.jpg);   transform:translateX(-50%) translateY(-50%) rotateY(90deg)  translateZ(50px); }
+    div.face-end2   {width: 40px; height:  50px; background-image: url(end2.jpg);   transform:translateX(-50%) translateY(-50%) rotateY(-90deg) translateZ(50px); }
+
     img.invertable{width:64px; height: 64px; padding: 3px; padding-right: 8px; margin-top: 5px;}
 	
 	img.pointer {width:64px; height: 32px; padding: 0px; padding-right: 10px}
@@ -74,6 +84,18 @@
     text-decoration: none;
     cursor: pointer;
 	}
+    
+    .filled-circle {
+    position:relative;
+    top: 2px;
+    padding: 2px 35px;
+    margin-right: 5px;
+    width:25px;
+    height:25px;
+    border-radius:25px;
+    background-color: #ff0000;
+    } 
+  
     </style>
 </head>
 <body>
@@ -85,14 +107,15 @@
 </div>
 <div id="openModal" class="modal"><div class="modal-content"><span class="close">&times;</span><p>Select a file to open...</p><select class="selectfile" id="openSelect"></select><button class="selectfile" id="fileOpenButton">Open</button></div></div>
 <div id="recordModal" class="modal"><div class="modal-content"><span class="close">&times;</span><p>Enter filename for recording</p><input type="text" id="recordFileName" style="width:340px;">&nbsp;<button class="selectfile" id="recordButton">Start Recording</button><p id="nameInvalid" style="font-size: 9pt; visibility: hidden; color: red;">Please enter a valid file name:letters, numbers, spaces, dashes and full stops only</p></div></div>
-<div id="settingsModal" class="modal"><div class="modal-content" style="width: 780px; margin: 7% auto;"><span class="close">&times;</span>
+<div id="settingsModal" class="modal"><div class="modal-content" style="width: 780px; margin: auto auto;"><span class="close">&times;</span>
 <TABLE><TR><TH>Choose whether you wish to display target-bell-rise angles and what angle you would like them at (shown as a green line and angle is measured from TDC in degrees)</TH>
 	<TH class="right">Handstroke:&nbsp;<select class="selectfile" id="targetSelectHand"></select>
 	<br>Backstroke:&nbsp;<select class="selectfile" id="targetSelectBack"></select></TH></TR>
 	<TR><TH>Select the range of a stroke you would like the display to show (numbers are degrees from TDC)</TH><TH class="right">Angles:&nbsp;<select class="selectfile" id="zoomSelect"></select></TH></TR>
 	<TR><TH>Change the playback speed of a loaded file or a finished live recording</TH><TH class="right">Play speed:&nbsp;<select class="selectfile" id="speedSelect"></select></TH></TR>
     <TR><TH>Some bells will show a smaller "pull strength" measurement on the display.  This setting allows you to change the scale of the signals displayed (units are arbitary)</TH><TH class="right">Scale:&nbsp;<select class="selectfile" id="scaleSelect"></select></TH></TR>
-    <TR><TH>Click the button to the right to "tare" the bell.  You should only do this if the bell is down and stable. If you applied tare in the wrong position and the bell is no longer down, you can also clear the tere (a standard tare value will be applied, which may be less accurate).</TH><TH class="right"><button class="selectfile" id="tareButton">Tare</button><button class="selectfile" id="clearTareButton">Clear</button></TH></TR>
+    <TR><TH>Click the button to the right to "tare" the bell.  You should only do this if the bell is down and stable. If you applied tare in the wrong position and the bell is no longer down, you can also clear the tare (a standard tare value will be applied, which may be less accurate).</TH><TH class="right"><button class="selectfile" id="tareButton">Tare</button><button class="selectfile" id="clearTareButton">Clear</button></TH></TR>
+    <TR><TH>Click the button to the right to do an initial (one time) calibration.  Move the device down so that it rests stationary each of its six faces for a second or two.  Repeat until the indicator below is green, then press save.  Press the cross on the top right to exit without saving.</TH><TH class="right"><span class="filled-circle" id="grvIndicator"></span><button class="selectfile" id="calibButton">Start</button><section><div class="face face-top"></div><div class="face face-bottom"></div><div class="face face-side1"></div><div class="face face-side2"></div><div class="face face-end1"></div><div class="face face-end2"></div></section></TH></TR>
 </TABLE>
 </div></div>
 <div style="margin-top: 0px; padding-bottom: 5px; padding-top: 5px; background: #686888; text-align:center; min-width: 800px;">
