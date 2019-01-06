@@ -68,15 +68,27 @@
 // at ODR values in which the game rotation vector is "uncomfortable"
 // (The game rotation vector is used for stabilisation of the GIRV.) 
 // An ODR of 400 is quite noisy but 200 works fine.
-#define ODR 400 
-#define PUSHBATCH 40 // number of samples taken before pushing out
-#define PUSHDIVIDE 2 // proportion of samples to actually push out (so here effective ODR of 200 with 20 samples pushed out 10 times a second)
-#define BUFFERSIZE 64 // must be bigger than PUSHBATCH
+#define ODR 200 
+#define PUSHBATCH 20 // number of samples taken before pushing out
+#define SAVGOLLENGTH  31
+#define SAVGOLHALF 15 // = math.floor(SAVGOLLENGTH/2.0)
+#define BUFFERSIZE 80 // must be bigger than PUSHBATCH + SAVGOLLENGTH
 #define R2O2 (sqrt(2)/2.0)
 
 #define SMOOTHFACTOR 0.75
 
 char READ_OUTBUF[1500];
+
+// savgol_coeffs(31,1,deriv=1,use="dot")
+const float savGolCoefficients[] = {
+    -6.04838710e-03, -5.64516129e-03, -5.24193548e-03, -4.83870968e-03,
+    -4.43548387e-03, -4.03225806e-03, -3.62903226e-03, -3.22580645e-03,
+    -2.82258065e-03, -2.41935484e-03, -2.01612903e-03, -1.61290323e-03,
+    -1.20967742e-03, -8.06451613e-04, -4.03225806e-04, -1.02877021e-17,
+    4.03225806e-04,   8.06451613e-04,  1.20967742e-03,  1.61290323e-03,
+    2.01612903e-03,   2.41935484e-03,  2.82258065e-03,  3.22580645e-03,
+    3.62903226e-03,   4.03225806e-03,  4.43548387e-03,  4.83870968e-03,
+    5.24193548e-03,   5.64516129e-03,  6.04838710e-03};
 
 uint32_t FRS_READ_BUFFER[64];
 uint32_t FRS_WRITE_BUFFER[64];
@@ -119,6 +131,7 @@ FILE *fd_write_out;
 # (l)   SAVE: save current calibration to flash
 # (m)   STCA: stops the current calibration
 # (n)   PFRS: (for testing - prints the current GIRV FRS config record)
+# (m)   TEST: (for testing - prints current orientation
 # 
 # There are the following responses back to the user's browser:
 # (i)   STPD: tells the browser that the device has sucessfully stopped sampling
@@ -156,14 +169,20 @@ struct {
 } spiWrite;
 
 struct {
+    float rateBuffer[BUFFERSIZE];
+    float accnBuffer[BUFFERSIZE];// this is just raw acceleration (for testing) the used acceleration is calculated using a Savgol filter
     unsigned int status;
     unsigned int lastSequence;
+    unsigned int head;
+    unsigned int tail;
+    unsigned int available;
+    int direction;
     float lastX;
     float lastY;
     float lastZ;
     unsigned int requestedInterval;
     unsigned int reportInterval;    
-} gyroData;
+} gyroData = {.head=0, .tail=0, .available=0};
 
 struct {
     float angleBuffer[BUFFERSIZE];
@@ -172,7 +191,7 @@ struct {
     unsigned int head;
     unsigned int tail;
     unsigned int available;
-    float direction;
+    int direction;
     float lastYaw;
     float lastPitch;
     float lastRoll;
@@ -196,19 +215,21 @@ struct {
 } gyroIntegratedRotationVectorData ={ .smoothAngle=0.0, .smoothRate=0.0, .smoothRoll =0.0, .smoothAccn =0.0, .head=0, .tail=0, .available=0, .tareValue=0.0 };
 
 struct {
+    float angleBuffer[BUFFERSIZE];
+    unsigned int head;
+    unsigned int tail;
+    unsigned int available;
     unsigned int status;
     unsigned int lastSequence;
+    int direction;
     float lastYaw;
     float lastPitch;
     float lastRoll;
-//    float lastQx;
-//    float lastQy;
-//    float lastQz;
-//    float lastQw;
-    unsigned int tareCount;
+    float tareValue;
+    unsigned int calibrationCount;
     unsigned int requestedInterval;
     unsigned int reportInterval;
-} gameRotationVectorData;
+} gameRotationVectorData  = {.head=0, .tail=0, .available=0, .lastRoll = 0.0, .tareValue = 0.0};
 
 struct {
     unsigned int status;
@@ -226,6 +247,7 @@ struct {
     float lastX;
     float lastY;
     float lastZ;
+    int direction;
     unsigned int requestedInterval;
     unsigned int reportInterval;
 } calibratedMagneticFieldData;
@@ -272,14 +294,13 @@ int main(int argc, char const *argv[]){
     fcntl(STDIN_FILENO, F_SETFL, fcntl(STDIN_FILENO, F_GETFL) | O_NONBLOCK);
 
     setup();
-    setGyroIntegratedRotationVectorFRS(0x0207,100,10);
     start(ODR);
     
     FILE *fdTare;
     fdTare = fopen("/tmp/bb_tare","r");
     if(fdTare != NULL) {
         if (fgets(linein, sizeof(linein), fdTare) != NULL) {
-            gyroIntegratedRotationVectorData.tareValue = atof(linein);
+            gameRotationVectorData.tareValue = atof(linein);
         }
         fclose(fdTare);
     }
@@ -301,48 +322,57 @@ int main(int argc, char const *argv[]){
                 continue;
             }
             if(strcmp("SAMP:", command) == 0) {
-                printf("SAMP:%f\n",(float)PUSHDIVIDE/ODR);
+                printf("SAMP:%f\n",1.0/ODR);
                 continue;
             }
             if(strcmp("CALI:", command) == 0) {
                 if(RUNNING) continue;
-                startCalibrating(10);
-                gameRotationVectorData.tareCount = 0;
+                eraseFrsRecord(SYSTEM_ORIENTATION);
+                tareZ();
+                CALIBRATING = 1;
+                gameRotationVectorData.calibrationCount = 0;
                 continue;
             }
             if(strcmp("STCA:", command) == 0) {
-                startCalibrating(0);
+                CALIBRATING = 0;
                 continue;
             }
             if(strcmp("PFRS:", command) == 0) {
                 printGyroIntegratedRotationVectorFRS();
                 continue;
             }
- 
+            if(strcmp("TEST:", command) == 0) {
+                printf("TEST:%f, %+07.1f, %+07.1f, %+07.1f\n", gameRotationVectorData.tareValue, gameRotationVectorData.lastRoll, gameRotationVectorData.lastPitch, gameRotationVectorData.lastYaw);
+                continue;
+            }
             if(strcmp("TARE:", command) == 0) {
-                saveCalibration();
-                gyroIntegratedRotationVectorData.tareValue = gyroIntegratedRotationVectorData.smoothRoll;
+                gameRotationVectorData.tareValue = (gameRotationVectorData.lastRoll + gameRotationVectorData.tareValue);
                 fdTare = fopen("/tmp/bb_tare","w");
                 if(fdTare == NULL) {
                     printf("EIMU: Could not open tare file for writing\n");
                     continue;
                 } else {
-                    fprintf(fdTare,"%+07.4f\n", gyroIntegratedRotationVectorData.tareValue);
+                    fprintf(fdTare,"%+07.4f\n", gameRotationVectorData.tareValue);
                     fclose(fdTare);
                 }
                 continue;
             }
-            if(strcmp("CLTA:", command) == 0) {
-                setStandardOrientation();
-                gyroIntegratedRotationVectorData.tareValue = 0.0;
+            if(strcmp("CLTA:", command) == 0) { // consider removing file too
+                gameRotationVectorData.tareValue = 0.0;
+                fdTare = fopen("/tmp/bb_tare","w");
+                if(fdTare == NULL) {
+                    printf("EIMU: Could not open tare file for writing\n");
+                    continue;
+                } else {
+                    fprintf(fdTare,"0.0000\n");
+                    fclose(fdTare);
+                }
                 continue;
             }
-        
             if(strcmp("SAVE:", command) == 0) {
                 saveCalibration();
                 continue;
             }            
-
             if(strcmp("FILE:", command) == 0) {
                 DIR *d;
                 struct dirent *dir;
@@ -375,7 +405,7 @@ int main(int argc, char const *argv[]){
                     printf("STRT:\n");
                     OUT_COUNT = 0;
                 }
-                startCalibrating(0);
+                CALIBRATING = 0;
                 continue;
             }
             if(strcmp("STOP:", command) == 0) {
@@ -446,25 +476,42 @@ int main(int argc, char const *argv[]){
 int startRun(void){
 
 // reset fifo
-    gyroIntegratedRotationVectorData.head = 0;
+    gameRotationVectorData.head = SAVGOLHALF;
+    gameRotationVectorData.tail = 0;  // this function puts the starting angle in the fifo
+    gameRotationVectorData.available = SAVGOLHALF;
+
+    gyroData.head = SAVGOLHALF;
+    gyroData.tail = 0;
+    gyroData.available = SAVGOLHALF;
+
+    gyroIntegratedRotationVectorData.head = SAVGOLHALF;
     gyroIntegratedRotationVectorData.tail = 0;
-    gyroIntegratedRotationVectorData.available = 0;
+    gyroIntegratedRotationVectorData.available = SAVGOLHALF;
 
     if(stabilityData.status != 1 && stabilityData.status != 2) {
-        printf("EMOV:\n"); // bell is moving
+        printf("EMOV:%+07.1f\n",gameRotationVectorData.lastRoll); // bell is moving
         return(0);
     }
-    if(abs(gyroIntegratedRotationVectorData.lastRoll) < 160 || abs(gameRotationVectorData.lastRoll) > 178){
-        printf("ESTD:\n"); // bell not at stand
+
+    if(abs(gameRotationVectorData.lastRoll) < 160 || abs(gameRotationVectorData.lastRoll) > 178){
+        printf("ESTD:%+07.1f\n",gameRotationVectorData.lastRoll); // bell not at stand
         return(0);
     }
     
-    if( gyroIntegratedRotationVectorData.smoothRoll < 0) {  // this bit works out which way the bell rose and adjusts accordingly
-        gyroIntegratedRotationVectorData.direction = -1;
-        gyroIntegratedRotationVectorData.lastAngle = -180.0-gyroIntegratedRotationVectorData.smoothRoll;
+    if(gameRotationVectorData.lastRoll < 0) {  // this bit works out which way the bell rose and adjusts accordingly
+        gameRotationVectorData.direction = -1;
+        gameRotationVectorData.angleBuffer[0] = -180.0-gameRotationVectorData.lastRoll;
+        gyroData.direction = -1;
+        
     } else {
-        gyroIntegratedRotationVectorData.direction = +1;
-        gyroIntegratedRotationVectorData.lastAngle = gyroIntegratedRotationVectorData.smoothRoll-180.0;
+        gameRotationVectorData.direction = +1;
+        gameRotationVectorData.angleBuffer[0] = gameRotationVectorData.lastRoll-180.0;
+        gyroData.direction = +1;
+    }
+    
+    for(int i = 0; i< BUFFERSIZE; ++i){ // initialise with dummy data for savgol alignment
+        gyroData.rateBuffer[i] = 0;
+        gameRotationVectorData.angleBuffer[i] = gameRotationVectorData.angleBuffer[0];
     }
     
     RUNNING = 1;
@@ -475,7 +522,29 @@ void handleEvent(void){
     if(!collectPacket()) return;
     if(spiRead.dataLength != 0) {
         parseEvent();
+        alignFIFOs();
         pushData();
+    }
+}
+
+// We don't actually know that the reports will be sent at the same rate
+// This is some basic fifo alignment to stop things getting too far out
+// of whack
+void alignFIFOs(void){
+    if(gyroData.available >= 3){
+        if ((gyroData.available - 3) > gameRotationVectorData.available){
+                gyroData.tail = (gyroData.tail + 1) % BUFFERSIZE; // ditch a sample
+                gyroData.available -= 1;
+                printf("Ditched rate sample\n");
+        }
+    }
+
+    if(gameRotationVectorData.available >= 3){
+        if ((gameRotationVectorData.available - 3) > gyroData.available){
+                gameRotationVectorData.tail = (gameRotationVectorData.tail + 1) % BUFFERSIZE; // ditch a sample
+                gameRotationVectorData.available -= 1;
+                printf("Ditched angle sample\n");
+        }
     }
 }
 
@@ -485,27 +554,38 @@ void pushData(void){
     static char outputLine[100];
     int outputCountLocal = 0;
     int outputCountRemote = 0;
+    if(gyroData.available < PUSHBATCH + SAVGOLLENGTH) return;
+    if(gameRotationVectorData.available < PUSHBATCH + SAVGOLLENGTH) return;
 
-    if (gyroIntegratedRotationVectorData.available >= PUSHBATCH){
-        for(int counter = 0; counter < PUSHBATCH; ++counter){
-            if(counter % PUSHDIVIDE == 0) { 
-                sprintf(outputLine,"A:%+07.1f,R:%+07.1f,C:%+07.1f\n", 
-                    gyroIntegratedRotationVectorData.angleBuffer[gyroIntegratedRotationVectorData.tail], 
-                    gyroIntegratedRotationVectorData.rateBuffer[gyroIntegratedRotationVectorData.tail],
-                    gyroIntegratedRotationVectorData.accnBuffer[gyroIntegratedRotationVectorData.tail]);
-                outputCountLocal += sprintf(&outputLocal[outputCountLocal],outputLine);
-                outputCountRemote += sprintf(&outputRemote[outputCountRemote],"LIVE:%s", outputLine);
-                OUT_COUNT += 1;
-
-            }
-            gyroIntegratedRotationVectorData.tail = (gyroIntegratedRotationVectorData.tail + 1) % BUFFERSIZE;
-        }
-        gyroIntegratedRotationVectorData.available -= PUSHBATCH;
-        
-        printf("%s",outputRemote);
-        fputs(outputLocal,fd_write_out);
-        fflush(fd_write_out);
+    for(int counter = 0; counter < PUSHBATCH; ++counter){
+        sprintf(outputLine,"A:%+07.1f,R:%+07.1f,C:%+07.1f,W:%+07.1f\n", 
+            gameRotationVectorData.angleBuffer[gameRotationVectorData.tail], 
+            gyroData.rateBuffer[gyroData.tail],
+            savGol(gyroData.tail),
+            gyroData.accnBuffer[gyroData.tail]);
+        outputCountLocal += sprintf(&outputLocal[outputCountLocal],outputLine);
+        outputCountRemote += sprintf(&outputRemote[outputCountRemote],"LIVE:%s", outputLine);
+        OUT_COUNT += 1;
+        gameRotationVectorData.tail = (gameRotationVectorData.tail + 1) % BUFFERSIZE;
+        gyroData.tail = (gyroData.tail + 1) % BUFFERSIZE;
     }
+    gameRotationVectorData.available -= PUSHBATCH;
+    gyroData.available -= PUSHBATCH;
+    
+    printf("%s",outputRemote);
+    fputs(outputLocal,fd_write_out);
+    fflush(fd_write_out);
+}
+
+// smooths and differenciates gryo readings to make smoothed accelerations
+float savGol(unsigned int startPosition){
+    unsigned int windowStartPosition = (startPosition < SAVGOLHALF) ? (startPosition + BUFFERSIZE) - SAVGOLHALF: startPosition - SAVGOLHALF;
+    float savGolResult=0;
+
+    for(int i = 0; i < SAVGOLLENGTH; ++i){
+        savGolResult += ODR*(savGolCoefficients[i] * gyroData.rateBuffer[(windowStartPosition +i) % BUFFERSIZE]);
+    }
+    return(savGolResult);
 }
 
 void parseEvent(void){
@@ -578,6 +658,8 @@ void reportCommandResponse(void){
     switch(spiRead.buffer[2]){
         case 0x84: 
           printf("Error: device has reinitialised!\n");
+          CALIBRATING = 0;
+          runtimeReorient(0,0,0,0);
           setStandardOrientation();
           for(uint32_t i=0; i<sizeof(SEQUENCENUMBER); i++) SEQUENCENUMBER[i] = 0;
           start(ODR);
@@ -591,10 +673,21 @@ void reportCommandResponse(void){
 
 void parseGyroIntegratedRotationVector(void){
     // https://www-users.cs.york.ac.uk/~fisher/mkfilter/trad.html
-    // 200Hz sample rate 10Hz low pass
+    // 200Hz sample rate 10Hz low pass == 400hz 20Hz low pass
     static const double butterworthMagicNumber1 = 49.79245121;
     static const double butterworthMagicNumber2 = -0.6413515381;
     static const double butterworthMagicNumber3 = 1.5610180758;
+
+    // 400Hz sample rate 10Hz low pass
+//    static const double butterworthMagicNumber1 = 180.4169259;
+//    static const double butterworthMagicNumber2 = -0.8008026467;
+//    static const double butterworthMagicNumber3 = 1.7786317778;
+    
+    // 400Hz sample rate 5Hz low pass
+//    static const double butterworthMagicNumber1 = 180.4169259;
+//    static const double butterworthMagicNumber2 = -0.8008026467;
+//    static const double butterworthMagicNumber3 = 1.7786317778;
+    
 
     float Qx = (spiRead.buffer[1] << 8) + spiRead.buffer[0];
     float Qy = (spiRead.buffer[3] << 8) + spiRead.buffer[2];
@@ -610,6 +703,8 @@ void parseGyroIntegratedRotationVector(void){
     Qy *= QP(14);
     Qz *= QP(14);
     Qw *= QP(14);
+
+// possibly did not transcribe this quaternion to angle routine well - to be checked
 
     float r31 = 2.0 * (Qx * Qz - Qw * Qy);
     float roll = 0;
@@ -736,17 +831,13 @@ void parseGameRotationVector(void){
     Qz *= QP(14);
     Qw *= QP(14);
 
-//    gameRotationVectorData.lastQx = Qx;
-//    gameRotationVectorData.lastQy = Qy;
-//    gameRotationVectorData.lastQz = Qz;
-//    gameRotationVectorData.lastQw = Qw;
-
 // http://www.euclideanspace.com/maths/geometry/rotations/conversions/quaternionToEuler/
 // https://forums.adafruit.com/viewtopic.php?t=131484
 // https://mbientlab.com/community/discussion/2036/taring-quaternion-attitude
 // http://www.gregslabaugh.net/publications/euler.pdf
 // https://math.stackexchange.com/questions/687964/getting-euler-tait-bryan-angles-from-quaternion-representation
-
+/*
+// possibly did not transcribe this well - to be checked
     float r31 = 2.0 * (Qx * Qz - Qw * Qy);
     float roll = 0;
     float pitch = 0;
@@ -766,20 +857,46 @@ void parseGameRotationVector(void){
         }
     }
 
-    if(gameRotationVectorData.tareCount < 6) gameRotationVectorData.tareCount += 1;
-    if(gameRotationVectorData.tareCount == 5) tareZ();
-
     roll *= RADIANS_TO_DEGREES_MULTIPLIER;
     pitch *= RADIANS_TO_DEGREES_MULTIPLIER;
     yaw *= RADIANS_TO_DEGREES_MULTIPLIER;
+*/
+    float yaw   =  atan2(Qx * Qy + Qw * Qz, (Qw * Qw + Qx * Qx) - 0.5) * RADIANS_TO_DEGREES_MULTIPLIER;   
+    float pitch = -asin(2.0 * (Qx * Qz - Qw * Qy)) * RADIANS_TO_DEGREES_MULTIPLIER;
+    float roll  =  atan2(Qw * Qx + Qy * Qz, (Qw * Qw + Qz * Qz) - 0.5) * RADIANS_TO_DEGREES_MULTIPLIER;
 
-//    float yaw   =  atan2(Qx * Qy + Qw * Qz, (Qw * Qw + Qx * Qx) - 0.5) * RADIANS_TO_DEGREES_MULTIPLIER;   
-//    float pitch = -asin(2.0 * (Qx * Qz - Qw * Qy)) * RADIANS_TO_DEGREES_MULTIPLIER;
-//    float roll  =  atan2(Qw * Qx + Qy * Qz, (Qw * Qw + Qz * Qz) - 0.5) * RADIANS_TO_DEGREES_MULTIPLIER;
+    roll -= gameRotationVectorData.tareValue; 
+
+    float rolldiff = roll - gameRotationVectorData.lastRoll;
+    if(rolldiff > 250.0) {
+        rolldiff -= 360.0;
+    } else if (rolldiff < -250.0) {
+        rolldiff += 360.0;
+    }
 
     gameRotationVectorData.lastRoll = roll;
     gameRotationVectorData.lastPitch = pitch;
     gameRotationVectorData.lastYaw = yaw;
+    
+    if(CALIBRATING) {
+        gameRotationVectorData.calibrationCount += 1;
+        if((gameRotationVectorData.calibrationCount % PUSHBATCH) == 0) {
+            printf("CALI:%d, %+07.1f, %+07.1f, %+07.1f\n", gameRotationVectorData.status, gameRotationVectorData.lastRoll, gameRotationVectorData.lastPitch, gameRotationVectorData.lastYaw);
+        }
+    }
+
+    if(!RUNNING) return;  // only push data to fifo if we are on a run
+
+    if (gameRotationVectorData.available == (BUFFERSIZE - 2)) {
+        printf("Angle buffer full.  Ditching oldest sample\n");
+        gameRotationVectorData.tail = (gameRotationVectorData.tail + 1) % BUFFERSIZE;
+        gameRotationVectorData.available -= 1;
+    }
+    
+    unsigned int lastHead = (gameRotationVectorData.head == 0) ? BUFFERSIZE-1 : gameRotationVectorData.head -1;
+    gameRotationVectorData.angleBuffer[gameRotationVectorData.head] =  gameRotationVectorData.angleBuffer[lastHead] + gameRotationVectorData.direction*rolldiff;
+    gameRotationVectorData.head = (gameRotationVectorData.head + 1) % BUFFERSIZE;
+    gameRotationVectorData.available += 1;
 }
 
 void parseLinearAccelerometer(void){
@@ -790,7 +907,7 @@ void parseLinearAccelerometer(void){
     linearAccelerometerData.status = spiRead.buffer[5 + 2] & 0x03;
     
     float Ax = (spiRead.buffer[5 + 5] << 8) + spiRead.buffer[5 + 4];
-    float Ay = (spiRead.buffer[5 + 7] << 8) + spiRead.buffer[5 + 6];
+         float Ay = (spiRead.buffer[5 + 7] << 8) + spiRead.buffer[5 + 6];
     float Az = (spiRead.buffer[5 + 9] << 8) + spiRead.buffer[5 + 8];
     
     if(Ax >= 0x8000) Ax -= 0x10000;
@@ -849,9 +966,25 @@ void parseCalibratedGyroscope(void){
     Gy *= QP(9) * RADIANS_TO_DEGREES_MULTIPLIER;
     Gz *= QP(9) * RADIANS_TO_DEGREES_MULTIPLIER;
 
+    float rawAccn = (Gx-gyroData.lastX)*ODR*gyroData.direction;
+
     gyroData.lastX = Gx;
     gyroData.lastY = Gy;
     gyroData.lastZ = Gz;
+    
+    if(!RUNNING) return;  // only push data to fifo if we are on a run
+
+    if (gyroData.available == (BUFFERSIZE - 2)) {
+        printf("Rate buffer full.  Ditching oldest sample\n");
+        gyroData.tail = (gyroData.tail + 1) % BUFFERSIZE;
+        gyroData.available -= 1;
+    }
+    
+    gyroData.rateBuffer[gyroData.head] = Gx * gyroData.direction;
+    gyroData.accnBuffer[gyroData.head] = rawAccn;
+    gyroData.head = (gyroData.head + 1) % BUFFERSIZE;
+    gyroData.available += 1;
+    
 }
 
 void parseStability(void){    
@@ -884,12 +1017,6 @@ void parseCalibratedMagneticField(void){
     calibratedMagneticFieldData.lastX = Mx;
     calibratedMagneticFieldData.lastY = My;
     calibratedMagneticFieldData.lastZ = Mz;
-    
-//    if(CALIBRATING) printf("CALI:%d, %d, %+07.5f, %+07.5f, %+07.5f, %+07.5f\n", gameRotationVectorData.status, calibratedMagneticFieldData.status, gameRotationVectorData.lastQx, gameRotationVectorData.lastQy, gameRotationVectorData.lastQz, gameRotationVectorData.lastQw);
-    if(CALIBRATING) printf("CALI:%d, %d, %+07.5f, %+07.5f, %+07.5f\n", gameRotationVectorData.status, calibratedMagneticFieldData.status, gameRotationVectorData.lastRoll, gameRotationVectorData.lastPitch, gameRotationVectorData.lastYaw);
-//    if(CALIBRATING) printf("CALI:%d, %d, %+07.5f, %+07.5f, %+07.5f\n", gameRotationVectorData.status, calibratedMagneticFieldData.status, gyroIntegratedRotationVectorData.lastRoll, gyroIntegratedRotationVectorData.lastPitch, gyroIntegratedRotationVectorData.lastYaw);
-
-
 }
 
 void parseStabilisedRotationVector(void){
@@ -904,7 +1031,6 @@ void setStandardOrientation(void){
 //    reorient(0,0,0,0);
     reorient(R2O2,0,-R2O2,0);  // side mount connectors down
 //    reorient(0,-R2O2,0,-R2O2);  // side mount connectors up
-//    reorient(R2O2,0,-R2O2,0); // top mount
 }
 
 int reorient(float w, float x, float y, float z){
@@ -913,12 +1039,41 @@ int reorient(float w, float x, float y, float z){
     uint32_t Y = (int32_t)round(y/QP(30));
     uint32_t Z = (int32_t)round(z/QP(30));
 
-    if (readFrsRecord(SYSTEM_ORIENTATION) !=0 && FRS_READ_BUFFER[0] == X && FRS_READ_BUFFER[1] == Y && FRS_READ_BUFFER[2] == Z && FRS_READ_BUFFER[3] == W ) return(0);
+    if(readFrsRecord(SYSTEM_ORIENTATION) && FRS_READ_BUFFER[0] == X && FRS_READ_BUFFER[1] == Y && FRS_READ_BUFFER[2] == Z && FRS_READ_BUFFER[3] == W ) return(1);
     FRS_WRITE_BUFFER[0]=X;
     FRS_WRITE_BUFFER[1]=Y;
     FRS_WRITE_BUFFER[2]=Z;
     FRS_WRITE_BUFFER[3]=W;
-    return(writeFrsRecord(SYSTEM_ORIENTATION,4));
+    writeFrsRecord(SYSTEM_ORIENTATION,4);
+// if we write the record then reinitialise the sensors
+    spiWrite.buffer[0] = SHTP_REPORT_COMMAND_REQUEST; // set feature
+    spiWrite.buffer[1] = SEQUENCENUMBER[6]++;
+    spiWrite.buffer[2] = 0x04; // Initialize command
+    spiWrite.buffer[3] = 0x01; // reinitialise everything
+    spiWrite.buffer[4] = 0x00;
+    spiWrite.buffer[5] = 0x00;
+    spiWrite.buffer[6] = 0x00;
+    spiWrite.buffer[7] = 0x00;
+    spiWrite.buffer[8] = 0x00;
+    spiWrite.buffer[9] = 0x00;
+    spiWrite.buffer[10]= 0x00;
+    spiWrite.buffer[11]= 0x00;
+    sendPacket(CHANNEL_CONTROL, 12);
+    for(int i = 0; i<2000; i++){
+        usleep(100);
+        while(bcm2835_gpio_lev(INTGPIO) == 0) {
+            collectPacket();
+            if(spiRead.buffer[0] != SHTP_REPORT_COMMAND_RESPONSE) {parseEvent(); continue;}
+            if(spiRead.buffer[2] != COMMAND_INITIALIZE) {parseEvent(); continue;}
+            if(spiRead.buffer[5] != 0) {
+                return(0);
+            } else {
+                return(1);
+            }
+        }
+    }
+    printf("Initialise timeout\n");
+    return(0);
 }
 
 
@@ -945,6 +1100,7 @@ int runtimeReorient(float w, float x, float y, float z){
 
 void clearPersistentTare(void){
     eraseFrsRecord(SYSTEM_ORIENTATION);
+    runtimeReorient(0,0,0,0);
     setStandardOrientation();
 }
 
@@ -963,7 +1119,6 @@ void tareZ(void){
     spiWrite.buffer[11]= 0x00;
     sendPacket(CHANNEL_CONTROL, 12);
 }
-
 
 void tare(void){
     spiWrite.buffer[0] = SHTP_REPORT_COMMAND_REQUEST; // set feature
@@ -1252,13 +1407,13 @@ void start(uint32_t dataRate){ // set datarate to zero to stop sensors
 // enable calibration (we should be stationary)  // TODO: check stationary
     setupCalibration(1,1,1);
 
-    configureFeatureReport(SENSOR_REPORTID_GYRO_INTEGRATED_ROTATION_VECTOR, odrPeriodMicrosecs);
-    gyroIntegratedRotationVectorData.requestedInterval=odrPeriodMicrosecs;
-    gyroIntegratedRotationVectorData.direction = 0;
+//    configureFeatureReport(SENSOR_REPORTID_GYRO_INTEGRATED_ROTATION_VECTOR, odrPeriodMicrosecs);
+//    gyroIntegratedRotationVectorData.requestedInterval=odrPeriodMicrosecs;
+//    gyroIntegratedRotationVectorData.direction = 0;
 
     configureFeatureReport(SENSOR_REPORTID_STABILITY_CLASSIFIER, 500000);// two reports per second
     stabilityData.requestedInterval=500000;
-/*
+
     configureFeatureReport(SENSOR_REPORTID_GAME_ROTATION_VECTOR, odrPeriodMicrosecs);
     gameRotationVectorData.requestedInterval=odrPeriodMicrosecs;
     gameRotationVectorData.direction=0;
@@ -1266,6 +1421,7 @@ void start(uint32_t dataRate){ // set datarate to zero to stop sensors
     configureFeatureReport(SENSOR_REPORTID_GYROSCOPE_CALIBRATED, odrPeriodMicrosecs);
     gyroData.requestedInterval=odrPeriodMicrosecs;
 
+/*
     configureFeatureReport(SENSOR_REPORTID_ACCELEROMETER, odrPeriodMicrosecs);
     accelerometerData.requestedInterval=odrPeriodMicrosecs;
 
@@ -1274,39 +1430,13 @@ void start(uint32_t dataRate){ // set datarate to zero to stop sensors
 */
 }
 
-int startCalibrating(uint32_t dataRate){
-    uint32_t odrPeriodMicrosecs = 0;
-    if(dataRate != 0) odrPeriodMicrosecs = 1000000/dataRate; 
-
-//    if(dataRate == 0) {
-//        setGyroIntegratedRotationVectorFRS(0x204, 100, 30.0);
-//    } else {
-//        setGyroIntegratedRotationVectorFRS(0x207, 100, 30.0);
-//    }
-
-    configureFeatureReport(SENSOR_REPORTID_GAME_ROTATION_VECTOR, odrPeriodMicrosecs); // this is the interval between reports, expressed in microseconds
-    gameRotationVectorData.requestedInterval=odrPeriodMicrosecs; 
-    
-    configureFeatureReport(SENSOR_REPORTID_MAGNETIC_FIELD, odrPeriodMicrosecs);
-    calibratedMagneticFieldData.requestedInterval=odrPeriodMicrosecs;
-    
-    if(dataRate == 0) {
-        CALIBRATING = 0;
-    } else {
-        CALIBRATING = 1;
-    }
-    return(1); 
-}
-
 void setupStabilityClassifierFrs(float threshold){
-    threshold /= QP(24);
-    uint32_t result;
-    readFrsWord(STABILITY_DETECTOR_CONFIG,0,&result);
-    if (threshold != result) writeFrsWord(STABILITY_DETECTOR_CONFIG,0,threshold);
-
-// for some reason the duration word does not seem to want to take
-//    readFrsWord(STABILITY_DETECTOR_CONFIG,1,&result);
-//    if (duration != result) writeFrsWord(STABILITY_DETECTOR_CONFIG,1,duration);
+    uint32_t result = (int32_t)round(threshold/QP(24));
+    readFrsRecord(STABILITY_DETECTOR_CONFIG);
+    if((FRS_READ_BUFFER[0] == result) && (FRS_READ_BUFFER[1] == 500000)) return; // nothing to do
+    FRS_WRITE_BUFFER[0]=threshold;
+    FRS_WRITE_BUFFER[1]=500000;
+    writeFrsRecord(STABILITY_DETECTOR_CONFIG,2);
 }
 
 void setup(void){
@@ -1320,9 +1450,7 @@ void setup(void){
     bcm2835_gpio_set(WAKPS0GPIO);
     bcm2835_gpio_fsel(INTGPIO, BCM2835_GPIO_FSEL_INPT); // INT
     bcm2835_gpio_set_pud(INTGPIO, BCM2835_GPIO_PUD_UP);
-
-    
-// setup SPI
+//  setup SPI
     if (!bcm2835_spi_begin()){
       printf("bcm2835_spi_begin failed. \n");
       exit(1);
@@ -1332,8 +1460,7 @@ void setup(void){
     bcm2835_spi_set_speed_hz(3000000);
     bcm2835_spi_chipSelect(BCM2835_SPI_CS0);
     bcm2835_spi_setChipSelectPolarity(BCM2835_SPI_CS0, LOW);
-
-//    reset device
+//  reset device
     bcm2835_gpio_clr(RESETGPIO);
     usleep(20000);
     bcm2835_gpio_set(RESETGPIO);
@@ -1358,9 +1485,9 @@ void setup(void){
         printf("EIMU: Cannot communicate with BNO080: got %02X DATALENGTH %04X \n",spiRead.buffer[0],spiRead.dataLength);
         exit(1);
     }
-    setupStabilityClassifierFrs(2.5);  // used to check if bell is moving.  2.5m/s2 allows some small movement
-    setStandardOrientation();
     for(uint32_t i=0; i<sizeof(SEQUENCENUMBER); i++) SEQUENCENUMBER[i] = 0;
+    setStandardOrientation(); 
+    setupStabilityClassifierFrs(2.5);  // used to check if bell is moving.  2.5m/s2 allows some small movement
 
 }
 

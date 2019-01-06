@@ -340,11 +340,12 @@ function parseResult(dataBack) {
         if(grv == 2) document.getElementById("grvIndicator").style.backgroundColor = "#FD0";
         if(grv == 3) document.getElementById("grvIndicator").style.backgroundColor = "#0F0";
 
-        var roll  = 360-parseFloat(entries[2]);
-        var pitch = 360-parseFloat(entries[3]);
-        var yaw   = 360-parseFloat(entries[4]);
+        var roll  = 360-parseFloat(entries[1]);
+        var pitch = 360-parseFloat(entries[2]);
+        var yaw   = 360-parseFloat(entries[3]);
         document.querySelector("section").style.transform= "rotateX(" + roll + "deg) rotateZ(" + pitch + "deg) rotateY(" + yaw + "deg)";
         return;
+        // https://www.allaboutcircuits.com/projects/bosch-absolute-orientation-sensor-bno055/
 /*        var x = parseFloat(entries[2]);
         var y = parseFloat(entries[3]);
         var z = parseFloat(entries[4]);
@@ -474,9 +475,11 @@ function getAveragePullStrengths(){
         k++;
         totalPull=0;
         for (m=0;(k+m)<sample.length && (sample[k+m][0]-i) < 5; m++){ // add up accns to point 5 degrees forward from direction change
-            totalPull += sample[k+m][2] - calibrationValue*Math.sin(sample[k+m][0]*3.1416/180);
+            pull = sample[k+m][2] - calibrationValue*Math.sin(sample[k+m][0]*3.1416/180);
+            if(pull < 25) continue;  // ignore stuff below noise floor
+            totalPull += pull;
         }
-        averagePullStrength[averagePullStrength.length] = totalPull*m*sampleInterval/1000;
+        averagePullStrength[averagePullStrength.length] = totalPull/m;
     }
     for (j=0; j<halfSwingStarts.length; j++){
         i=sample[halfSwingStarts[j]][0]; // angle at direction change
@@ -484,9 +487,11 @@ function getAveragePullStrengths(){
         k++;
         totalPull=0;
         for (m=0;(k+m)<sample.length && (i-sample[k+m][0]) < 5; m++){ // add up accns to point 5 degrees forward from direction change
-            totalPull += sample[k+m][2]- calibrationValue*Math.sin(sample[k+m][0]*3.1416/180);
+            pull = sample[k+m][2]- calibrationValue*Math.sin(sample[k+m][0]*3.1416/180);
+            if(pull > -25) continue; 
+            totalPull += pull;
         }
-        halfAveragePullStrength[halfAveragePullStrength.length] = -totalPull*m*sampleInterval/1000;
+        halfAveragePullStrength[halfAveragePullStrength.length] = -totalPull/m;
     }
 }
 
