@@ -617,7 +617,6 @@ function drawStroke(){
         ctxAT.fillStyle=angleColours[angleColour];
         ctxAT.fillRect(offset + (i+0.25)*ATstepWidth -9, ctxAT.canvas.height-ATbottomMargin-powerHeight, 8, powerHeight);
         
-
         powerHeight = Math.round(pixelsPerUnit*halfAveragePullStrength[startSwing + i]);
         if (powerHeight > totalHeight) powerHeight=totalHeight;
         angleColour = Math.round(360-sample[halfSwingStarts[startSwing + i]][0] + angleColours.length/2.0);
@@ -629,7 +628,6 @@ function drawStroke(){
     }
 
 }
-
 
 function TdrawStroke(){
     if (currentSwingDisplayed == null) return;
@@ -1631,14 +1629,19 @@ function recalculateSize() {
     document.getElementById("helpIframe").style.width = (rightWidth-42) + "px";
     document.getElementById("helpIframe").style.height = (rightHeight -20) + "px";
 
-    canvasBD.width=canvasWidth;
-    canvasBD.height=canvasHeight;
-    canvasBD.style.top=10;
-    canvasBD.style.left=8;
-    canvasBDt.width=canvasWidth;
-    canvasBDt.height=canvasHeight;
-    canvasBDt.style.top=10;
-    canvasBDt.style.left=8;
+    canvasBD.style.width=canvasWidth  + "px";
+    canvasBD.style.height=canvasHeight  + "px";
+    ctxBD.canvas.width=canvasWidth;
+    ctxBD.canvas.height=canvasHeight;
+    canvasBD.style.top=10 + "px";
+    canvasBD.style.left=8 + "px";
+
+    canvasBDt.style.width=canvasWidth + "px";
+    canvasBDt.style.height=canvasHeight + "px";
+    ctxBDt.canvas.width=canvasWidth;
+    ctxBDt.canvas.height=canvasHeight;
+    canvasBDt.style.top=10 + "px";
+    canvasBDt.style.left=8 + "px";
 
     posBS2 = 0;
     BDwidth = (canvasWidth-CBwidth)/4 
@@ -1648,14 +1651,19 @@ function recalculateSize() {
     posBS1 = canvasWidth - BDwidth;
     radius = canvasHeight;
 
-    canvasAT.width=rightWidth * 2;  // scrolling display
-    canvasAT.height=Math.min(canvasHeight,rightHeight-canvasHeight-20);
-    canvasAT.style.top=(canvasHeight + 20) + (rightHeight - canvasAT.height - canvasBD.height)/2;
-    canvasAT.style.left=0;
-    canvasATt.width=rightWidth;
-    canvasATt.height=Math.min(canvasHeight,rightHeight-canvasHeight-20);
-    canvasATt.style.top=(canvasHeight + 20) + (rightHeight - canvasAT.height - canvasBD.height)/2;
-    canvasATt.style.left=0;
+    canvasAT.style.width=(rightWidth * 2)  + "px";  // scrolling display
+    canvasAT.style.height=(Math.min(canvasHeight,rightHeight-canvasHeight-20))  + "px";
+    ctxAT.canvas.width=rightWidth * 2;
+    ctxAT.canvas.height=Math.min(canvasHeight,rightHeight-canvasHeight-20);
+    canvasAT.style.top=((canvasHeight + 20) + (rightHeight - canvasAT.height - canvasBD.height)/2)  + "px";
+    canvasAT.style.left=0 + "px";
+
+    canvasATt.style.width=rightWidth  + "px";
+    canvasATt.style.height=Math.min(canvasHeight,rightHeight-canvasHeight-20)  + "px";
+    ctxATt.canvas.width=rightWidth;
+    ctxATt.canvas.height=Math.min(canvasHeight,rightHeight-canvasHeight-20);
+    canvasATt.style.top=((canvasHeight + 20) + (rightHeight - canvasAT.height - canvasBD.height)/2)  + "px";
+    canvasATt.style.left=0  + "px";
    
     ctxBD.fillStyle='rgba(0,0,255,0.1)';
     ctxBD.fillRect(posBS2,0,BDwidth,canvasBD.height);
@@ -1665,34 +1673,9 @@ function recalculateSize() {
     ctxBD.fillRect(posHS2,0,BDwidth,canvasBD.height);
     ctxBD.fillStyle='rgba(255,255,255,0.5)';
     ctxBD.fillRect(posBS1,0,BDwidth,canvasBD.height);
-//    ctxBD.fillStyle='rgba(255,0,0,0.1)';
-//    ctxBD.fillRect(posCB,0,CBwidth,canvasBD.height);
-    
-//    ctxAT.fillStyle='rgba(0,0,255,0.1)';
-//    ctxAT.fillRect(0,0,canvasAT.width,canvasAT.height);
-//    ctxATt.fillStyle='rgba(0,128,255,0.1)';
-//    ctxATt.fillRect(0,0,(canvasATt.width/2),canvasATt.height);
-
-//    ctxATBS.fillStyle='rgba(0,255,255,0.1)';
-//    ctxATBS.fillRect(0,0,canvasATBS.width,canvasATBS.height);
 
     drawFrame();
     clearAT();
-/*
-    ctx.save();
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
-    ctx.restore();
-
-    ctxHS1t.fillStyle='rgba(0,0,255,0.1)';
-    ctxHS1t.fillRect(0,0,canvasHS1t.width,canvasHS1t.height);
-    ctxHS2t.fillStyle='rgba(0,255,255,0.1)';
-    ctxHS2t.fillRect(0,0,canvasHS2t.width,canvasHS2t.height);
-    ctxBS1t.fillStyle='rgba(0,255,0,0.1)';
-    ctxBS1t.fillRect(0,0,canvasBS1t.width,canvasBS1t.height);
-    ctxBS2t.fillStyle='rgba(255,0,255,0.1)';
-    ctxBS2t.fillRect(0,0,canvasBS2t.width,canvasBS2t.height);
-*/
 }
 
 function drawFrame(){
@@ -1750,17 +1733,9 @@ function clearAT(){
     var totalHeight = ctxAT.canvas.height-ATbottomMargin-ATtopMargin;
     
     ctxATt.fillStyle="rgba(204,204,230,0.1)";
-    ctxATt.fillRect(0,0,canvasATt.width,canvasATt.height);
+    ctxATt.fillRect(0,0,ctxATt.canvas.width,ctxATt.canvas.height);
     currentATmargin=0;
     document.getElementById("canvasAT").style.marginLeft = (currentATmargin * -1) + "px";
-//    ctxATt.beginPath();
-//    ctxATt.rect(1,1,(ctxATt.canvas.width/2)-1, ctxATt.canvas.height-ATbottomMargin);
-//    var halfHeight = (ctxATt.canvas.height-ATbottomMargin)/2;
-//    ctxATt.moveTo(0,halfHeight);
-//    ctxATt.lineTo(ctxATt.canvas.width,halfHeight);
-//    ctxATt.lineWidth=1;
-//    ctxATt.strokeStyle="rgba(240,240,240,0.6)";
-//    ctxATt.stroke();
     
     ctxATt.font = "14px sans serif";
     ctxATt.fillStyle = "rgb(255,100,100)";
@@ -1771,7 +1746,6 @@ function clearAT(){
     ctxATt.fillText((scaleValue*0.75).toString(), 2, ATtopMargin+totalHeight*0.25+2);
     ctxATt.fillText((scaleValue*0.5).toString(), 2, ATtopMargin+totalHeight*0.5+2);
     ctxATt.fillText((scaleValue*0.25).toString(), 2, ATtopMargin+totalHeight*0.75+2);
-//    ctxATt.fillText("0", 0, ATtopMargin+totalHeight);
 
     ctxATt.beginPath();
     ctxATt.strokeStyle = "rgb(255,100,100)";
@@ -1785,8 +1759,6 @@ function clearAT(){
     ctxATt.lineTo(ctxATt.canvas.width, ATtopMargin+totalHeight*0.75);
     ctxATt.moveTo(0, ATtopMargin+totalHeight);
     ctxATt.lineTo(ctxATt.canvas.width, ATtopMargin+totalHeight);
-
-
 
     ctxATt.stroke();
 }
