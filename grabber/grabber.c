@@ -327,7 +327,6 @@ int main(int argc, char const *argv[]){
             }
             if(strcmp("CALI:", command) == 0) {
                 if(RUNNING) continue;
-                eraseFrsRecord(SYSTEM_ORIENTATION);
                 tareZ();
                 CALIBRATING = 1;
                 gameRotationVectorData.calibrationCount = 0;
@@ -342,7 +341,7 @@ int main(int argc, char const *argv[]){
                 continue;
             }
             if(strcmp("TEST:", command) == 0) {
-                printf("TEST:%f, %+07.1f, %+07.1f, %+07.1f\n", gameRotationVectorData.tareValue, gameRotationVectorData.lastRoll, gameRotationVectorData.lastPitch, gameRotationVectorData.lastYaw);
+                printf("TEST:%+07.3f, %+07.1f, %+07.1f, %+07.1f\n", gameRotationVectorData.tareValue, gameRotationVectorData.lastRoll, gameRotationVectorData.lastPitch, gameRotationVectorData.lastYaw);
                 continue;
             }
             if(strcmp("TARE:", command) == 0) {
@@ -866,6 +865,11 @@ void parseGameRotationVector(void){
     float roll  =  atan2(Qw * Qx + Qy * Qz, (Qw * Qw + Qz * Qz) - 0.5) * RADIANS_TO_DEGREES_MULTIPLIER;
 
     roll -= gameRotationVectorData.tareValue; 
+    if(roll > 180.0) {
+        roll -= 360.0;
+    } else if(roll < -180.0){
+        roll += 360.0;
+    }
 
     float rolldiff = roll - gameRotationVectorData.lastRoll;
     if(rolldiff > 250.0) {
@@ -1045,7 +1049,7 @@ int reorient(float w, float x, float y, float z){
     FRS_WRITE_BUFFER[2]=Z;
     FRS_WRITE_BUFFER[3]=W;
     writeFrsRecord(SYSTEM_ORIENTATION,4);
-// if we write the record then reinitialise the sensors
+// if we write the record then we reinitialise the sensors - seems to work better
     spiWrite.buffer[0] = SHTP_REPORT_COMMAND_REQUEST; // set feature
     spiWrite.buffer[1] = SEQUENCENUMBER[6]++;
     spiWrite.buffer[2] = 0x04; // Initialize command
@@ -1488,7 +1492,6 @@ void setup(void){
     for(uint32_t i=0; i<sizeof(SEQUENCENUMBER); i++) SEQUENCENUMBER[i] = 0;
     setStandardOrientation(); 
     setupStabilityClassifierFrs(2.5);  // used to check if bell is moving.  2.5m/s2 allows some small movement
-
 }
 
 int32_t collectPacket(void){
