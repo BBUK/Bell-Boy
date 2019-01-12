@@ -39,7 +39,7 @@ void saveCalibration(void);
 int reorient(float w, float x, float y, float z);
 int runtimeReorient(float w, float x, float y, float z);
 void parseEvent(void);
-void setupCalibration(char accel, char gyro, char mag);
+void setCalibration(char accel, char gyro, char mag);
 void tare(void);
 void tareZ(void);
 int readFrsRecord(uint16_t recordType);

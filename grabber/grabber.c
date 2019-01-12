@@ -98,7 +98,7 @@ unsigned int LOOPSLEEP = 1000;  // in microseconds
 unsigned int LOOPCOUNT = 0;
 char FILENAME[50];
 int RUNNING = 0;
-int CALIBRATING = 0;
+int INITIAL_SETUP = 0;
 int OUT_COUNT = 0;
 
 char READ_OUTBUF[1500];
@@ -170,7 +170,7 @@ struct {
 
 struct {
     float rateBuffer[BUFFERSIZE];
-    float accnBuffer[BUFFERSIZE];// this is just raw acceleration (for testing) the used acceleration is calculated using a Savgol filter
+    float accnBuffer[BUFFERSIZE];
     unsigned int status;
     unsigned int lastSequence;
     unsigned int head;
@@ -187,7 +187,7 @@ struct {
 struct {
     float angleBuffer[BUFFERSIZE];
     float rateBuffer[BUFFERSIZE];
-    float accnBuffer[BUFFERSIZE];
+    float accnBuffer[BUFFERSIZE];// this is just raw acceleration (for testing) the used acceleration is calculated using a Savgol filter
     unsigned int head;
     unsigned int tail;
     unsigned int available;
@@ -199,20 +199,9 @@ struct {
     float lastY;
     float lastZ;
     float tareValue;
-    float lastAngle;
-    float smoothRoll;
-    float smoothAngle;
-    float smoothRate;
-    float smoothAccn;
-    float angleXV[3];
-    float angleYV[3];
-    float rateXV[3];
-    float rateYV[3];
-    float accnXV[3];
-    float accnYV[3];
     unsigned int requestedInterval;
     unsigned int reportInterval;
-} gyroIntegratedRotationVectorData ={ .smoothAngle=0.0, .smoothRate=0.0, .smoothRoll =0.0, .smoothAccn =0.0, .head=0, .tail=0, .available=0, .tareValue=0.0 };
+} gyroIntegratedRotationVectorData ={ .head=0, .tail=0, .available=0, .tareValue=0.0 };
 
 struct {
     float angleBuffer[BUFFERSIZE];
@@ -226,7 +215,6 @@ struct {
     float lastPitch;
     float lastRoll;
     float tareValue;
-    unsigned int calibrationCount;
     unsigned int requestedInterval;
     unsigned int reportInterval;
 } gameRotationVectorData  = {.head=0, .tail=0, .available=0, .lastRoll = 0.0, .tareValue = 0.0};
@@ -300,7 +288,7 @@ int main(int argc, char const *argv[]){
     fdTare = fopen("/tmp/bb_tare","r");
     if(fdTare != NULL) {
         if (fgets(linein, sizeof(linein), fdTare) != NULL) {
-            gameRotationVectorData.tareValue = atof(linein);
+            gyroIntegratedRotationVectorData.tareValue = atof(linein);
         }
         fclose(fdTare);
     }
@@ -328,12 +316,11 @@ int main(int argc, char const *argv[]){
             if(strcmp("CALI:", command) == 0) {
                 if(RUNNING) continue;
                 tareZ();
-                CALIBRATING = 1;
-                gameRotationVectorData.calibrationCount = 0;
+                INITIAL_SETUP = 1;
                 continue;
             }
             if(strcmp("STCA:", command) == 0) {
-                CALIBRATING = 0;
+                INITIAL_SETUP = 0;
                 continue;
             }
             if(strcmp("PFRS:", command) == 0) {
@@ -341,23 +328,23 @@ int main(int argc, char const *argv[]){
                 continue;
             }
             if(strcmp("TEST:", command) == 0) {
-                printf("TEST:%+07.3f, %+07.1f, %+07.1f, %+07.1f\n", gameRotationVectorData.tareValue, gameRotationVectorData.lastRoll, gameRotationVectorData.lastPitch, gameRotationVectorData.lastYaw);
+                printf("TEST:%+07.3f, %+07.1f, %+07.1f, %+07.1f\n", gyroIntegratedRotationVectorData.tareValue, gyroIntegratedRotationVectorData.lastRoll, gyroIntegratedRotationVectorData.lastPitch, gyroIntegratedRotationVectorData.lastYaw);
                 continue;
             }
             if(strcmp("TARE:", command) == 0) {
-                gameRotationVectorData.tareValue = (gameRotationVectorData.lastRoll + gameRotationVectorData.tareValue);
+                gyroIntegratedRotationVectorData.tareValue = (gyroIntegratedRotationVectorData.lastRoll + gyroIntegratedRotationVectorData.tareValue);
                 fdTare = fopen("/tmp/bb_tare","w");
                 if(fdTare == NULL) {
                     printf("EIMU: Could not open tare file for writing\n");
                     continue;
                 } else {
-                    fprintf(fdTare,"%+07.4f\n", gameRotationVectorData.tareValue);
+                    fprintf(fdTare,"%+07.4f\n", gyroIntegratedRotationVectorData.tareValue);
                     fclose(fdTare);
                 }
                 continue;
             }
             if(strcmp("CLTA:", command) == 0) { // consider removing file too
-                gameRotationVectorData.tareValue = 0.0;
+                gyroIntegratedRotationVectorData.tareValue = 0.0;
                 fdTare = fopen("/tmp/bb_tare","w");
                 if(fdTare == NULL) {
                     printf("EIMU: Could not open tare file for writing\n");
@@ -404,7 +391,8 @@ int main(int argc, char const *argv[]){
                     printf("STRT:\n");
                     OUT_COUNT = 0;
                 }
-                CALIBRATING = 0;
+                setCalibration(0, 0, 0); // stop pesky calibration
+                INITIAL_SETUP = 0;
                 continue;
             }
             if(strcmp("STOP:", command) == 0) {
@@ -414,6 +402,7 @@ int main(int argc, char const *argv[]){
                     fd_write_out = NULL;
                 }
                 RUNNING = 0;
+                setCalibration(1, 1, 1);
                 printf("STPD:%d\n",OUT_COUNT);
                 continue;
             }
@@ -475,42 +464,42 @@ int main(int argc, char const *argv[]){
 int startRun(void){
 
 // reset fifo
-    gameRotationVectorData.head = SAVGOLHALF;
-    gameRotationVectorData.tail = 0;  // this function puts the starting angle in the fifo
-    gameRotationVectorData.available = SAVGOLHALF;
+//    gameRotationVectorData.head = SAVGOLHALF;
+//    gameRotationVectorData.tail = 0;  // this function puts the starting angle in the fifo
+//    gameRotationVectorData.available = SAVGOLHALF;
 
-    gyroData.head = SAVGOLHALF;
-    gyroData.tail = 0;
-    gyroData.available = SAVGOLHALF;
+//    gyroData.head = SAVGOLHALF;
+//    gyroData.tail = 0;
+//    gyroData.available = SAVGOLHALF;
 
     gyroIntegratedRotationVectorData.head = SAVGOLHALF;
     gyroIntegratedRotationVectorData.tail = 0;
     gyroIntegratedRotationVectorData.available = SAVGOLHALF;
 
     if(stabilityData.status != 1 && stabilityData.status != 2) {
-        printf("EMOV:%+07.1f\n",gameRotationVectorData.lastRoll); // bell is moving
+        printf("EMOV:%+07.1f\n",gyroIntegratedRotationVectorData.lastRoll); // bell is moving
         return(0);
     }
 
-    if(abs(gameRotationVectorData.lastRoll) < 160 || abs(gameRotationVectorData.lastRoll) > 178){
-        printf("ESTD:%+07.1f\n",gameRotationVectorData.lastRoll); // bell not at stand
+    if(abs(gyroIntegratedRotationVectorData.lastRoll) < 160 || abs(gyroIntegratedRotationVectorData.lastRoll) > 178){
+        printf("ESTD:%+07.1f\n",gyroIntegratedRotationVectorData.lastRoll); // bell not at stand
         return(0);
     }
     
-    if(gameRotationVectorData.lastRoll < 0) {  // this bit works out which way the bell rose and adjusts accordingly
-        gameRotationVectorData.direction = -1;
-        gameRotationVectorData.angleBuffer[0] = -180.0-gameRotationVectorData.lastRoll;
-        gyroData.direction = -1;
+    if(gyroIntegratedRotationVectorData.lastRoll < 0) {  // this bit works out which way the bell rose and adjusts accordingly
+        gyroIntegratedRotationVectorData.direction = -1;
+        gyroIntegratedRotationVectorData.angleBuffer[0] = -180.0-gyroIntegratedRotationVectorData.lastRoll;
+//        gyroData.direction = -1;
         
     } else {
-        gameRotationVectorData.direction = +1;
-        gameRotationVectorData.angleBuffer[0] = gameRotationVectorData.lastRoll-180.0;
-        gyroData.direction = +1;
+        gyroIntegratedRotationVectorData.direction = +1;
+        gyroIntegratedRotationVectorData.angleBuffer[0] = gyroIntegratedRotationVectorData.lastRoll-180.0;
+//        gyroData.direction = +1;
     }
     
     for(int i = 0; i< BUFFERSIZE; ++i){ // initialise with dummy data for savgol alignment
-        gyroData.rateBuffer[i] = 0;
-        gameRotationVectorData.angleBuffer[i] = gameRotationVectorData.angleBuffer[0];
+        gyroIntegratedRotationVectorData.rateBuffer[i] = 0;
+        gyroIntegratedRotationVectorData.angleBuffer[i] = gyroIntegratedRotationVectorData.angleBuffer[0];
     }
     
     RUNNING = 1;
@@ -521,7 +510,7 @@ void handleEvent(void){
     if(!collectPacket()) return;
     if(spiRead.dataLength != 0) {
         parseEvent();
-        alignFIFOs();
+//        alignFIFOs();
         pushData();
     }
 }
@@ -553,23 +542,22 @@ void pushData(void){
     static char outputLine[100];
     int outputCountLocal = 0;
     int outputCountRemote = 0;
-    if(gyroData.available < PUSHBATCH + SAVGOLLENGTH) return;
-    if(gameRotationVectorData.available < PUSHBATCH + SAVGOLLENGTH) return;
+    if(gyroIntegratedRotationVectorData.available < PUSHBATCH + SAVGOLLENGTH) return;
 
     for(int counter = 0; counter < PUSHBATCH; ++counter){
         sprintf(outputLine,"A:%+07.1f,R:%+07.1f,C:%+07.1f,W:%+07.1f\n", 
-            gameRotationVectorData.angleBuffer[gameRotationVectorData.tail], 
-            gyroData.rateBuffer[gyroData.tail],
-            savGol(gyroData.tail),
-            gyroData.accnBuffer[gyroData.tail]);
+            gyroIntegratedRotationVectorData.angleBuffer[gyroIntegratedRotationVectorData.tail], 
+            gyroIntegratedRotationVectorData.rateBuffer[gyroIntegratedRotationVectorData.tail],
+            savGol(gyroIntegratedRotationVectorData.tail),
+            gyroIntegratedRotationVectorData.accnBuffer[gyroData.tail]);
         outputCountLocal += sprintf(&outputLocal[outputCountLocal],outputLine);
         outputCountRemote += sprintf(&outputRemote[outputCountRemote],"LIVE:%s", outputLine);
         OUT_COUNT += 1;
-        gameRotationVectorData.tail = (gameRotationVectorData.tail + 1) % BUFFERSIZE;
-        gyroData.tail = (gyroData.tail + 1) % BUFFERSIZE;
+        gyroIntegratedRotationVectorData.tail = (gyroIntegratedRotationVectorData.tail + 1) % BUFFERSIZE;
+//        gyroData.tail = (gyroData.tail + 1) % BUFFERSIZE;
     }
-    gameRotationVectorData.available -= PUSHBATCH;
-    gyroData.available -= PUSHBATCH;
+    gyroIntegratedRotationVectorData.available -= PUSHBATCH;
+//    gyroData.available -= PUSHBATCH;
     
     printf("%s",outputRemote);
     fputs(outputLocal,fd_write_out);
@@ -582,7 +570,7 @@ float savGol(unsigned int startPosition){
     float savGolResult=0;
 
     for(int i = 0; i < SAVGOLLENGTH; ++i){
-        savGolResult += ODR*(savGolCoefficients[i] * gyroData.rateBuffer[(windowStartPosition +i) % BUFFERSIZE]);
+        savGolResult += ODR*(savGolCoefficients[i] * gyroIntegratedRotationVectorData.rateBuffer[(windowStartPosition +i) % BUFFERSIZE]);
     }
     return(savGolResult);
 }
@@ -657,7 +645,7 @@ void reportCommandResponse(void){
     switch(spiRead.buffer[2]){
         case 0x84: 
           printf("Error: device has reinitialised!\n");
-          CALIBRATING = 0;
+          INITIAL_SETUP = 0;
           runtimeReorient(0,0,0,0);
           setStandardOrientation();
           for(uint32_t i=0; i<sizeof(SEQUENCENUMBER); i++) SEQUENCENUMBER[i] = 0;
@@ -671,23 +659,6 @@ void reportCommandResponse(void){
 }
 
 void parseGyroIntegratedRotationVector(void){
-    // https://www-users.cs.york.ac.uk/~fisher/mkfilter/trad.html
-    // 200Hz sample rate 10Hz low pass == 400hz 20Hz low pass
-    static const double butterworthMagicNumber1 = 49.79245121;
-    static const double butterworthMagicNumber2 = -0.6413515381;
-    static const double butterworthMagicNumber3 = 1.5610180758;
-
-    // 400Hz sample rate 10Hz low pass
-//    static const double butterworthMagicNumber1 = 180.4169259;
-//    static const double butterworthMagicNumber2 = -0.8008026467;
-//    static const double butterworthMagicNumber3 = 1.7786317778;
-    
-    // 400Hz sample rate 5Hz low pass
-//    static const double butterworthMagicNumber1 = 180.4169259;
-//    static const double butterworthMagicNumber2 = -0.8008026467;
-//    static const double butterworthMagicNumber3 = 1.7786317778;
-    
-
     float Qx = (spiRead.buffer[1] << 8) + spiRead.buffer[0];
     float Qy = (spiRead.buffer[3] << 8) + spiRead.buffer[2];
     float Qz = (spiRead.buffer[5] << 8) + spiRead.buffer[4];
@@ -703,32 +674,27 @@ void parseGyroIntegratedRotationVector(void){
     Qz *= QP(14);
     Qw *= QP(14);
 
-// possibly did not transcribe this quaternion to angle routine well - to be checked
-
-    float r31 = 2.0 * (Qx * Qz - Qw * Qy);
-    float roll = 0;
-    float pitch = 0;
-    float yaw = 0;
-    if(abs(r31) != 1.0){
-        pitch = -asin(r31);
-        roll = atan2((2.0*(Qy * Qz - Qw * Qx)) / cos(pitch), (1.0 - (2.0*(Qx * Qx + Qy * Qy))) / cos(pitch));
-        yaw =  atan2((2.0*(Qx * Qy - Qw * Qz)) / cos(pitch), (1.0 - (2.0*(Qy * Qy + Qz * Qz))) / cos(pitch));
-    } else {
-        yaw = 0;
-        if(r31 == -1){
-            pitch = 3.1415927/2.0;
-            roll = atan2(2.0*(Qx * Qy + Qw * Qz),2.0*(Qx * Qz - Qw * Qy));
-        } else {
-            pitch = -3.1415927/2.0;
-            roll = atan2(-2.0*(Qx * Qy + Qw * Qz),-2.0*(Qx * Qz - Qw * Qy));            
-        }
-    }
-
-    roll *= RADIANS_TO_DEGREES_MULTIPLIER;
-    pitch *= RADIANS_TO_DEGREES_MULTIPLIER;
-    yaw *= RADIANS_TO_DEGREES_MULTIPLIER;
+    float yaw   =  atan2(Qx * Qy + Qw * Qz, (Qw * Qw + Qx * Qx) - 0.5) * RADIANS_TO_DEGREES_MULTIPLIER;   
+    float pitch = -asin(2.0 * (Qx * Qz - Qw * Qy)) * RADIANS_TO_DEGREES_MULTIPLIER;
+    float roll  =  atan2(Qw * Qx + Qy * Qz, (Qw * Qw + Qz * Qz) - 0.5) * RADIANS_TO_DEGREES_MULTIPLIER;
 
     roll -= gyroIntegratedRotationVectorData.tareValue; 
+    if(roll > 180.0) {
+        roll -= 360.0;
+    } else if(roll < -180.0){
+        roll += 360.0;
+    }
+
+    float rolldiff = roll - gyroIntegratedRotationVectorData.lastRoll;
+    if(rolldiff > 250.0) {
+        rolldiff -= 360.0;
+    } else if (rolldiff < -250.0) {
+        rolldiff += 360.0;
+    }
+
+    gyroIntegratedRotationVectorData.lastRoll = roll;
+    gyroIntegratedRotationVectorData.lastPitch = pitch;
+    gyroIntegratedRotationVectorData.lastYaw = yaw;
 
     float Gx = (float)((spiRead.buffer[9 ] << 8) + spiRead.buffer[8]);
     float Gy = (float)((spiRead.buffer[11] << 8) + spiRead.buffer[10]);
@@ -741,69 +707,19 @@ void parseGyroIntegratedRotationVector(void){
     Gx *= QP(10) * RADIANS_TO_DEGREES_MULTIPLIER;
     Gy *= QP(10) * RADIANS_TO_DEGREES_MULTIPLIER;
     Gz *= QP(10) * RADIANS_TO_DEGREES_MULTIPLIER;
- 
-    float rolldiff = roll - gyroIntegratedRotationVectorData.lastRoll;
-    if(rolldiff > 250.0) {
-        rolldiff -= 360.0;
-    } else if (rolldiff < -250.0) {
-        rolldiff += 360.0;
-    }
-    gyroIntegratedRotationVectorData.smoothRoll = 0.95*gyroIntegratedRotationVectorData.smoothRoll + 0.05*roll;    
-    gyroIntegratedRotationVectorData.smoothAngle = SMOOTHFACTOR*gyroIntegratedRotationVectorData.smoothAngle + (1-SMOOTHFACTOR)*(gyroIntegratedRotationVectorData.lastAngle + gyroIntegratedRotationVectorData.direction*rolldiff);
-    gyroIntegratedRotationVectorData.lastAngle = gyroIntegratedRotationVectorData.lastAngle + gyroIntegratedRotationVectorData.direction*rolldiff;
-    gyroIntegratedRotationVectorData.lastRoll = roll;
-    gyroIntegratedRotationVectorData.lastPitch = pitch;
-    gyroIntegratedRotationVectorData.lastYaw = yaw;
 
-    float noPeakAccn = (Gx-gyroIntegratedRotationVectorData.lastX)*ODR*gyroIntegratedRotationVectorData.direction;
-    if(noPeakAccn > 1000.0) noPeakAccn = 1000.0;
-    if(noPeakAccn < -1000.0) noPeakAccn = -1000.0;
-
-    gyroIntegratedRotationVectorData.smoothAccn = SMOOTHFACTOR*gyroIntegratedRotationVectorData.smoothAccn + (1-SMOOTHFACTOR)*noPeakAccn;
-    
+    float rawAccn = (Gx-gyroIntegratedRotationVectorData.lastX)*ODR*gyroIntegratedRotationVectorData.direction;
+      
     gyroIntegratedRotationVectorData.lastX = Gx;
     gyroIntegratedRotationVectorData.lastY = Gy;
     gyroIntegratedRotationVectorData.lastZ = Gz;
-    gyroIntegratedRotationVectorData.smoothRate = SMOOTHFACTOR*gyroIntegratedRotationVectorData.smoothRate + (1-SMOOTHFACTOR)*Gx*gyroIntegratedRotationVectorData.direction;
-
-    gyroIntegratedRotationVectorData.angleXV[0] = gyroIntegratedRotationVectorData.angleXV[1];
-    gyroIntegratedRotationVectorData.angleXV[1] = gyroIntegratedRotationVectorData.angleXV[2];
-    gyroIntegratedRotationVectorData.angleXV[2] = gyroIntegratedRotationVectorData.smoothAngle / butterworthMagicNumber1;
-    gyroIntegratedRotationVectorData.angleYV[0] = gyroIntegratedRotationVectorData.angleYV[1];
-    gyroIntegratedRotationVectorData.angleYV[1] = gyroIntegratedRotationVectorData.angleYV[2];
-    gyroIntegratedRotationVectorData.angleYV[2] = (gyroIntegratedRotationVectorData.angleXV[0] + gyroIntegratedRotationVectorData.angleXV[2]) +
-        2 * gyroIntegratedRotationVectorData.angleXV[1] + ( butterworthMagicNumber2 * gyroIntegratedRotationVectorData.angleYV[0]) + 
-        (  butterworthMagicNumber3 * gyroIntegratedRotationVectorData.angleYV[1]);
-    
-    gyroIntegratedRotationVectorData.rateXV[0] = gyroIntegratedRotationVectorData.rateXV[1];
-    gyroIntegratedRotationVectorData.rateXV[1] = gyroIntegratedRotationVectorData.rateXV[2];
-    gyroIntegratedRotationVectorData.rateXV[2] = gyroIntegratedRotationVectorData.smoothRate / butterworthMagicNumber1;
-    gyroIntegratedRotationVectorData.rateYV[0] = gyroIntegratedRotationVectorData.rateYV[1];
-    gyroIntegratedRotationVectorData.rateYV[1] = gyroIntegratedRotationVectorData.rateYV[2];
-    gyroIntegratedRotationVectorData.rateYV[2] = (gyroIntegratedRotationVectorData.rateXV[0] + gyroIntegratedRotationVectorData.rateXV[2]) +
-        2 * gyroIntegratedRotationVectorData.rateXV[1] + ( butterworthMagicNumber2 * gyroIntegratedRotationVectorData.rateYV[0]) + 
-        (  butterworthMagicNumber3 * gyroIntegratedRotationVectorData.rateYV[1]);
-
-    gyroIntegratedRotationVectorData.accnXV[0] = gyroIntegratedRotationVectorData.accnXV[1];
-    gyroIntegratedRotationVectorData.accnXV[1] = gyroIntegratedRotationVectorData.accnXV[2];
-    gyroIntegratedRotationVectorData.accnXV[2] = gyroIntegratedRotationVectorData.smoothAccn / butterworthMagicNumber1;
-    gyroIntegratedRotationVectorData.accnYV[0] = gyroIntegratedRotationVectorData.accnYV[1];
-    gyroIntegratedRotationVectorData.accnYV[1] = gyroIntegratedRotationVectorData.accnYV[2];
-    gyroIntegratedRotationVectorData.accnYV[2] = (gyroIntegratedRotationVectorData.accnXV[0] + gyroIntegratedRotationVectorData.accnXV[2]) +
-        2 * gyroIntegratedRotationVectorData.accnXV[1] + ( butterworthMagicNumber2 * gyroIntegratedRotationVectorData.accnYV[0]) + 
-        (  butterworthMagicNumber3 * gyroIntegratedRotationVectorData.accnYV[1]);
 
     if(!RUNNING) return;  // only push data to fifo if we are on a run
 
-    if (gyroIntegratedRotationVectorData.available == (BUFFERSIZE - 2)) {
-        printf("GIRV buffer full.  Ditching oldest sample\n");
-        gyroIntegratedRotationVectorData.tail = (gyroIntegratedRotationVectorData.tail + 1) % BUFFERSIZE;
-        gyroIntegratedRotationVectorData.available -= 1;
-    }
-            
-    gyroIntegratedRotationVectorData.rateBuffer[gyroIntegratedRotationVectorData.head] = gyroIntegratedRotationVectorData.rateYV[2];
-    gyroIntegratedRotationVectorData.accnBuffer[gyroIntegratedRotationVectorData.head] = gyroIntegratedRotationVectorData.accnYV[2];
-    gyroIntegratedRotationVectorData.angleBuffer[gyroIntegratedRotationVectorData.head] = gyroIntegratedRotationVectorData.angleYV[2];
+    unsigned int lastHead = (gyroIntegratedRotationVectorData.head == 0) ? BUFFERSIZE-1 : gyroIntegratedRotationVectorData.head -1;     
+    gyroIntegratedRotationVectorData.rateBuffer[gyroIntegratedRotationVectorData.head] = Gx * gyroIntegratedRotationVectorData.direction;
+    gyroIntegratedRotationVectorData.accnBuffer[gyroIntegratedRotationVectorData.head] = rawAccn;
+    gyroIntegratedRotationVectorData.angleBuffer[gyroIntegratedRotationVectorData.head] = gyroIntegratedRotationVectorData.angleBuffer[lastHead] + gyroIntegratedRotationVectorData.direction*rolldiff;
     gyroIntegratedRotationVectorData.head = (gyroIntegratedRotationVectorData.head + 1) % BUFFERSIZE;
     gyroIntegratedRotationVectorData.available += 1;
 }
@@ -882,13 +798,11 @@ void parseGameRotationVector(void){
     gameRotationVectorData.lastPitch = pitch;
     gameRotationVectorData.lastYaw = yaw;
     
-    if(CALIBRATING) {
-        gameRotationVectorData.calibrationCount += 1;
-        if((gameRotationVectorData.calibrationCount % PUSHBATCH) == 0) {
-            printf("CALI:%d, %+07.1f, %+07.1f, %+07.1f\n", gameRotationVectorData.status, gameRotationVectorData.lastRoll, gameRotationVectorData.lastPitch, gameRotationVectorData.lastYaw);
-        }
+    if(INITIAL_SETUP) {
+        printf("CALI:%d, %+07.1f, %+07.1f, %+07.1f\n", gameRotationVectorData.status, gyroIntegratedRotationVectorData.lastRoll, gyroIntegratedRotationVectorData.lastPitch, gyroIntegratedRotationVectorData.lastYaw);
     }
 
+/*
     if(!RUNNING) return;  // only push data to fifo if we are on a run
 
     if (gameRotationVectorData.available == (BUFFERSIZE - 2)) {
@@ -901,6 +815,7 @@ void parseGameRotationVector(void){
     gameRotationVectorData.angleBuffer[gameRotationVectorData.head] =  gameRotationVectorData.angleBuffer[lastHead] + gameRotationVectorData.direction*rolldiff;
     gameRotationVectorData.head = (gameRotationVectorData.head + 1) % BUFFERSIZE;
     gameRotationVectorData.available += 1;
+*/
 }
 
 void parseLinearAccelerometer(void){
@@ -1080,7 +995,6 @@ int reorient(float w, float x, float y, float z){
     return(0);
 }
 
-
 int runtimeReorient(float w, float x, float y, float z){
     uint16_t W = (int16_t)(w/QP(14));
     uint16_t X = (int16_t)(x/QP(14));
@@ -1153,7 +1067,7 @@ void tare(void){
     sendPacket(CHANNEL_CONTROL, 12);
 }
 
-void setupCalibration(char accel, char gyro, char mag){
+void setCalibration(char accel, char gyro, char mag){
     spiWrite.buffer[0] = SHTP_REPORT_COMMAND_REQUEST; // set feature
     spiWrite.buffer[1] = SEQUENCENUMBER[6]++; // sequence number
     spiWrite.buffer[2] = COMMAND_ME_CALIBRATE; // ME calibration
@@ -1169,8 +1083,7 @@ void setupCalibration(char accel, char gyro, char mag){
     sendPacket(CHANNEL_CONTROL, 12);
 }
 
-void saveCalibration(void){
-        
+void saveCalibration(void){        
     spiWrite.buffer[0] = SHTP_REPORT_COMMAND_REQUEST; // set feature
     spiWrite.buffer[1] = SEQUENCENUMBER[6]++; 
     spiWrite.buffer[2] = 0x06; // Save DCD
@@ -1269,7 +1182,7 @@ void printGyroIntegratedRotationVectorFRS(void){
     printf("Gamma: %f\n", FRS_READ_BUFFER[6]*QP(20));
 }
 
-// axes is one of 0x0207 (for 6 axis) or 0x0204 (for 9 axis).  9 Axis is just used for calibration
+// axes is one of 0x0207 (for 6 axis) or 0x0204 (for 9 axis).
 // rate is the rate used to update the GIRV from the more accurate rotaton vector.  It is in Hz 
 void setGyroIntegratedRotationVectorFRS(uint32_t axes, uint32_t rate, uint32_t maxError){
     if((axes != 0x0207) && (axes !=  0x0204)) return;
@@ -1409,21 +1322,20 @@ void start(uint32_t dataRate){ // set datarate to zero to stop sensors
     if(dataRate != 0) odrPeriodMicrosecs = 1000000/dataRate; 
 
 // enable calibration (we should be stationary)  // TODO: check stationary
-    setupCalibration(1,1,1);
+    setCalibration(1,1,1);
 
-//    configureFeatureReport(SENSOR_REPORTID_GYRO_INTEGRATED_ROTATION_VECTOR, odrPeriodMicrosecs);
-//    gyroIntegratedRotationVectorData.requestedInterval=odrPeriodMicrosecs;
-//    gyroIntegratedRotationVectorData.direction = 0;
+    configureFeatureReport(SENSOR_REPORTID_GYRO_INTEGRATED_ROTATION_VECTOR, odrPeriodMicrosecs);
+    gyroIntegratedRotationVectorData.requestedInterval=odrPeriodMicrosecs;
+    gyroIntegratedRotationVectorData.direction = 0;
 
     configureFeatureReport(SENSOR_REPORTID_STABILITY_CLASSIFIER, 500000);// two reports per second
     stabilityData.requestedInterval=500000;
 
-    configureFeatureReport(SENSOR_REPORTID_GAME_ROTATION_VECTOR, odrPeriodMicrosecs);
-    gameRotationVectorData.requestedInterval=odrPeriodMicrosecs;
-    gameRotationVectorData.direction=0;
+    configureFeatureReport(SENSOR_REPORTID_GAME_ROTATION_VECTOR, 100000); // just need for calibration
+    gameRotationVectorData.requestedInterval=100000;
     
-    configureFeatureReport(SENSOR_REPORTID_GYROSCOPE_CALIBRATED, odrPeriodMicrosecs);
-    gyroData.requestedInterval=odrPeriodMicrosecs;
+//    configureFeatureReport(SENSOR_REPORTID_GYROSCOPE_CALIBRATED, odrPeriodMicrosecs);
+//    gyroData.requestedInterval=odrPeriodMicrosecs;
 
 /*
     configureFeatureReport(SENSOR_REPORTID_ACCELEROMETER, odrPeriodMicrosecs);
@@ -1490,6 +1402,7 @@ void setup(void){
         exit(1);
     }
     for(uint32_t i=0; i<sizeof(SEQUENCENUMBER); i++) SEQUENCENUMBER[i] = 0;
+//    setGyroIntegratedRotationVectorFRS(0x0207, 10, 30);
     setStandardOrientation(); 
     setupStabilityClassifierFrs(2.5);  // used to check if bell is moving.  2.5m/s2 allows some small movement
 }

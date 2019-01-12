@@ -199,7 +199,7 @@ After=network.target
 [Service]
 User=root
 Type=forking
-ExecStart=/usr/bin/screen -S wrad -d -m sh -c "(/srv/http/websocketd --port=80 --staticdir=/srv/http/ /srv/http/grabber 2>&1) | tee -a /var/log/bellboy.log"
+ExecStart=/usr/bin/screen -S wrad -d -m sh -c "/srv/http/websocketd --port=80 --staticdir=/srv/http/ /srv/http/grabber"
 ExecStop=/usr/bin/screen -S wrad -X wrad
 KillMode = control-group
 TimeoutStopSec=0
