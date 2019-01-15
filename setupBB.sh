@@ -188,6 +188,26 @@ OnBootSec=40
 WantedBy=multi-user.target
 HDHD
 
+tee /etc/systemd/system/updater.service <<HDHD || { echo "Unable to write updater service file - exiting"; exit 1; }
+[Unit]
+Description=Bellboy updater service
+After=network.target
+ConditionPathExists=/boot/update.tar.gz
+
+[Service]
+Type=forking
+PIDFile=/run/updater.pid
+ExecStartPre=-/usr/bin/rm -Rf /root/updater
+ExecStartPre=-/usr/bin/mkdir /root/updater
+ExecStartPre=/usr/bin/tar -xvzf /boot/update.tar.gz -C /root/updater/
+ExecStartPre=/usr/bin/chmod a+x /root/updater/update.sh
+ExecStart=/usr/bin/sh -c "/root/updater/update.sh"
+KillSignal=SIGINT
+
+[Install]
+WantedBy=multi-user.target
+HDHD
+
 wget https://github.com/joewalnes/websocketd/releases/download/v0.3.0/websocketd-0.3.0-linux_arm.zip
 unzip websocketd-0.3.0-linux_arm.zip || { echo "Unable to extract websocketd executable. Exiting"; exit 1; }
 mv ./websocketd /srv/http/ || { echo "Could not find websocketd executable. Exiting"; exit 1; }
@@ -294,12 +314,12 @@ HDHD
 ## HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\LanmanWorkstation\Parameters AllowInsecureGuestAuth REG_DWORD -> 1
 ## https://serverfault.com/questions/731038/windows-10-keeps-asking-for-authentication-for-public-samba-share
 
-
 systemctl enable bellboy
 systemctl enable ap0.timer
 systemctl enable ap1.timer
 systemctl enable smb nmb
 systemctl enable 32kHz
+systemctl enable updater
 
 cp ~/Bell-Boy/images/imagepack.zip /srv/http
 cd /srv/http
