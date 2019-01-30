@@ -1,4 +1,4 @@
-//gcc BNO-general.c -o BNO-general -lm -lbcm2835
+//gcc BNO080-general.c -o BNO-general -lm -lbcm2835
 
 /*
  * Copyright (c) 2017,2018 Peter Budd. All rights reserved
@@ -818,7 +818,7 @@ void setup(void){
     if(waitCount == 1000)  {printf("Device did not wake on reset\n"); exit(1);}
     if(!collectPacket()) {printf("Reset packet not received\n"); exit(1);}
 
-    usleep(5000);
+    usleep(10000);
     if(!collectPacket()) {printf("Unsolicited packet not received\n"); exit(1);}
 
     spiWrite.buffer[0] = SHTP_REPORT_PRODUCT_ID_REQUEST; //Request the product ID and reset info

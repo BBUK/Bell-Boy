@@ -1388,7 +1388,7 @@ void setup(void){
     if(waitCount == 1000)  {printf("EIMU: Device did not wake on reset\n");}
     if(!collectPacket()) {printf("EIMU: Reset packet not received\n");}
 
-    usleep(5000);
+    usleep(10000);
     if(!collectPacket()) {printf("EIMU:Unsolicited packet not received\n");}
 
     spiWrite.buffer[0] = SHTP_REPORT_PRODUCT_ID_REQUEST; //Request the product ID and reset info
@@ -1439,6 +1439,7 @@ int32_t collectPacket(void){
     spiRead.dataLength = (uint16_t)spiRead.buffer[1] << 8 | (uint16_t)spiRead.buffer[0];
     spiRead.sequence = spiRead.buffer[3];
     spiRead.channel = spiRead.buffer[2];
+    
     if(spiRead.dataLength == 0) return(0); // nothing collected
 //    if(spiRead.dataLength > 0x7FFF) printf("Continuation\n"); 
     spiRead.dataLength = spiRead.dataLength & ~(1 << 15); //Clear the MSbit - no idea what to do with a continuation (yuk)
