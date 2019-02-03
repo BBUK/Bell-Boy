@@ -1,7 +1,7 @@
 //gcc BNO080-general.c -o BNO-general -lm -lbcm2835
 
 /*
- * Copyright (c) 2017,2018 Peter Budd. All rights reserved
+ * Copyright (c) 2017,2018,2019 Peter Budd. All rights reserved
  * Permission is hereby granted, free of charge, to any person obtaining a copy of this software and
  * associated documentation files (the "Software"), to deal in the Software without restriction,
  * including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense,
@@ -455,10 +455,6 @@ void parseStabilisedGameRotationVector(void){
 }
 
 void clearPersistentTare(void){
-//    writeFrsWord(SYSTEM_ORIENTATION,0,0);
-//    writeFrsWord(SYSTEM_ORIENTATION,1,0);
-//    writeFrsWord(SYSTEM_ORIENTATION,2,0);
-//    writeFrsWord(SYSTEM_ORIENTATION,3,0);
     reorient(0,0,0,0);
     eraseFrsRecord(SYSTEM_ORIENTATION);
       
@@ -811,21 +807,26 @@ void setup(void){
     usleep(20000);
     bcm2835_gpio_set(RESETGPIO);
     int waitCount = 0;
-    while ((bcm2835_gpio_lev(INTGPIO) == 1) && (waitCount < 1000)){ // should only be called when int is low so not really needed
+    while ((bcm2835_gpio_lev(INTGPIO) == 1) && (waitCount < 1000)){
         usleep(500);
         waitCount += 1;
     }
     if(waitCount == 1000)  {printf("Device did not wake on reset\n"); exit(1);}
     if(!collectPacket()) {printf("Reset packet not received\n"); exit(1);}
 
-    usleep(10000);
-    if(!collectPacket()) {printf("Unsolicited packet not received\n"); exit(1);}
+    waitCount = 0;
+    while ((bcm2835_gpio_lev(INTGPIO) == 1) && (waitCount < 100)){
+        usleep(1000);
+        waitCount += 1;
+    }
+    if(waitCount == 100 || !collectPacket()) {printf("EIMU:Unsolicited packet not received\n"); exit(1);}
+
 
     spiWrite.buffer[0] = SHTP_REPORT_PRODUCT_ID_REQUEST; //Request the product ID and reset info
     spiWrite.buffer[1] = 0; //Reserved
     if(!sendPacket(CHANNEL_CONTROL, 2)) {printf("Cannot send ID request\n"); exit(1);}
 
-    if(!collectPacket()) {printf("Cannot receive ID response"); exit(1);}
+    if(!collectPacket()) {printf("Cannot receive ID response\n"); exit(1);}
     
     if(spiRead.buffer[0] != SHTP_REPORT_PRODUCT_ID_RESPONSE){
         printf("Cannot communicate with BNO080: got %02X DATALENGTH %04X \n",spiRead.buffer[0],spiRead.dataLength);

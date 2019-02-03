@@ -1,7 +1,7 @@
 //gcc grabber.c -o grabber -lm -lbcm2835
 
 /*
- * Copyright (c) 2017,2018 Peter Budd. All rights reserved
+ * Copyright (c) 2017,2018,2019 Peter Budd. All rights reserved
  * Permission is hereby granted, free of charge, to any person obtaining a copy of this software and
  * associated documentation files (the "Software"), to deal in the Software without restriction,
  * including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense,
@@ -74,8 +74,6 @@
 #define SAVGOLHALF 15 // = math.floor(SAVGOLLENGTH/2.0)
 #define BUFFERSIZE 80 // must be bigger than PUSHBATCH + SAVGOLLENGTH
 #define R2O2 (sqrt(2)/2.0)
-
-#define SMOOTHFACTOR 0.75
 
 char READ_OUTBUF[1500];
 
@@ -1381,21 +1379,25 @@ void setup(void){
     usleep(20000);
     bcm2835_gpio_set(RESETGPIO);
     int waitCount = 0;
-    while ((bcm2835_gpio_lev(INTGPIO) == 1) && (waitCount < 1000)){ // should only be called when int is low so not really needed
+    while ((bcm2835_gpio_lev(INTGPIO) == 1) && (waitCount < 1000)){
         usleep(500);
         waitCount += 1;
     }
     if(waitCount == 1000)  {printf("EIMU: Device did not wake on reset\n");}
     if(!collectPacket()) {printf("EIMU: Reset packet not received\n");}
 
-    usleep(10000);
-    if(!collectPacket()) {printf("EIMU:Unsolicited packet not received\n");}
+    waitCount = 0;
+    while ((bcm2835_gpio_lev(INTGPIO) == 1) && (waitCount < 100)){
+        usleep(1000);
+        waitCount += 1;
+    }
+    if(waitCount == 100 || !collectPacket()) {printf("EIMU:Unsolicited packet not received\n");}
 
     spiWrite.buffer[0] = SHTP_REPORT_PRODUCT_ID_REQUEST; //Request the product ID and reset info
     spiWrite.buffer[1] = 0; //Reserved
     if(!sendPacket(CHANNEL_CONTROL, 2)) {printf("EIMU:Cannot send ID request\n");}
 
-    if(!collectPacket()) {printf("EIMU:Cannot receive ID response");}
+    if(!collectPacket()) {printf("EIMU:Cannot receive ID response\n");}
     
     if(spiRead.buffer[0] != SHTP_REPORT_PRODUCT_ID_RESPONSE){
         printf("EIMU: Cannot communicate with BNO080: got %02X DATALENGTH %04X \n",spiRead.buffer[0],spiRead.dataLength);
