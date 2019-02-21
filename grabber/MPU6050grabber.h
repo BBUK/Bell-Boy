@@ -36,61 +36,6 @@ float MPU6050_timer(int);
 float MPU6050_get_orientation(void);
 float savGol(unsigned int startPosition);
 
-
-#define NXP_GYRO_I2C_ADDRESS             0x21
-#define NXP_GYRO_ID                  0xD7
-#define NXP_GYRO_SENSITIVITY_250DPS  0.0078125
-#define NXP_GYRO_SENSITIVITY_500DPS  0.015625  
-#define NXP_GYRO_SENSITIVITY_1000DPS 0.03125   
-#define NXP_GYRO_REGISTER_STATUS              0x00
-#define NXP_GYRO_REGISTER_OUT_X_MSB           0x01
-#define NXP_GYRO_REGISTER_OUT_X_LSB           0x02
-#define NXP_GYRO_REGISTER_OUT_Y_MSB           0x03
-#define NXP_GYRO_REGISTER_OUT_Y_LSB           0x04
-#define NXP_GYRO_REGISTER_OUT_Z_MSB           0x05
-#define NXP_GYRO_REGISTER_OUT_Z_LSB           0x06
-#define NXP_GYRO_REGISTER_DR_STATUS           0x07
-#define NXP_GYRO_REGISTER_F_STATUS           0x08
-#define NXP_GYRO_REGISTER_F_SETUP           0x09
-#define NXP_GYRO_REGISTER_F_EVENT           0x0A
-#define NXP_GYRO_REGISTER_WHO_AM_I            0x0C   
-#define NXP_GYRO_REGISTER_CTRL_REG0           0x0D   
-#define NXP_GYRO_REGISTER_CTRL_REG1           0x13   
-#define NXP_GYRO_REGISTER_CTRL_REG2           0x14   
-
-
-#define NXP_ACCEL_I2C_ADDRESS 0x1F
-#define NXP_ACCEL_ID 0xC7
-#define NXP_ACCEL_SENSITIVITY_2G 0.000244
-#define NXP_ACCEL_SENSITIVITY_4G 0.000488
-#define NXP_ACCEL_SENSITIVITY_8G 0.000976
-#define NXP_ACCEL_REGISTER_STATUS          0x00
-#define NXP_ACCEL_REGISTER_OUT_X_MSB       0x01
-#define NXP_ACCEL_REGISTER_OUT_X_LSB       0x02
-#define NXP_ACCEL_REGISTER_OUT_Y_MSB       0x03
-#define NXP_ACCEL_REGISTER_OUT_Y_LSB       0x04
-#define NXP_ACCEL_REGISTER_OUT_Z_MSB       0x05
-#define NXP_ACCEL_REGISTER_OUT_Z_LSB       0x06
-#define NXP_ACCEL_REGISTER_F_SETUP         0x09
-#define NXP_ACCEL_REGISTER_WHO_AM_I        0x0D
-#define NXP_ACCEL_REGISTER_XYZ_DATA_CFG    0x0E
-#define NXP_ACCEL_REGISTER_CTRL_REG1       0x2A
-#define NXP_ACCEL_REGISTER_CTRL_REG2       0x2B
-#define NXP_ACCEL_REGISTER_CTRL_REG3       0x2C
-#define NXP_ACCEL_REGISTER_CTRL_REG4       0x2D
-#define NXP_ACCEL_REGISTER_CTRL_REG5       0x2E
-#define NXP_ACCEL_REGISTER_MSTATUS         0x32
-#define NXP_ACCEL_REGISTER_MOUT_X_MSB      0x33
-#define NXP_ACCEL_REGISTER_MOUT_X_LSB      0x34
-#define NXP_ACCEL_REGISTER_MOUT_Y_MSB      0x35
-#define NXP_ACCEL_REGISTER_MOUT_Y_LSB      0x36
-#define NXP_ACCEL_REGISTER_MOUT_Z_MSB      0x37
-#define NXP_ACCEL_REGISTER_MOUT_Z_LSB      0x38
-#define NXP_ACCEL_REGISTER_TEMP            0x51
-#define NXP_ACCEL_REGISTER_MCTRL_REG1      0x5B
-#define NXP_ACCEL_REGISTER_MCTRL_REG2      0x5C
-#define NXP_ACCEL_REGISTER_MCTRL_REG3      0x5D
-
 #define MPU6050_RA_XG_OFFS_TC 0x00
 #define MPU6050_RA_YG_OFFS_TC 0x01
 #define MPU6050_RA_ZG_OFFS_TC 0x02
@@ -251,3 +196,9 @@ extern __s32 i2c_smbus_block_process_call(int file, __u8 command, __u8 length,
                       __u8 *values);
 
 #endif /* LIB_I2C_SMBUS_H */
+
+unsigned char read_byte_data(unsigned char i2cAddress, unsigned char i2cRegister);
+void write_byte_data(unsigned char i2cAddress, unsigned char i2cRegister, unsigned char data);
+void read_data_burst(unsigned char i2cAddress, unsigned char i2cRegister, unsigned char length, unsigned char *retval);
+
+

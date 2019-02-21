@@ -1,4 +1,4 @@
-//gcc MPU6050grabber.c -o grabber -lm -lbcm2835
+//gcc MPU6050grabber.c -o grabber -lm
 
 /*
  * Copyright (c) 2017,2018,2019 Peter Budd. All rights reserved
@@ -36,7 +36,6 @@
 #include <linux/i2c-dev.h>
 #include <dirent.h>
 #include "MPU6050grabber.h"
-#include <bcm2835.h>
 
 #ifndef NULL
 #define NULL 0
@@ -67,6 +66,8 @@
 #define MPU6050_2_I2C_ADDRESS 0x69
 
 FILE *fd_write_out;
+int MPU6050_1_fd = -1;
+int MPU6050_2_fd = -1;
 
 float yaw = 0.0;
 float pitch = 0.0;
@@ -107,7 +108,7 @@ float zscale_2 = 1.0;
 
 char FILENAME[50];
 
-int LOOPSLEEP = 100000; // sleep for 0.1 of a second unless actively sampling then sleep 400000/ODR
+int LOOPSLEEP = 100000; // sleep for 0.1 of a second unless actively sampling then sleep 4000000/ODR
 
 volatile sig_atomic_t sig_exit = 0;
 void sig_handler(int signum) {
@@ -171,12 +172,13 @@ void sig_handler(int signum) {
 #define PUSHBATCH 20 // number of samples taken before pushing out
 #define SAVGOLLENGTH  31
 #define SAVGOLHALF 15 // = math.floor(SAVGOLLENGTH/2.0)
-#define BUFFERSIZE 80 // must be bigger than PUSHBATCH + SAVGOLLENGTH
+#define BUFFERSIZE 256 // must be bigger than PUSHBATCH + SAVGOLLENGTH
 unsigned int head;
 unsigned int tail;
 unsigned int available;
 float angleBuffer[BUFFERSIZE];
 float rateBuffer[BUFFERSIZE];
+float accnBuffer[BUFFERSIZE];
 
 const float savGolCoefficients[] = {
     -6.04838710e-03, -5.64516129e-03, -5.24193548e-03, -4.83870968e-03,
@@ -188,6 +190,7 @@ const float savGolCoefficients[] = {
     3.62903226e-03,   4.03225806e-03,  4.43548387e-03,  4.83870968e-03,
     5.24193548e-03,   5.64516129e-03,  6.04838710e-03};
 
+
 int main(int argc, char const *argv[]){
     char linein[50];
     char command[6];
@@ -198,6 +201,7 @@ int main(int argc, char const *argv[]){
     float shutdowncount = 0.0;
     FILE *shutdowncheck;
 
+    
     struct sigaction sig_action;
     memset(&sig_action, 0, sizeof(struct sigaction));
     sig_action.sa_handler = sig_handler;
@@ -231,13 +235,11 @@ int main(int argc, char const *argv[]){
         return -1;
     }
     
-    bcm2835_init();
-    bcm2835_i2c_begin();
-    bcm2835_i2c_set_baudrate(100000);
-    if(MPU6050_test() != 0){
-        printf("EIMU:\n");
-        return -1;
-    }
+     
+//    if(MPU6050_test() != 0){
+//        printf("EIMU:\n");
+//        return -1;
+//    }
     
     FILE *fd_read_cal;
     fd_read_cal = fopen("/boot/bb_calibrations","r");
@@ -363,7 +365,6 @@ int main(int argc, char const *argv[]){
                     GYRO_BIAS_1[1] = -GYRO_BIAS_1[1];
                     GYRO_BIAS_2[0] = -GYRO_BIAS_2[0];
                     GYRO_BIAS_2[1] = -GYRO_BIAS_2[1];
-
                 }
                 if(start_angle < -20){
                     printf("ESTD:\n"); // bell out of range for stand
@@ -392,6 +393,7 @@ int main(int argc, char const *argv[]){
                         for(int i = 0; i< BUFFERSIZE; ++i){ // initialise with dummy data for savgol alignment
                             rateBuffer[i] = 0;
                             angleBuffer[i] = roll-SIDEMOUNT;
+                            accnBuffer[i] = 0;
                         }
                         head = SAVGOLHALF;
                         tail = 0;
@@ -464,18 +466,46 @@ int main(int argc, char const *argv[]){
     }
     MPU6050_stop_fifos();
     system("/usr/bin/touch /var/lib/systemd/clock");
-    bcm2835_i2c_end();
-    bcm2835_close();
     return 0;
 }
 
 int MPU6050_test(void){
-    if (read_byte_data(MPU6050_1_I2C_ADDRESS, MPU6050_RA_WHO_AM_I) != 104) {
+    if (MPU6050_1_fd != -1) return -10;
+    if ((MPU6050_1_fd = open(I2CDEV, O_RDWR)) < 0) {
+        MPU6050_1_fd = -1;
         return -1;
     }
-    if (read_byte_data(MPU6050_2_I2C_ADDRESS, MPU6050_RA_WHO_AM_I) != 104) {
-        return -1;
+    if (ioctl(MPU6050_1_fd, I2C_SLAVE, MPU6050_1_I2C_ADDRESS) < 0) {
+        close(MPU6050_1_fd);
+        MPU6050_1_fd = -1;
+        return -2;
     }
+    if (i2c_smbus_read_byte_data(MPU6050_1_fd, MPU6050_RA_WHO_AM_I) != 104) {
+        close(MPU6050_1_fd);
+        MPU6050_1_fd = -1;
+        return -3;
+    }
+    close(MPU6050_1_fd);
+    MPU6050_1_fd = -1;
+
+    if (MPU6050_2_fd != -1) return -11;
+    if ((MPU6050_2_fd = open(I2CDEV, O_RDWR)) < 0) {
+        MPU6050_2_fd = -1;
+        return -4;
+    }
+    if (ioctl(MPU6050_2_fd, I2C_SLAVE, MPU6050_2_I2C_ADDRESS) < 0) {
+        close(MPU6050_2_fd);
+        MPU6050_2_fd = -1;
+        return -5;
+    }
+    if (i2c_smbus_read_byte_data(MPU6050_2_fd, MPU6050_RA_WHO_AM_I) != 104){
+        close(MPU6050_2_fd);
+        MPU6050_2_fd = -1;
+        return -6;
+    }
+    close(MPU6050_2_fd);
+    MPU6050_2_fd = -1;
+
     return 0;
 }
 
@@ -485,8 +515,8 @@ int MPU6050_fifo_timer(void){
         MPU6050_stop_fifos();
         return -1;
     }
-    result1 = MPU6050_timer(MPU6050_1_I2C_ADDRESS);
-    result2 = MPU6050_timer(MPU6050_2_I2C_ADDRESS);
+    result1 = MPU6050_timer(MPU6050_1_fd);
+    result2 = MPU6050_timer(MPU6050_2_fd);
     MPU6050_stop_fifos();
     sample_period = (result1 > result2) ? result1 : result2;
     return 0;
@@ -520,6 +550,7 @@ float MPU6050_timer(int dfd){
     return result/(30*loops);
 }
 
+
 float MPU6050_get_orientation(void){
     int count;
     float u0=0.0, u1=0.0, u2=0.0, z0=0.0, z1=0.0, z2=0.0;
@@ -531,8 +562,8 @@ float MPU6050_get_orientation(void){
     }
 
     usleep(50000); // ditch a few samples
-    while (MPU6050_read_fifo_count(MPU6050_2_I2C_ADDRESS) != 0) MPU6050_read_fifo_data(MPU6050_2_I2C_ADDRESS, fifo_returns);
-    while (MPU6050_read_fifo_count(MPU6050_1_I2C_ADDRESS) != 0) MPU6050_read_fifo_data(MPU6050_1_I2C_ADDRESS, fifo_returns);
+    while (MPU6050_read_fifo_count(MPU6050_2_fd) != 0) MPU6050_read_fifo_data(MPU6050_2_fd, fifo_returns);
+    while (MPU6050_read_fifo_count(MPU6050_1_fd) != 0) MPU6050_read_fifo_data(MPU6050_1_fd, fifo_returns);
 
     GYRO_BIAS_1[0] = 0.0;
     GYRO_BIAS_1[1] = 0.0;
@@ -542,8 +573,8 @@ float MPU6050_get_orientation(void){
     GYRO_BIAS_2[2] = 0.0;
  
     for(count = 0; count < 100; ++count){
-        while (MPU6050_read_fifo_count(MPU6050_2_I2C_ADDRESS) == 0) usleep(5000);
-        MPU6050_read_fifo_data(MPU6050_2_I2C_ADDRESS, fifo_returns);
+        while (MPU6050_read_fifo_count(MPU6050_2_fd) == 0) usleep(5000);
+        MPU6050_read_fifo_data(MPU6050_2_fd, fifo_returns);
 
         z0 += fifo_returns[0];
         z1 += fifo_returns[1];
@@ -552,8 +583,8 @@ float MPU6050_get_orientation(void){
         u1 += fifo_returns[4];
         u2 += fifo_returns[5];
         
-        while (MPU6050_read_fifo_count(MPU6050_1_I2C_ADDRESS) == 0) usleep(5000);
-        MPU6050_read_fifo_data(MPU6050_1_I2C_ADDRESS, fifo_returns);
+        while (MPU6050_read_fifo_count(MPU6050_1_fd) == 0) usleep(5000);
+        MPU6050_read_fifo_data(MPU6050_1_fd, fifo_returns);
         GYRO_BIAS_1[0] += fifo_returns[3];
         GYRO_BIAS_1[1] += fifo_returns[4];
         GYRO_BIAS_1[2] += fifo_returns[5];
@@ -582,79 +613,101 @@ float MPU6050_get_orientation(void){
 }
 
 int MPU6050_start_fifos(int ODR, int gyro_fs, int accel_fs){
+    if (MPU6050_1_fd != -1) return -1;
+    if ((MPU6050_1_fd = open(I2CDEV, O_RDWR)) < 0) {
+        MPU6050_1_fd = -1;
+        return -1;
+    }
+    if (ioctl(MPU6050_1_fd, I2C_SLAVE, MPU6050_1_I2C_ADDRESS) < 0) {
+        close(MPU6050_1_fd);
+        MPU6050_1_fd = -1;
+        return -1;
+    }
+
+    if (MPU6050_2_fd != -1) return -1;
+    if ((MPU6050_2_fd = open(I2CDEV, O_RDWR)) < 0) {
+        MPU6050_2_fd = -1;
+        return -1;
+    }
+    if (ioctl(MPU6050_2_fd, I2C_SLAVE, MPU6050_2_I2C_ADDRESS) < 0) {
+        close(MPU6050_2_fd);
+        MPU6050_2_fd = -1;
+        return -1;
+    }
+
     // reset device
-    __u8 rtemp = read_byte_data(MPU6050_1_I2C_ADDRESS, MPU6050_RA_PWR_MGMT_1);
-    write_byte_data(MPU6050_1_I2C_ADDRESS, MPU6050_RA_PWR_MGMT_1, rtemp | 0x80);
-    rtemp = read_byte_data(MPU6050_2_I2C_ADDRESS, MPU6050_RA_PWR_MGMT_1);
-    write_byte_data(MPU6050_2_I2C_ADDRESS, MPU6050_RA_PWR_MGMT_1, rtemp | 0x80);
+    __u8 rtemp = i2c_smbus_read_byte_data(MPU6050_1_fd, MPU6050_RA_PWR_MGMT_1);
+    i2cWriteByteData(MPU6050_1_fd, MPU6050_RA_PWR_MGMT_1, rtemp | 0x80);
+    rtemp = i2c_smbus_read_byte_data(MPU6050_2_fd, MPU6050_RA_PWR_MGMT_1);
+    i2cWriteByteData(MPU6050_2_fd, MPU6050_RA_PWR_MGMT_1, rtemp | 0x80);
     usleep(500000);
 
     // take out of sleep
-    rtemp = read_byte_data(MPU6050_1_I2C_ADDRESS, MPU6050_RA_PWR_MGMT_1);
-    write_byte_data(MPU6050_1_I2C_ADDRESS, MPU6050_RA_PWR_MGMT_1, rtemp & 0xBF);
-    rtemp = read_byte_data(MPU6050_2_I2C_ADDRESS, MPU6050_RA_PWR_MGMT_1);
-    write_byte_data(MPU6050_2_I2C_ADDRESS, MPU6050_RA_PWR_MGMT_1, rtemp & 0xBF);
+    rtemp = i2c_smbus_read_byte_data(MPU6050_1_fd, MPU6050_RA_PWR_MGMT_1);
+    i2cWriteByteData(MPU6050_1_fd, MPU6050_RA_PWR_MGMT_1, rtemp & 0xBF);
+    rtemp = i2c_smbus_read_byte_data(MPU6050_2_fd, MPU6050_RA_PWR_MGMT_1);
+    i2cWriteByteData(MPU6050_2_fd, MPU6050_RA_PWR_MGMT_1, rtemp & 0xBF);
 
     // set clock source to xgyro
-    rtemp = read_byte_data(MPU6050_1_I2C_ADDRESS, MPU6050_RA_PWR_MGMT_1) & 0xF8;
-    write_byte_data(MPU6050_1_I2C_ADDRESS, MPU6050_RA_PWR_MGMT_1, rtemp | 0x01);
-    rtemp = read_byte_data(MPU6050_2_I2C_ADDRESS, MPU6050_RA_PWR_MGMT_1) & 0xF8;
-    write_byte_data(MPU6050_2_I2C_ADDRESS, MPU6050_RA_PWR_MGMT_1, rtemp | 0x01);
+    rtemp = i2c_smbus_read_byte_data(MPU6050_1_fd, MPU6050_RA_PWR_MGMT_1) & 0xF8;
+    i2cWriteByteData(MPU6050_1_fd, MPU6050_RA_PWR_MGMT_1, rtemp | 0x01); //0x04
+    rtemp = i2c_smbus_read_byte_data(MPU6050_2_fd, MPU6050_RA_PWR_MGMT_1) & 0xF8;
+    i2cWriteByteData(MPU6050_2_fd, MPU6050_RA_PWR_MGMT_1, rtemp | 0x01); //0x04
 
     switch(accel_fs){
         case 4:
-            write_byte_data(MPU6050_1_I2C_ADDRESS,MPU6050_RA_ACCEL_CONFIG, 0x08);  
-            write_byte_data(MPU6050_2_I2C_ADDRESS,MPU6050_RA_ACCEL_CONFIG, 0x08);
+            i2cWriteByteData(MPU6050_1_fd,MPU6050_RA_ACCEL_CONFIG, 0x08);  
+            i2cWriteByteData(MPU6050_2_fd,MPU6050_RA_ACCEL_CONFIG, 0x08);
             MPU6050_accel_scale_factor = MPU6050_ACCEL_SCALE_MODIFIER_4G;
             break;
         case 2:
-            write_byte_data(MPU6050_1_I2C_ADDRESS,MPU6050_RA_ACCEL_CONFIG, 0x00);  
-            write_byte_data(MPU6050_2_I2C_ADDRESS,MPU6050_RA_ACCEL_CONFIG, 0x00);
+            i2cWriteByteData(MPU6050_1_fd,MPU6050_RA_ACCEL_CONFIG, 0x00);  
+            i2cWriteByteData(MPU6050_2_fd,MPU6050_RA_ACCEL_CONFIG, 0x00);
             MPU6050_accel_scale_factor = MPU6050_ACCEL_SCALE_MODIFIER_2G;
     }
 
     switch(gyro_fs){
         case 1000:
-            write_byte_data(MPU6050_1_I2C_ADDRESS,MPU6050_RA_GYRO_CONFIG, 0x10);  
-            write_byte_data(MPU6050_2_I2C_ADDRESS,MPU6050_RA_GYRO_CONFIG, 0x10);
+            i2cWriteByteData(MPU6050_1_fd,MPU6050_RA_GYRO_CONFIG, 0x10);  
+            i2cWriteByteData(MPU6050_2_fd,MPU6050_RA_GYRO_CONFIG, 0x10);
             MPU6050_gyro_scale_factor = MPU6050_GYRO_SCALE_MODIFIER_1000DEG;
             break;
         case 500:
-            write_byte_data(MPU6050_1_I2C_ADDRESS,MPU6050_RA_GYRO_CONFIG, 0x08);  
-            write_byte_data(MPU6050_2_I2C_ADDRESS,MPU6050_RA_GYRO_CONFIG, 0x08);
+            i2cWriteByteData(MPU6050_1_fd,MPU6050_RA_GYRO_CONFIG, 0x08);  
+            i2cWriteByteData(MPU6050_2_fd,MPU6050_RA_GYRO_CONFIG, 0x08);
             MPU6050_gyro_scale_factor = MPU6050_GYRO_SCALE_MODIFIER_500DEG;
             break;
         }
 
     // LPF to 188Hz
-    write_byte_data(MPU6050_1_I2C_ADDRESS, MPU6050_RA_CONFIG, 0x01);
-    write_byte_data(MPU6050_2_I2C_ADDRESS, MPU6050_RA_CONFIG, 0x01);
+    i2cWriteByteData(MPU6050_1_fd, MPU6050_RA_CONFIG, 0x01);
+    i2cWriteByteData(MPU6050_2_fd, MPU6050_RA_CONFIG, 0x01);
 
     switch(ODR){
         case 500:
-            write_byte_data(MPU6050_1_I2C_ADDRESS,MPU6050_RA_SMPLRT_DIV, 1);
-            write_byte_data(MPU6050_2_I2C_ADDRESS,MPU6050_RA_SMPLRT_DIV, 1);
+            i2cWriteByteData(MPU6050_1_fd,MPU6050_RA_SMPLRT_DIV, 1);
+            i2cWriteByteData(MPU6050_2_fd,MPU6050_RA_SMPLRT_DIV, 1);
             break;
         case 200:
-            write_byte_data(MPU6050_1_I2C_ADDRESS,MPU6050_RA_SMPLRT_DIV, 4);
-            write_byte_data(MPU6050_2_I2C_ADDRESS,MPU6050_RA_SMPLRT_DIV, 4);
+            i2cWriteByteData(MPU6050_1_fd,MPU6050_RA_SMPLRT_DIV, 4);
+            i2cWriteByteData(MPU6050_2_fd,MPU6050_RA_SMPLRT_DIV, 4);
             break;
         case 100:
-            write_byte_data(MPU6050_1_I2C_ADDRESS,MPU6050_RA_SMPLRT_DIV, 9);
-            write_byte_data(MPU6050_2_I2C_ADDRESS,MPU6050_RA_SMPLRT_DIV, 9);
+            i2cWriteByteData(MPU6050_1_fd,MPU6050_RA_SMPLRT_DIV, 9);
+            i2cWriteByteData(MPU6050_2_fd,MPU6050_RA_SMPLRT_DIV, 9);
             break;
         case 50:
-            write_byte_data(MPU6050_1_I2C_ADDRESS,MPU6050_RA_SMPLRT_DIV, 19);
-            write_byte_data(MPU6050_2_I2C_ADDRESS,MPU6050_RA_SMPLRT_DIV, 19);
+            i2cWriteByteData(MPU6050_1_fd,MPU6050_RA_SMPLRT_DIV, 19);
+            i2cWriteByteData(MPU6050_2_fd,MPU6050_RA_SMPLRT_DIV, 19);
             break;
     }    
     // select accel and gyro to go into FIFO
-    write_byte_data(MPU6050_1_I2C_ADDRESS,MPU6050_RA_FIFO_EN, 0x78);
-    write_byte_data(MPU6050_2_I2C_ADDRESS,MPU6050_RA_FIFO_EN, 0x78);
+    i2cWriteByteData(MPU6050_1_fd,MPU6050_RA_FIFO_EN, 0x78);
+    i2cWriteByteData(MPU6050_2_fd,MPU6050_RA_FIFO_EN, 0x78);
 
     // start FIFO
-    write_byte_data(MPU6050_1_I2C_ADDRESS, MPU6050_RA_USER_CTRL, 0x40);
-    write_byte_data(MPU6050_2_I2C_ADDRESS, MPU6050_RA_USER_CTRL, 0x40);
+    i2cWriteByteData(MPU6050_1_fd, MPU6050_RA_USER_CTRL, 0x40);
+    i2cWriteByteData(MPU6050_2_fd, MPU6050_RA_USER_CTRL, 0x40);
 
 
     return 0;
@@ -662,14 +715,22 @@ int MPU6050_start_fifos(int ODR, int gyro_fs, int accel_fs){
 
 void MPU6050_stop_fifos(){
     __u8 rtemp;
+    if (MPU6050_1_fd != -1){
+        rtemp = i2c_smbus_read_byte_data(MPU6050_1_fd, MPU6050_RA_USER_CTRL);
+        i2cWriteByteData(MPU6050_1_fd, MPU6050_RA_USER_CTRL, (rtemp & 0xBF));
+        i2cWriteByteData(MPU6050_1_fd, MPU6050_RA_USER_CTRL, (rtemp | 0x04));
+        close(MPU6050_1_fd);
+        MPU6050_1_fd = -1;
+    }
 
-    rtemp = read_byte_data(MPU6050_1_I2C_ADDRESS, MPU6050_RA_USER_CTRL);
-    write_byte_data(MPU6050_1_I2C_ADDRESS, MPU6050_RA_USER_CTRL, (rtemp & 0xBF));
-    write_byte_data(MPU6050_1_I2C_ADDRESS, MPU6050_RA_USER_CTRL, (rtemp | 0x04));
+    if (MPU6050_2_fd != -1){
+        rtemp = i2c_smbus_read_byte_data(MPU6050_2_fd, MPU6050_RA_USER_CTRL);
+        i2cWriteByteData(MPU6050_2_fd, MPU6050_RA_USER_CTRL, (rtemp & 0xBF));
+        i2cWriteByteData(MPU6050_2_fd, MPU6050_RA_USER_CTRL, (rtemp | 0x04));
+        close(MPU6050_2_fd);
+        MPU6050_2_fd = -1;
+    }
 
-    rtemp = read_byte_data(MPU6050_2_I2C_ADDRESS, MPU6050_RA_USER_CTRL);
-    write_byte_data(MPU6050_2_I2C_ADDRESS, MPU6050_RA_USER_CTRL, (rtemp & 0xBF));
-    write_byte_data(MPU6050_2_I2C_ADDRESS, MPU6050_RA_USER_CTRL, (rtemp | 0x04));
 }
 // arugument (command) =0 normal running =1 cleanup =2 stabilise (don't write anything)
 void MPU6050_pull_data(int command){
@@ -677,13 +738,14 @@ void MPU6050_pull_data(int command){
     float fifo_data_2[6];
     float combined_data[6];
     float accTang;
-    int count_1, count_2, i, number_to_pull;
+    static float nudgeAngle;
+    int count_1, count_2, i, duplicate, number_to_pull;
 
     static char local_outbuf[65000];
     static char remote_outbuf[1500];
     static char local_outbuf_line[150];
     static char remote_outbuf_line[150];
-    static int local_count = 0;
+    static int local_count = 0, nudgeCount =0;
     int remote_count = 0;
 
     if(command == 1){
@@ -693,7 +755,7 @@ void MPU6050_pull_data(int command){
         return;
     }        
 
-    if (MPU6050_1_I2C_ADDRESS == -1 || MPU6050_2_I2C_ADDRESS == -1 || fd_write_out == NULL) {
+    if (MPU6050_1_fd == -1 || MPU6050_2_fd == -1 || fd_write_out == NULL) {
         fprintf(stderr,"Fifos not started or can't write to file\n");
         printf("EFIF:\n");
         printf("STPD:\n");
@@ -709,11 +771,9 @@ void MPU6050_pull_data(int command){
         }
         return;
     }
-    count_1 = MPU6050_read_fifo_count(MPU6050_1_I2C_ADDRESS);
-    count_2 = MPU6050_read_fifo_count(MPU6050_2_I2C_ADDRESS);
-    if(count_1 < 24 || count_2 < 24) return;
-//
-    if((count_1 % 12) !=0 || (count_2 % 12) !=0) printf("misaligned %d,%d\n",count_1,count_2);
+    count_1 = MPU6050_read_fifo_count(MPU6050_1_fd);
+    count_2 = MPU6050_read_fifo_count(MPU6050_2_fd);
+    if(count_1 == 0 || count_2 == 0) return;
 
     if (count_1 > 1000 || count_2 >= 1000){ // overflow (or nearly so)
         printf("\nEOVF:\n");
@@ -727,53 +787,60 @@ void MPU6050_pull_data(int command){
 
     // ditch a sample if one fifo is running faster then the other
     if ((count_1 - count_2) >=24){
-        MPU6050_read_fifo_data(MPU6050_1_I2C_ADDRESS, fifo_data_1);
+        MPU6050_read_fifo_data(MPU6050_1_fd, fifo_data_1);
         count_1 -= 12;
     } else if ((count_2 - count_1) >=24){
-        MPU6050_read_fifo_data(MPU6050_2_I2C_ADDRESS, fifo_data_2);
+        MPU6050_read_fifo_data(MPU6050_2_fd, fifo_data_2);
         count_2 -= 12;
     }
     OUT_COUNT += (count_1 > count_2) ? (count_2 / 12) : (count_1 / 12);
-    while(count_1 >= 24 && count_2 >= 24){
+    while(count_1 >=12 && count_2 >= 12){
         count_1 -= 12;
         count_2 -= 12;
-        MPU6050_read_fifo_data(MPU6050_1_I2C_ADDRESS, fifo_data_1);
-        MPU6050_read_fifo_data(MPU6050_2_I2C_ADDRESS, fifo_data_2);
-        combined_data[0] = (fifo_data_2[0] - fifo_data_1[0]) / 2.0;
+        MPU6050_read_fifo_data(MPU6050_1_fd, fifo_data_1);
+        MPU6050_read_fifo_data(MPU6050_2_fd, fifo_data_2);
+        combined_data[0] = (fifo_data_2[0] + fifo_data_1[0]) / 2.0;
         combined_data[1] = (fifo_data_2[1] + fifo_data_1[1]) / 2.0;
-        combined_data[2] = (fifo_data_2[2] - fifo_data_1[2]) / 2.0;
-        combined_data[3] = (fifo_data_2[3] - fifo_data_1[3]) / 2.0;
+        combined_data[2] = (fifo_data_2[2] + fifo_data_1[2]) / 2.0;
+        combined_data[3] = (fifo_data_2[3] + fifo_data_1[3]) / 2.0;
         combined_data[4] = (fifo_data_2[4] + fifo_data_1[4]) / 2.0;
-        combined_data[5] = (fifo_data_2[5] - fifo_data_1[5]) / 2.0;
+        combined_data[5] = (fifo_data_2[5] + fifo_data_1[5]) / 2.0;
 
 //        for(i=0; i<6; ++i) combined_data[i] = (fifo_data_2[i] - fifo_data_1[i]) / 2.0;
                
         calculate(combined_data[3],combined_data[4],combined_data[5], combined_data[0],combined_data[1],combined_data[2],sample_period);
         roll -= SIDEMOUNT;
-        rateBuffer[head] = combined_data[3];
-        angleBuffer[head] = roll;
         if(command != 2){
             head = (head + 1) % BUFFERSIZE;
             available += 1;
         }
-        printf("test: %d,%d, avail: %d head %d \n", count_1,count_2,available, head);
+        rateBuffer[head] = combined_data[3];
+        angleBuffer[head] = roll;
+        accnBuffer[head] = savGol(head);
+        if(accnBuffer[head] * accnBuffer[((head - 1) % BUFFERSIZE + BUFFERSIZE) % BUFFERSIZE] < 0.0 && angleBuffer[head] > 170.0 && angleBuffer[head] < 190.0  && nudgeCount == 0) {
+            float nudgeFactor = accnBuffer[((head -1) % BUFFERSIZE + BUFFERSIZE) % BUFFERSIZE]/(accnBuffer[((head -1) % BUFFERSIZE + BUFFERSIZE) % BUFFERSIZE] - accnBuffer[head]);
+            float angleDiffFrom180 = (angleBuffer[((head -1) % BUFFERSIZE + BUFFERSIZE) % BUFFERSIZE] + nudgeFactor*(angleBuffer[head]-angleBuffer[((head -1) % BUFFERSIZE + BUFFERSIZE) % BUFFERSIZE]) ) - 180.0;
+            if(nudgeAngle != 0.0){
+                nudgeAngle = 0.9*nudgeAngle + 0.1*angleDiffFrom180; // apply a bit of smoothing
+            } else {
+                nudgeAngle = angleDiffFrom180;
+            }
+            nudgeCount = 5;
+        } 
+        if(nudgeCount != 0) nudgeCount -= 1; // don't do this twice in one half stroke
+        angleBuffer[head] -= nudgeAngle;
     }
-    printf("hereX\n");
+    if(available < PUSHBATCH + SAVGOLLENGTH || command == 2) return;
 
-    if(available < (PUSHBATCH + SAVGOLLENGTH) || command == 2) return;
-// 
-    int counter_1 = MPU6050_read_fifo_count(MPU6050_1_I2C_ADDRESS);
-    printf("here\n");
-
-    for(int counter = 0; counter < (available - SAVGOLLENGTH); ++counter){
-        sprintf(remote_outbuf_line, "LIVE:A:%+07.1f,R:%+07.1f,C:%+07.1f, count %d\n", angleBuffer[tail], rateBuffer[tail], savGol(tail),counter_1);
+    for(int counter = available; counter > SAVGOLLENGTH; --counter){
+        sprintf(remote_outbuf_line, "LIVE:A:%+07.1f,R:%+07.1f,C:%+07.1f\n", angleBuffer[tail], rateBuffer[tail], accnBuffer[tail]);
         if (remote_count + strlen(remote_outbuf_line) > (sizeof remote_outbuf -2)) {
             printf("%s",remote_outbuf);
             remote_count = 0;
         }
         remote_count += sprintf(&remote_outbuf[remote_count],remote_outbuf_line);
  
-        sprintf(local_outbuf_line,"A:%+07.1f,R:%+07.1f,C:%+07.1f\n", angleBuffer[tail], rateBuffer[tail], savGol(tail));
+        sprintf(local_outbuf_line,"A:%+07.1f,R:%+07.1f,C:%+07.1f\n", angleBuffer[tail], rateBuffer[tail], accnBuffer[tail]);
         if (local_count + strlen(local_outbuf_line) > (sizeof local_outbuf -2)) {
             fputs(local_outbuf, fd_write_out);
             fflush(fd_write_out);
@@ -799,19 +866,19 @@ float savGol(unsigned int startPosition){
 }
 
 void MPU6050_read_fifo_data(int dfd, float *values){
-    unsigned char returns[12];
-    read_data_burst(dfd, MPU6050_RA_FIFO_R_W, 12, returns);
-    values[0]=(float)(((unsigned int)returns[0] << 8) + returns[1]); 
-    values[1]=(float)(((unsigned int)returns[2] << 8) + returns[3]);
-    values[2]=(float)(((unsigned int)returns[4] << 8) + returns[5]);
-    values[3]=(float)(((unsigned int)returns[6] << 8) + returns[7]); 
-    values[4]=(float)(((unsigned int)returns[8] << 8) + returns[9]);
-    values[5]=(float)(((unsigned int)returns[10] << 8) + returns[11]);
+    __u8 returns[12];
+    i2cReadBlockData(dfd, MPU6050_RA_FIFO_R_W, 12, returns);
+    values[0]=(float)((returns[0] << 8) + returns[1]); 
+    values[1]=(float)((returns[2] << 8) + returns[3]);
+    values[2]=(float)((returns[4] << 8) + returns[5]);
+    values[3]=(float)((returns[6] << 8) + returns[7]); 
+    values[4]=(float)((returns[8] << 8) + returns[9]);
+    values[5]=(float)((returns[10] << 8) + returns[11]);
     for(int i=0; i<3; ++i){
         if(values[i] >= 0x8000) values[i] -= 0x10000;
         values[i] /= MPU6050_accel_scale_factor;
     }
-    if(dfd == MPU6050_1_I2C_ADDRESS){
+    if(dfd == MPU6050_1_fd){
         values[1] += yoffset_1;
         values[1] *= yscale_1;
         values[2] += zoffset_1;
@@ -830,7 +897,7 @@ void MPU6050_read_fifo_data(int dfd, float *values){
         if(values[i] >= 0x8000) values[i] -= 0x10000;
         values[i] /= MPU6050_gyro_scale_factor;
         values[i] *= ROTATIONS[i-3];
-        if(dfd == MPU6050_1_I2C_ADDRESS){
+        if(dfd == MPU6050_1_fd){
             values[i] -= GYRO_BIAS_1[i-3];
         } else {
             values[i] -= GYRO_BIAS_2[i-3];
@@ -839,8 +906,8 @@ void MPU6050_read_fifo_data(int dfd, float *values){
 }
 
 int MPU6050_read_fifo_count(int dfd){
-    __u32 high = read_byte_data(dfd, MPU6050_RA_FIFO_COUNTH);
-    return ((high << 8) + read_byte_data(dfd, MPU6050_RA_FIFO_COUNTL)) & 0x07FF;
+    __u32 high = i2c_smbus_read_byte_data(dfd, MPU6050_RA_FIFO_COUNTH);
+    return ((high << 8) + i2c_smbus_read_byte_data(dfd, MPU6050_RA_FIFO_COUNTL)) & 0x07FF;
 }
 
 /* 
@@ -1281,38 +1348,3 @@ __s32 i2c_smbus_block_process_call(int file, __u8 command, __u8 length, __u8 *va
         values[i-1] = data.block[i];
     return data.block[0];
 }
-
-unsigned char read_byte_data(unsigned char i2cAddress, unsigned char i2cRegister){
-    static unsigned char retval[1];
-    static unsigned char sendval[1];
-    sendval[0] = i2cRegister;
-    bcm2835_i2c_setSlaveAddress(i2cAddress);
-    int red = bcm2835_i2c_write_read_rs(sendval,1,retval,1);
-    if(red != 0) {printf("Dbad return %d\n", red); exit(1);} 
-    return retval[0];
-}
-
-void write_byte_data(unsigned char i2cAddress, unsigned char i2cRegister, unsigned char data){
-    static unsigned char wrival[2];
-    bcm2835_i2c_setSlaveAddress(i2cAddress);
-    wrival[0]=i2cRegister;
-    wrival[1]=data;
-    bcm2835_i2c_write(wrival,2);
-}
-
-void read_data_burst(unsigned char i2cAddress, unsigned char i2cRegister, unsigned char length, unsigned char *retval){
-    unsigned int count = MPU6050_read_fifo_count(i2cAddress);
-    static unsigned char sendval[1];
-    sendval[0] = i2cRegister;
-    bcm2835_i2c_setSlaveAddress(i2cAddress);
-//    bcm2835_i2c_write(&i2cRegister,1);
-//    for(int i =0;i<length; ++i){
-//        if (!bcm2835_i2c_read_register_rs(&i2cRegister,&retval[i],1)) printf("Burst read error\n");
-//    }
-    int red = bcm2835_i2c_write_read_rs(sendval,1,retval,length);
-    if(red != 0) {printf("Dbad return %d\n", red); exit(1);} 
-    int count2 = MPU6050_read_fifo_count(i2cAddress);
-    if(count != count2 && count-count2 != 12) printf(">>>Misalaigned,%d %d\n",count, count2);
-
-}
-
