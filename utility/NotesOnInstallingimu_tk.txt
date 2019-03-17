@@ -40,7 +40,7 @@ sudo systemctl restart dphys-swapfile
 gcc calibrate.c -o calibrate -lbcm2835
 # put BBimu_tk (in alberto_pretto-imu_tk-7780270fb9a2/bin) into same directory as BBcalibrate
 
-# with bellboy device installed (need to cut 5V power and i2c pins on the pi it is installed on (for safety))
+# with bellboy PCB installed on header (no battery attached)
 # run calibrate
 # enter SAMP: to get sample period
 # enter CALI: to start calibration run
