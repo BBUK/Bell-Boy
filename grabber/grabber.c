@@ -1,4 +1,4 @@
-//gcc MPU6050grabber.c -o grabber -lm
+//gcc grabber.c -o grabber -lm -lbcm2835
 
 /*
  * Copyright (c) 2017,2018,2019 Peter Budd. All rights reserved
@@ -27,29 +27,20 @@
 #include <unistd.h>
 #include <signal.h>
 #include <fcntl.h>
-#include <sys/ioctl.h>
 #include <sys/time.h>
-#include <linux/i2c-dev.h>
 #include <errno.h>
 #include <linux/types.h>
-#include <linux/i2c.h>
-#include <linux/i2c-dev.h>
+#include <stdint.h>
 #include <dirent.h>
-#include "MPU6050grabber.h"
+#include "ICM20689.h"
+#include <bcm2835.h>
 
 #ifndef NULL
 #define NULL 0
 #endif
 
-#ifndef I2C_SMBUS_I2C_BLOCK_BROKEN
-#define I2C_SMBUS_I2C_BLOCK_BROKEN I2C_SMBUS_I2C_BLOCK_DATA
-#endif
-#ifndef I2C_FUNC_SMBUS_PEC
-#define I2C_FUNC_SMBUS_PEC I2C_FUNC_SMBUS_HWPEC_CALC
-#endif
-
 // these are used by the extended Kalman filter
-#define g0 9.8189
+#define g0 9.8137 // Manchester estimation.  Use gcalculator.xlsx to work out for your latitude.  
 #define g0_2 (g0*g0)
 #define q_dcm2 (0.1*0.1)
 #define q_gyro_bias2 (0.0001*0.0001)
@@ -60,54 +51,65 @@
 
 #define DEGREES_TO_RADIANS_MULTIPLIER 0.017453 
 #define RADIANS_TO_DEGREES_MULTIPLIER 57.29578 
-#define I2CDEV "/dev/i2c-1"
-
-#define MPU6050_1_I2C_ADDRESS 0x68
-#define MPU6050_2_I2C_ADDRESS 0x69
 
 FILE *fd_write_out;
-int MPU6050_1_fd = -1;
-int MPU6050_2_fd = -1;
 
 float yaw = 0.0;
 float pitch = 0.0;
 float roll = 0.0;
+float direction = 0;
+float tareValue = 0.0;
 float a[3];
-float sample_period = 0.0;
-float GYRO_BIAS_1[3] = { 0.0, 0.0, 0.0 };
-float GYRO_BIAS_2[3] = { 0.0, 0.0, 0.0 };
-int DEBUG = 0;
+float xGyroBias = 0.0;
 
-float MPU6050_gyro_scale_factor = 0;
-float MPU6050_accel_scale_factor = 0;
+FILE *fdCalibrationData;
+double calibrationTimestamp = 0.0;
 
-float ROTATIONS[3] = { 1.0, -1.0, -1.0 }; //set rotation values for mounting IMU device x y z
+int ODR = 125;
 
-int ODR = 0;
-int FS_GYRO = 0;
-int FS_ACCEL = 0;
+//int FS_GYRO = 0;
+//int FS_ACCEL = 0;
 
 int RUNNING = 0;
+int CALIBRATING = 0;
+int EYECANDY = 0;
 int OUT_COUNT = 0;
+
+unsigned char SPI_BUFFER[256];
+unsigned char I2C_BUFFER[16];
 
 char READ_OUTBUF[1500];
 char READ_OUTBUF_LINE[150];
 int READ_OUTBUF_COUNT;
 
-float yoffset_1 = 0.0;
-float yscale_1 = 1.0;
-float zoffset_1 = 0.0;
-float zscale_1 = 1.0;
-
-float yoffset_2 = 0.0;
-float yscale_2 = 1.0;
-float zoffset_2 = 0.0;
-float zscale_2 = 1.0;
-
 char FILENAME[50];
 
-int LOOPSLEEP = 100000; // sleep for 0.1 of a second unless actively sampling then sleep 4000000/ODR
+const unsigned int LOOPSLEEP = 50000;  // main loop processes every 0.05 sec.  25 samples should be in FIFO.  Max number of samples in FIFO is 341.  Should be OK.
+unsigned int LOOPCOUNT = 0;
 
+struct {
+	float samplePeriod;
+	float accBiasX;
+	float accBiasY;
+	float accBiasZ;
+	float accScaleX;
+	float accScaleY;
+	float accScaleZ;
+	float gyroBiasX;
+	float gyroBiasY;
+	float gyroBiasZ;
+	float gyroScaleX;
+	float gyroScaleY;
+	float gyroScaleZ;
+	} calibrationData = {.samplePeriod = 0.008, .accBiasX=0, .accBiasY=0, .accBiasZ = 0,
+						.accScaleX=1, .accScaleY=1, .accScaleZ=1, .gyroBiasX=0, .gyroBiasY=0,
+						.gyroBiasZ=0, .gyroScaleX=1, .gyroScaleY=1, .gyroScaleZ=1};
+
+union {
+    float    _float;
+    uint8_t  _bytes[sizeof(float)];
+} floatConv;
+ 
 volatile sig_atomic_t sig_exit = 0;
 void sig_handler(int signum) {
     if (signum == SIGINT) fprintf(stderr, "received SIGINT\n");
@@ -115,7 +117,7 @@ void sig_handler(int signum) {
     sig_exit = 1;
 }
 /*
-# There are nine possible command sent by the user's browser:
+# There are fifteen possible command sent by the user's browser:
 # (a)   STRT:[filename] Start recording a session with a bell.  The bell
 #       must be at stand and (reasonably) stationary otherwise this
 #       will return ESTD: or EMOV: either of which signals the browser 
@@ -123,7 +125,7 @@ void sig_handler(int signum) {
 #       default filename of "CurrentRecording [date]" is used.
 # (b)   STOP: stops a recording in progress.  This also saves off the
 #       collected data into a file in /data/samples/
-# (c)   LDAT: a request for data from the broswer, only works when there
+# (c)   LDAT: a request for data from the browser, only works when there
 #       is a recording in progress - deprecated.  Does nothing.
 # (d)   FILE: get a listing of the previous recordings stored in
 #       /data/samples/ .  Used to display the selection box to the user.
@@ -133,7 +135,28 @@ void sig_handler(int signum) {
 # (g)   SAMP: requests the current sample period
 # (h)   SHDN: tells the device to shutdown
 # (i)   TEST: returns the current basic orientation (for testing)
-# 
+# (j)   TARE: tares the bell (bell must be down and stable  - not confirmed by code)
+# (k)   EYEC: starts eye candy demo
+# (l)   STEC: stops eye candy demo
+# (m)	CALI: starts initial calibration
+# (n)	STCA: stops initial calibration
+# (o)	SAVE: saves calibration to Arduino (registers 	10=samplePeriod
+# 														11=accBiasX
+#														12=accBiasY
+#														13=accBiasZ
+#														14=accScaleX
+# 														15=accScaleY
+#														16=accScaleZ
+# 														17=gyroBiasX
+#														18=gyroBiasY
+#														19=gyroBiasZ
+#														20=gyroScaleX
+# 														21=gyroScaleY
+#														22=gyroScaleZ
+#														5=accBiasXYZ(all in one go 12 bytes)
+#														6=accScaleXYZ(all in one go 12 bytes)
+#														7=gyroBiasXYZ(all in one go 12 bytes)
+#														8=gyroScaleXYZ(all in one go 12 bytes))
 # There are the following responses back to the user's browser:
 # (i)   STPD: tells the browser that the device has sucessfully stopped sampling
 # (ii)  ESTP: signals an error in the stop process (an attempt to stopped when not started)
@@ -153,23 +176,16 @@ void sig_handler(int signum) {
 # (xiii)FILE:[filename] in response to FILE: a list of the previous recordings in /data/samples
 # (xiv) STRT: in response to STRT: indicates a sucessful start.
 # (xv)  LFIN:[number] indicates the end of a file download and the number of samples sent
-* (xvi) TEST:[number] current orientation
-*/
-
-/*
-* Command line arguments bb_grabber {1} {2} {3} {4}
-* {1} = Operational data rate (ODR). One of 500, 200, 100 and 50 samples per second.
-* {2} = gyro full scale range. One of 500 and 1000 (in degrees/second).
-* {3} = accelerometer full scale range.  One of 2 and 4 (g).
-* {4} = (optional) smooth factor.  If nothing entered here 0.92 is used
-* Example: bb_grabber 200 500 4 0.94
-* Commands (see above) are received on stdin and output is on stdout.
+# (xvi) TEST:[number] current orientation
+# (xvii)BATT:[number] battery percentage
+*
+* Commands are received on stdin and output is on stdout.
 * Will work standalone but intended to be interfaced with websocketd https://github.com/joewalnes/websocketd
 */
 
 #define PUSHBATCH 20 // number of samples taken before pushing out
-#define SAVGOLLENGTH  31
-#define SAVGOLHALF 15 // = math.floor(SAVGOLLENGTH/2.0)
+#define SAVGOLLENGTH  15
+#define SAVGOLHALF 7 // = math.floor(SAVGOLLENGTH/2.0)
 #define BUFFERSIZE 256 // must be bigger than PUSHBATCH + SAVGOLLENGTH
 unsigned int head;
 unsigned int tail;
@@ -178,28 +194,30 @@ float angleBuffer[BUFFERSIZE];
 float rateBuffer[BUFFERSIZE];
 
 // savgol_coeffs(31,1,deriv=1,use="dot")
-const float savGolCoefficients[] = {
-    -6.04838710e-03, -5.64516129e-03, -5.24193548e-03, -4.83870968e-03,
-    -4.43548387e-03, -4.03225806e-03, -3.62903226e-03, -3.22580645e-03,
-    -2.82258065e-03, -2.41935484e-03, -2.01612903e-03, -1.61290323e-03,
-    -1.20967742e-03, -8.06451613e-04, -4.03225806e-04, -1.02877021e-17,
-    4.03225806e-04,   8.06451613e-04,  1.20967742e-03,  1.61290323e-03,
-    2.01612903e-03,   2.41935484e-03,  2.82258065e-03,  3.22580645e-03,
-    3.62903226e-03,   4.03225806e-03,  4.43548387e-03,  4.83870968e-03,
-    5.24193548e-03,   5.64516129e-03,  6.04838710e-03};
+//const float savGolCoefficients[] = {
+//    -6.04838710e-03, -5.64516129e-03, -5.24193548e-03, -4.83870968e-03,
+//    -4.43548387e-03, -4.03225806e-03, -3.62903226e-03, -3.22580645e-03,
+//    -2.82258065e-03, -2.41935484e-03, -2.01612903e-03, -1.61290323e-03,
+//    -1.20967742e-03, -8.06451613e-04, -4.03225806e-04, -1.02877021e-17,
+//    4.03225806e-04,   8.06451613e-04,  1.20967742e-03,  1.61290323e-03,
+//    2.01612903e-03,   2.41935484e-03,  2.82258065e-03,  3.22580645e-03,
+//    3.62903226e-03,   4.03225806e-03,  4.43548387e-03,  4.83870968e-03,
+//    5.24193548e-03,   5.64516129e-03,  6.04838710e-03};
 
+// savgol_coeffs(15,2,deriv=1,use="dot")
+const float savGolCoefficients[] = {
+    -2.50000000e-02, -2.14285714e-02, -1.78571429e-02, -1.42857143e-02,
+    -1.07142857e-02, -7.14285714e-03, -3.57142857e-03,  2.95770353e-16,
+    3.57142857e-03,  7.14285714e-03,  1.07142857e-02,  1.42857143e-02,
+    1.78571429e-02,  2.14285714e-02,  2.50000000e-02};
 
 int main(int argc, char const *argv[]){
     char linein[50];
     char command[6];
     char details[42];
     char oscommand[90];
-    float start_angle = 0.0;
     int entries;
-    float shutdowncount = 0.0;
-    FILE *shutdowncheck;
 
-    
     struct sigaction sig_action;
     memset(&sig_action, 0, sizeof(struct sigaction));
     sig_action.sa_handler = sig_handler;
@@ -209,97 +227,75 @@ int main(int argc, char const *argv[]){
     setbuf(stdout, NULL);
     setbuf(stdin, NULL);
     fcntl(STDIN_FILENO, F_SETFL, fcntl(STDIN_FILENO, F_GETFL) | O_NONBLOCK);
-
-    if(argc < 4 || argc > 5){
-        printf("Incorrect number of arguments for BellBoy app.  Expect ODR, FS gyro, FS accelerometer and (optionally) a smooth factor between 0 and 1.\n");
-        return -1;
-    }
-    ODR = atoi(argv[1]);
-    if (ODR != 50 && ODR != 100 && ODR != 200 && ODR != 500) {
-        printf("Incorrect ODR.  Expects 50, 100, 200 or 500 as first argument.\n");
-        return -1;
-    }
-    sample_period = 1.0/ODR; // this is an initial estimate.  SAMP: command measures this directly and updates sample_period
-    
-    FS_GYRO = atoi(argv[2]);
-    if (FS_GYRO != 500 && FS_GYRO != 1000) {
-        printf("Incorrect FS gyro.  Expects 500 or 1000 as second argument.\n");
-        return -1;
-    }
-    
-    FS_ACCEL = atoi(argv[3]);
-    if (FS_ACCEL != 2 && FS_ACCEL != 4) {
-        printf("Incorrect FS accel.  Expects 2 or 4 as second argument.\n");
-        return -1;
-    }
-    
-     
-//    if(MPU6050_test() != 0){
-//        printf("EIMU:\n");
-//        return -1;
-//    }
-    
-    FILE *fd_read_cal;
-    fd_read_cal = fopen("/boot/bb_calibrations","r");
-    if(fd_read_cal == NULL) {
-        fprintf(stderr, "Calibration file not found.\n");
-    } else {
-        if (fgets(READ_OUTBUF_LINE, sizeof(READ_OUTBUF_LINE), fd_read_cal) != NULL) {
-            char *p = strtok(READ_OUTBUF_LINE,",");
-            if(p!= NULL) yoffset_1 = atof(&p[4]);
-            p = strtok(NULL,",");
-            if(p!= NULL) yscale_1 = atof(&p[4]);
-            p = strtok(NULL,",");
-            if(p!= NULL) zoffset_1 = atof(&p[4]);
-            p = strtok(NULL,",");
-            if(p!= NULL) zscale_1 = atof(&p[4]);
-            p = strtok(NULL,",");
-            if(p!= NULL) yoffset_2 = atof(&p[4]);
-            p = strtok(NULL,",");
-            if(p!= NULL) yscale_2 = atof(&p[4]);
-            p = strtok(NULL,",");
-            if(p!= NULL) zoffset_2 = atof(&p[4]);
-            p = strtok(NULL,",");
-            if(p!= NULL) zscale_2 = atof(&p[4]);
-//            fprintf(stderr,"YO:%+06.3f,YS:%+06.3f,ZO:%+06.3f,ZS:%+06.3f\n", yoffset,yscale,zoffset,zscale);
+ 
+    FILE *fdTare;
+    fdTare = fopen("/tmp/bb_tare","r");
+    if(fdTare != NULL) {
+        if (fgets(linein, sizeof(linein), fdTare) != NULL) {
+            tareValue = atof(linein);
         }
-        fclose(fd_read_cal);
+        fclose(fdTare);
     }
-    
+
+    char tmpfile[] = "/tmp/BBlive"; 
+	int filedes = mkstemp(tmpfile); // signal to powermonitor that we have taken over power monitoring
+	unlink(tmpfile);
+	usleep(100); // need to ensure that powermonitor is not doing anything before we try to access i2C
+
+    setup();
+
     while(!sig_exit){
         usleep(LOOPSLEEP);
-        
-        shutdowncount += LOOPSLEEP/1000;
-        if(shutdowncount >= 20000){ // check every 20 seconds
-            shutdowncheck = fopen("/run/nologin","r");  // 5 minute warning
-            if(shutdowncheck != NULL){
-                puts("Low battery warning.\n");
-                fclose(shutdowncheck);
-            }
-            shutdowncount = 0.0;
-        }
-        
-        if(RUNNING) MPU6050_pull_data(0);
+		LOOPCOUNT += 1;
+		if((LOOPCOUNT == 1 || LOOPCOUNT % 2000) == 0){ // check every 100 secs but also the first time through
+			I2C_BUFFER[0]=2;
+			bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 2 (power)
+			bcm2835_i2c_read(I2C_BUFFER,2); usleep(100);
+			unsigned int result = (I2C_BUFFER[0]<<8)+I2C_BUFFER[1];
+			if(result & 0x8000) system("/usr/bin/sync && /usr/bin/shutdown -P now");
+			if((result & 0x7FFF) > 519){
+				printf("BATT:0\n");
+			} else if((result & 0x7FFF) > 509){
+				printf("BATT:10\n");
+			} else if((result & 0x7FFF) > 503){
+				printf("BATT:20\n");
+			} else if((result & 0x7FFF) > 500){
+				printf("BATT:30\n");
+			} else if((result & 0x7FFF) > 495){
+				printf("BATT:40\n");
+			} else if((result & 0x7FFF) > 490){
+				printf("BATT:50\n");
+			} else if((result & 0x7FFF) > 482){
+				printf("BATT:60\n");
+			} else if((result & 0x7FFF) > 475){
+				printf("BATT:70\n");
+			} else if((result & 0x7FFF) > 466){
+				printf("BATT:80\n");
+			} else if((result & 0x7FFF) > 456){
+				printf("BATT:90\n");
+			} else {
+				printf("BATT:100\n");
+			}
+		}
+      
+        pushData();
+
+        if(EYECANDY) printf("EYEC:%+07.1f, %+07.1f, %+07.1f\n", roll, pitch, yaw);
+
         while(fgets(linein, sizeof(linein), stdin ) != NULL) {
             entries = sscanf(linein, "%5s%[^\n]", command, details);
             if(entries < 1) {
                 fprintf( stderr, "\nError reading: %s \n", linein );
                 continue;
             }
-//            if(entries == 2) printf("Command: %s Details: %s Count: %d \n", command, details, count);
-//            if(entries == 1) printf("Command: %s Count: %d \n", command, count);
-  
             if(strcmp("DATE:", command) == 0 && entries == 2  && strlen(details) < 12){
                 sprintf(oscommand,"/usr/bin/date --set=\"$(date --date='@%s')\" && /usr/bin/touch /var/lib/systemd/clock", details);
                 system(oscommand);
                 continue;
             }
             if(strcmp("SAMP:", command) == 0) {
-                if(MPU6050_fifo_timer() == 0) {
-                    printf("SAMP:%f\n",sample_period);
-                } else {
-                    printf("EIMU:\n");
-                }
+//                fifoTimer();
+                printf("SAMP:%f\n",calibrationData.samplePeriod);
                 continue;
             }
             if(strcmp("FILE:", command) == 0) {
@@ -315,13 +311,54 @@ int main(int argc, char const *argv[]){
                 continue;
             }
             if(strcmp("TEST:", command) == 0) {
-                ROTATIONS[0] = 1.0;   // reset rotations
-                ROTATIONS[1] = -1.0;
-                ROTATIONS[2] = -1.0;
-				printf("TEST:%f\n",MPU6050_get_orientation());
+				printf("TEST: R:%f P:%f Y:%f\n",roll,pitch,yaw);
+                continue;
+            }
+            if(strcmp("EYEC:", command) == 0) {
+                if(RUNNING || CALIBRATING) continue;
+				EYECANDY = 1;
+                continue;
+            }
+            if(strcmp("STEC:", command) == 0) {
+				EYECANDY = 0;
                 continue;
             }
 
+            if(strcmp("CALI:", command) == 0) {
+                if(RUNNING) { printf("ECAL:\n"); continue; }
+                calibrationTimestamp = 0.0;
+                fdCalibrationData = fopen("/data/samples/CALIBRATIONDATA","w");
+                if(fdCalibrationData == NULL) {
+                    fprintf(stderr, "Could not open calibration file for writing\n");
+                    printf("ESTR:\n");
+                    continue;
+                }
+				CALIBRATING = 1;
+                continue;
+            }
+            if(strcmp("STCA:", command) == 0) {
+                fflush(fdCalibrationData);
+                fclose(fdCalibrationData);
+                fdCalibrationData = NULL;
+				CALIBRATING = 0;
+                continue;
+            }
+            if(strcmp("TARE:", command) == 0) {
+                tareValue = roll;
+                fdTare = fopen("/tmp/bb_tare","w");
+                if(fdTare == NULL) {
+                    printf("EIMU: Could not open tare file for writing\n");
+                    continue;
+                } else {
+                    fprintf(fdTare,"%+07.4f\n", tareValue);
+                    fclose(fdTare);
+                }
+                continue;
+            }
+            if(strcmp("CLTA:", command) == 0) {
+                tareValue = 0.0;
+                continue;
+            }
             if(strcmp("STRT:", command) == 0) {
                 if(entries == 2  && strlen(details) < 34){
                     sprintf(FILENAME, "/data/samples/%s", details);
@@ -331,76 +368,24 @@ int main(int argc, char const *argv[]){
                     timenow = gmtime(&now);
                     strftime(FILENAME, sizeof(FILENAME), "/data/samples/Unnamed_%d-%m-%y_%H%M", timenow);
                 }
-                ROTATIONS[0] = 1.0;   // reset rotations
-                ROTATIONS[1] = -1.0;
-                ROTATIONS[2] = -1.0;
-                start_angle = MPU6050_get_orientation(); // also sets gyro biasses
-                if(start_angle == -999) {
-                    printf("ESTD:\n");
-                    fprintf(stderr, "Can't calculate start angle\n");
-                    continue;
-                }
-                if(start_angle < 2.0 && start_angle > -2.0) {
-                    printf("ESTD:\n"); // bell out of range for stand
-                    continue;
-                }
-                if(start_angle >= 2.0){             // this check enables the user not to think
-                    ROTATIONS[1] = -ROTATIONS[1];   // about which way to mount the sensor
-                    ROTATIONS[0] = -ROTATIONS[0];   // it just flips things around as if the sensor
-                    start_angle = -start_angle;     // was mounted the other way round
-                    GYRO_BIAS_1[0] = -GYRO_BIAS_1[0];
-                    GYRO_BIAS_1[1] = -GYRO_BIAS_1[1];
-                    GYRO_BIAS_2[0] = -GYRO_BIAS_2[0];
-                    GYRO_BIAS_2[1] = -GYRO_BIAS_2[1];
-                }
-                if(start_angle < -20){
-                    printf("ESTD:\n"); // bell out of range for stand
-                    continue;
-                }
-//                if(abs(GYRO_BIAS_2[0]) > 5.0){
-//                    printf("EMOV:\n"); // bell is moving
-//                    continue;
-//                }
                 fd_write_out = fopen(FILENAME,"w");
                 if(fd_write_out == NULL) {
                     fprintf(stderr, "Could not open file for writing\n");
                     printf("ESTR:\n");
+                    printf("STPD:\n");
                     continue;
-                } else {
-                    if(MPU6050_start_fifos(ODR,FS_GYRO,FS_ACCEL) == 0){
-                        LOOPSLEEP = 4000000/ODR;
-                        RUNNING = 1;
-                        OUT_COUNT = 0;
-                        printf("STRT:\n");
-                        //stabilise EKF
-                        for(int stab=0;stab<100;stab++){
-							usleep(LOOPSLEEP);
-							MPU6050_pull_data(2);
-						}
-                        for(int i = 0; i< BUFFERSIZE; ++i){ // initialise with dummy data for savgol alignment
-                            rateBuffer[i] = 0;
-                            angleBuffer[i] = roll;
-                        }
-                        head = SAVGOLHALF;
-                        tail = 0;
-                        available = SAVGOLHALF;
-                    } else {
-                        printf("EFIF:\n");
-                        printf("STPD:\n");
-                    }
                 }
+                OUT_COUNT = 0;
+                startRun();
                 continue;
             }
             if(strcmp("STOP:", command) == 0) {
                 if(fd_write_out != NULL){
-                    MPU6050_pull_data(1);
                     fflush(fd_write_out);
                     fclose(fd_write_out);
                     fd_write_out = NULL;
                 }
-                MPU6050_stop_fifos();
                 RUNNING = 0;
-                LOOPSLEEP = 100000;
                 printf("STPD:%d\n", OUT_COUNT);
                 continue;
             }
@@ -422,7 +407,7 @@ int main(int argc, char const *argv[]){
                     READ_OUTBUF_COUNT = 0;
                     while(fgets(READ_OUTBUF_LINE, sizeof(READ_OUTBUF_LINE), fd_read_in ) != NULL) {
                         size_t ln = strlen(READ_OUTBUF_LINE);
-                        if(ln > 0 && READ_OUTBUF_LINE[ln -1] == '\n') READ_OUTBUF_LINE[ln - 1] = '\0';   // get rid of /n
+                        if(ln > 0 && READ_OUTBUF_LINE[ln -1] == '\n') READ_OUTBUF_LINE[ln - 1] = '\0';   // get rid of \n
 //                        READ_OUTBUF_LINE[strcspn(READ_OUTBUF_LINE, "\n")] = 0;
                         if (READ_OUTBUF_COUNT + strlen(READ_OUTBUF_LINE) + 7 > (sizeof(READ_OUTBUF) -2)) {
                             printf("%s\n", READ_OUTBUF);
@@ -445,371 +430,138 @@ int main(int argc, char const *argv[]){
             fprintf(stderr, "Unrecognised command: %s \n", command);
         }
     }
-    if(fd_write_out != NULL) {
-        MPU6050_pull_data(1);
-        fflush(fd_write_out);
-        fclose(fd_write_out);
-    }
-    MPU6050_stop_fifos();
     system("/usr/bin/touch /var/lib/systemd/clock");
     return 0;
 }
 
-int MPU6050_test(void){
-    if (MPU6050_1_fd != -1) return -10;
-    if ((MPU6050_1_fd = open(I2CDEV, O_RDWR)) < 0) {
-        MPU6050_1_fd = -1;
-        return -1;
-    }
-    if (ioctl(MPU6050_1_fd, I2C_SLAVE, MPU6050_1_I2C_ADDRESS) < 0) {
-        close(MPU6050_1_fd);
-        MPU6050_1_fd = -1;
-        return -2;
-    }
-    if (i2c_smbus_read_byte_data(MPU6050_1_fd, MPU6050_RA_WHO_AM_I) != 104) {
-        close(MPU6050_1_fd);
-        MPU6050_1_fd = -1;
-        return -3;
-    }
-    close(MPU6050_1_fd);
-    MPU6050_1_fd = -1;
+void startRun(void){
 
-    if (MPU6050_2_fd != -1) return -11;
-    if ((MPU6050_2_fd = open(I2CDEV, O_RDWR)) < 0) {
-        MPU6050_2_fd = -1;
-        return -4;
+//    if(stabilityData.status != 1 && stabilityData.status != 2) {
+//        printf("EMOV:%+07.1f\n",gyroIntegratedRotationVectorData.lastRoll); // bell is moving
+//        return(0);
+//    }
+    if(abs(roll-tareValue) < 160 || abs(roll-tareValue) > 178){
+        printf("ESTD:%+07.1f\n",roll-tareValue); // bell not at stand
+//        printf("STPD:\n");
+        return;
     }
-    if (ioctl(MPU6050_2_fd, I2C_SLAVE, MPU6050_2_I2C_ADDRESS) < 0) {
-        close(MPU6050_2_fd);
-        MPU6050_2_fd = -1;
-        return -5;
-    }
-    if (i2c_smbus_read_byte_data(MPU6050_2_fd, MPU6050_RA_WHO_AM_I) != 104){
-        close(MPU6050_2_fd);
-        MPU6050_2_fd = -1;
-        return -6;
-    }
-    close(MPU6050_2_fd);
-    MPU6050_2_fd = -1;
 
-    return 0;
+    if(roll < 0) {  // this bit works out which way the bell rose and adjusts accordingly
+        direction = -1;
+    } else {
+        direction = +1;
+    }
+
+    for(int i = 0; i< BUFFERSIZE; ++i){ // initialise with dummy data for savgol alignment
+        rateBuffer[i] = 0;
+        angleBuffer[i] = direction*(roll-tareValue)-180.0;
+    }
+    head = SAVGOLHALF;
+    tail = 0;
+    available = SAVGOLHALF;
+
+    RUNNING = 1;
+    CALIBRATING = 0;
+	EYECANDY=0;
+    return;
+
+/*    if(roll < 0) {  // this bit works out which way the bell rose and adjusts accordingly
+        direction = -1;
+        angleBuffer[0] = (-180.0-roll)+tareValue;        
+    } else {
+        direction = +1;
+        angleBuffer[0] = (roll-180.0)-tareValue;
+    }
+
+    rateBuffer[0] = 0;
+    for(int i = 1; i< BUFFERSIZE; ++i){ // initialise with dummy data for savgol alignment
+        rateBuffer[i] = 0;
+        angleBuffer[i] = angleBuffer[i-1];
+    }
+    head = SAVGOLHALF;
+    tail = 0;
+    available = SAVGOLHALF;
+
+    RUNNING = 1;
+    return;*/
 }
 
-int MPU6050_fifo_timer(void){
+
+void fifoTimer(void){
     float result1 = 0.0, result2 = 0.0;
-    if (MPU6050_start_fifos(ODR,500,2) < 0){
-        MPU6050_stop_fifos();
-        return -1;
-    }
-    result1 = MPU6050_timer(MPU6050_1_fd);
-    result2 = MPU6050_timer(MPU6050_2_fd);
-    MPU6050_stop_fifos();
-    sample_period = (result1 > result2) ? result1 : result2;
-    return 0;
+    float dummy[6];
+    result1 = timer(BCM2835_SPI_CS0);
+    result2 = timer(BCM2835_SPI_CS1);
+    while (readFIFOcount(BCM2835_SPI_CS0) != 0) readFIFO(BCM2835_SPI_CS0, dummy);
+    while (readFIFOcount(BCM2835_SPI_CS1) != 0) readFIFO(BCM2835_SPI_CS1, dummy);
+/*    //clear data paths and reset FIFO (keep i2c disabled)
+    writeRegister(BCM2835_SPI_CS0,ICM20689_USER_CTRL,0x15);
+    writeRegister(BCM2835_SPI_CS1,ICM20689_USER_CTRL,0x15);
+    usleep(1000);
+
+    //start FIFO - keep i2c disabled
+    writeRegister(BCM2835_SPI_CS0,ICM20689_USER_CTRL,0x50);
+    writeRegister(BCM2835_SPI_CS1,ICM20689_USER_CTRL,0x50); */
+    
+    calibrationData.samplePeriod = (result1 > result2) ? result1 : result2;
 }
 
-float MPU6050_timer(int dfd){
+float timer(uint8_t device){
     struct timeval start, stop;
     int cco, loops;
     float dummy[6];
     float result = 0.0;
-    loops = (int)(ODR/25);
+    loops = 4;
     for(int i = 0; i < loops; ++i){
-        while (MPU6050_read_fifo_count(dfd) != 0) MPU6050_read_fifo_data(dfd, dummy);
-        while (MPU6050_read_fifo_count(dfd) == 0);
+        while (readFIFOcount(device) != 0) readFIFO(device, dummy);
+        while (readFIFOcount(device) == 0);
         gettimeofday(&start, NULL);
-        MPU6050_read_fifo_data(dfd, dummy);
-        while (MPU6050_read_fifo_count(dfd) < (26 * 12)) usleep((int)((2/ODR)*1000000));  // sleep for about 2 periods
+        readFIFO(device, dummy);
+        while (readFIFOcount(device) < (196 * 12)) usleep(4000);  // sleep for about 2 periods
         while(1){
-            cco = MPU6050_read_fifo_count(dfd);
-            if(cco == (30 * 12)) {
+            usleep(100);
+            cco = readFIFOcount(device);
+            if(cco == (200 * 12)) {
                 gettimeofday(&stop, NULL);
-                result += (float)((stop.tv_sec-start.tv_sec)+(float)(stop.tv_usec-start.tv_usec)/1000000.0);
+                result += (float)((stop.tv_sec-start.tv_sec)+(float)((stop.tv_usec-start.tv_usec)-50)/1000000.0);
                 break;
             }
-            if(cco > (30 * 12)) {
+            if(cco > (200 * 12)) {
                 i -= 1;
                 break;
             }
         }
+        usleep(5000);
     }
-    return result/(30*loops);
+    return (result/(200*loops))*4;
 }
 
-
-float MPU6050_get_orientation(void){
-    int count;
-    float u0=0.0, u1=0.0, u2=0.0, z0=0.0, z1=0.0, z2=0.0;
-    float fifo_returns[6];
-    
-    if (MPU6050_start_fifos(ODR,FS_GYRO,FS_ACCEL) < 0){
-        MPU6050_stop_fifos();
-        return -999;
-    }
-
-    usleep(50000); // ditch a few samples
-    while (MPU6050_read_fifo_count(MPU6050_2_fd) != 0) MPU6050_read_fifo_data(MPU6050_2_fd, fifo_returns);
-    while (MPU6050_read_fifo_count(MPU6050_1_fd) != 0) MPU6050_read_fifo_data(MPU6050_1_fd, fifo_returns);
-
-    GYRO_BIAS_1[0] = 0.0;
-    GYRO_BIAS_1[1] = 0.0;
-    GYRO_BIAS_1[2] = 0.0;
-    GYRO_BIAS_2[0] = 0.0;
-    GYRO_BIAS_2[1] = 0.0;
-    GYRO_BIAS_2[2] = 0.0;
- 
-    for(count = 0; count < 100; ++count){
-        while (MPU6050_read_fifo_count(MPU6050_2_fd) == 0) usleep(5000);
-        MPU6050_read_fifo_data(MPU6050_2_fd, fifo_returns);
-
-        z0 += fifo_returns[0];
-        z1 += fifo_returns[1];
-        z2 += fifo_returns[2];
-        u0 += fifo_returns[3];
-        u1 += fifo_returns[4];
-        u2 += fifo_returns[5];
-        
-        while (MPU6050_read_fifo_count(MPU6050_1_fd) == 0) usleep(5000);
-        MPU6050_read_fifo_data(MPU6050_1_fd, fifo_returns);
-        GYRO_BIAS_1[0] += fifo_returns[3];
-        GYRO_BIAS_1[1] += fifo_returns[4];
-        GYRO_BIAS_1[2] += fifo_returns[5];
-
-    }
-    u0 /= 100.0;
-    u1 /= 100.0;
-    u2 /= 100.0;
-    z0 /= 100.0;
-    z1 /= 100.0;
-    z2 /= 100.0;
-    
-    GYRO_BIAS_2[0] = u0;
-    GYRO_BIAS_2[1] = u1;
-    GYRO_BIAS_2[2] = u2;
-    
-    GYRO_BIAS_1[0] /= 100.0;
-    GYRO_BIAS_1[1] /= 100.0;
-    GYRO_BIAS_1[2] /= 100.0;
-    
-    
- //   printf("GXB:%+07.1f GYB:%+07.1f GZB:%+07.1f\n", u0,u1,u2); 
-    MPU6050_stop_fifos();
-  
-    return atan2(z1, z2) * RADIANS_TO_DEGREES_MULTIPLIER;
-}
-
-int MPU6050_start_fifos(int ODR, int gyro_fs, int accel_fs){
-    if (MPU6050_1_fd != -1) return -1;
-    if ((MPU6050_1_fd = open(I2CDEV, O_RDWR)) < 0) {
-        MPU6050_1_fd = -1;
-        return -1;
-    }
-    if (ioctl(MPU6050_1_fd, I2C_SLAVE, MPU6050_1_I2C_ADDRESS) < 0) {
-        close(MPU6050_1_fd);
-        MPU6050_1_fd = -1;
-        return -1;
-    }
-
-    if (MPU6050_2_fd != -1) return -1;
-    if ((MPU6050_2_fd = open(I2CDEV, O_RDWR)) < 0) {
-        MPU6050_2_fd = -1;
-        return -1;
-    }
-    if (ioctl(MPU6050_2_fd, I2C_SLAVE, MPU6050_2_I2C_ADDRESS) < 0) {
-        close(MPU6050_2_fd);
-        MPU6050_2_fd = -1;
-        return -1;
-    }
-
-    // reset device
-    __u8 rtemp = i2c_smbus_read_byte_data(MPU6050_1_fd, MPU6050_RA_PWR_MGMT_1);
-    i2cWriteByteData(MPU6050_1_fd, MPU6050_RA_PWR_MGMT_1, rtemp | 0x80);
-    rtemp = i2c_smbus_read_byte_data(MPU6050_2_fd, MPU6050_RA_PWR_MGMT_1);
-    i2cWriteByteData(MPU6050_2_fd, MPU6050_RA_PWR_MGMT_1, rtemp | 0x80);
-    usleep(500000);
-
-    // take out of sleep
-    rtemp = i2c_smbus_read_byte_data(MPU6050_1_fd, MPU6050_RA_PWR_MGMT_1);
-    i2cWriteByteData(MPU6050_1_fd, MPU6050_RA_PWR_MGMT_1, rtemp & 0xBF);
-    rtemp = i2c_smbus_read_byte_data(MPU6050_2_fd, MPU6050_RA_PWR_MGMT_1);
-    i2cWriteByteData(MPU6050_2_fd, MPU6050_RA_PWR_MGMT_1, rtemp & 0xBF);
-
-    // set clock source to xgyro
-    rtemp = i2c_smbus_read_byte_data(MPU6050_1_fd, MPU6050_RA_PWR_MGMT_1) & 0xF8;
-    i2cWriteByteData(MPU6050_1_fd, MPU6050_RA_PWR_MGMT_1, rtemp | 0x01); //0x04
-    rtemp = i2c_smbus_read_byte_data(MPU6050_2_fd, MPU6050_RA_PWR_MGMT_1) & 0xF8;
-    i2cWriteByteData(MPU6050_2_fd, MPU6050_RA_PWR_MGMT_1, rtemp | 0x01); //0x04
-
-    switch(accel_fs){
-        case 4:
-            i2cWriteByteData(MPU6050_1_fd,MPU6050_RA_ACCEL_CONFIG, 0x08);  
-            i2cWriteByteData(MPU6050_2_fd,MPU6050_RA_ACCEL_CONFIG, 0x08);
-            MPU6050_accel_scale_factor = MPU6050_ACCEL_SCALE_MODIFIER_4G;
-            break;
-        case 2:
-            i2cWriteByteData(MPU6050_1_fd,MPU6050_RA_ACCEL_CONFIG, 0x00);  
-            i2cWriteByteData(MPU6050_2_fd,MPU6050_RA_ACCEL_CONFIG, 0x00);
-            MPU6050_accel_scale_factor = MPU6050_ACCEL_SCALE_MODIFIER_2G;
-    }
-
-    switch(gyro_fs){
-        case 1000:
-            i2cWriteByteData(MPU6050_1_fd,MPU6050_RA_GYRO_CONFIG, 0x10);  
-            i2cWriteByteData(MPU6050_2_fd,MPU6050_RA_GYRO_CONFIG, 0x10);
-            MPU6050_gyro_scale_factor = MPU6050_GYRO_SCALE_MODIFIER_1000DEG;
-            break;
-        case 500:
-            i2cWriteByteData(MPU6050_1_fd,MPU6050_RA_GYRO_CONFIG, 0x08);  
-            i2cWriteByteData(MPU6050_2_fd,MPU6050_RA_GYRO_CONFIG, 0x08);
-            MPU6050_gyro_scale_factor = MPU6050_GYRO_SCALE_MODIFIER_500DEG;
-            break;
-        }
-
-    // LPF to 188Hz
-    i2cWriteByteData(MPU6050_1_fd, MPU6050_RA_CONFIG, 0x01);
-    i2cWriteByteData(MPU6050_2_fd, MPU6050_RA_CONFIG, 0x01);
-
-    switch(ODR){
-        case 500:
-            i2cWriteByteData(MPU6050_1_fd,MPU6050_RA_SMPLRT_DIV, 1);
-            i2cWriteByteData(MPU6050_2_fd,MPU6050_RA_SMPLRT_DIV, 1);
-            break;
-        case 200:
-            i2cWriteByteData(MPU6050_1_fd,MPU6050_RA_SMPLRT_DIV, 4);
-            i2cWriteByteData(MPU6050_2_fd,MPU6050_RA_SMPLRT_DIV, 4);
-            break;
-        case 100:
-            i2cWriteByteData(MPU6050_1_fd,MPU6050_RA_SMPLRT_DIV, 9);
-            i2cWriteByteData(MPU6050_2_fd,MPU6050_RA_SMPLRT_DIV, 9);
-            break;
-        case 50:
-            i2cWriteByteData(MPU6050_1_fd,MPU6050_RA_SMPLRT_DIV, 19);
-            i2cWriteByteData(MPU6050_2_fd,MPU6050_RA_SMPLRT_DIV, 19);
-            break;
-    }    
-    // select accel and gyro to go into FIFO
-    i2cWriteByteData(MPU6050_1_fd,MPU6050_RA_FIFO_EN, 0x78);
-    i2cWriteByteData(MPU6050_2_fd,MPU6050_RA_FIFO_EN, 0x78);
-
-    // start FIFO
-    i2cWriteByteData(MPU6050_1_fd, MPU6050_RA_USER_CTRL, 0x40);
-    i2cWriteByteData(MPU6050_2_fd, MPU6050_RA_USER_CTRL, 0x40);
-
-
-    return 0;
-}
-
-void MPU6050_stop_fifos(){
-    __u8 rtemp;
-    if (MPU6050_1_fd != -1){
-        rtemp = i2c_smbus_read_byte_data(MPU6050_1_fd, MPU6050_RA_USER_CTRL);
-        i2cWriteByteData(MPU6050_1_fd, MPU6050_RA_USER_CTRL, (rtemp & 0xBF));
-        i2cWriteByteData(MPU6050_1_fd, MPU6050_RA_USER_CTRL, (rtemp | 0x04));
-        close(MPU6050_1_fd);
-        MPU6050_1_fd = -1;
-    }
-
-    if (MPU6050_2_fd != -1){
-        rtemp = i2c_smbus_read_byte_data(MPU6050_2_fd, MPU6050_RA_USER_CTRL);
-        i2cWriteByteData(MPU6050_2_fd, MPU6050_RA_USER_CTRL, (rtemp & 0xBF));
-        i2cWriteByteData(MPU6050_2_fd, MPU6050_RA_USER_CTRL, (rtemp | 0x04));
-        close(MPU6050_2_fd);
-        MPU6050_2_fd = -1;
-    }
-
-}
-// arugument (command) =0 normal running =1 cleanup =2 stabilise (don't write anything)
-void MPU6050_pull_data(int command){
-    float fifo_data_1[6];
-    float fifo_data_2[6];
-    float combined_data[6];
-    float accTang, taccn;
-    static float nudgeAngle;
-    static float accn=0;
-    int count_1, count_2, i, duplicate, number_to_pull;
-
-    static char local_outbuf[65000];
-    static char remote_outbuf[1500];
+void pushData(void){
+    static char local_outbuf[4000];
+    static char remote_outbuf[4000];
     static char local_outbuf_line[150];
     static char remote_outbuf_line[150];
-    static int local_count = 0, nudgeCount =0;
+    static int local_count = 0;
     int remote_count = 0;
+    static float accn = 0;
+	static float nudgeAngle=0;
+	static int nudgeCount =0;
+	float taccn;
 
-    if(command == 1){
-        if(local_count != 0) fputs(local_outbuf, fd_write_out);
-        fflush(fd_write_out);
-        local_count = 0;
-        return;
-    }        
+    pullData();
 
-    if (MPU6050_1_fd == -1 || MPU6050_2_fd == -1 || fd_write_out == NULL) {
-        fprintf(stderr,"Fifos not started or can't write to file\n");
-        printf("EFIF:\n");
-        printf("STPD:\n");
-        MPU6050_stop_fifos();
-        RUNNING = 0;
-        LOOPSLEEP = 100000;
-        if(fd_write_out != NULL){
-            if(local_count != 0) fputs(local_outbuf, fd_write_out);
-            fflush(fd_write_out);
-            fclose(fd_write_out);
-            local_count = 0;
-            fd_write_out = NULL;
-        }
-        return;
-    }
-    count_1 = MPU6050_read_fifo_count(MPU6050_1_fd);
-    count_2 = MPU6050_read_fifo_count(MPU6050_2_fd);
-    if(count_1 == 0 || count_2 == 0) return;
+    pullData();
 
-    if (count_1 > 1000 || count_2 >= 1000){ // overflow (or nearly so)
-        printf("\nEOVF:\n");
-        if (local_count + 8 > (sizeof local_outbuf -2)) {
-            fputs(local_outbuf, fd_write_out);
-            local_count = 0;
-        }
-        local_count += sprintf(&local_outbuf[local_count],"\nEOVF:\n");
-        // some sort of recovery algorithm would be nice...
-    }
-
-    // ditch a sample if one fifo is running faster then the other
-    if ((count_1 - count_2) >=24){
-        MPU6050_read_fifo_data(MPU6050_1_fd, fifo_data_1);
-        count_1 -= 12;
-    } else if ((count_2 - count_1) >=24){
-        MPU6050_read_fifo_data(MPU6050_2_fd, fifo_data_2);
-        count_2 -= 12;
-    }
-    OUT_COUNT += (count_1 > count_2) ? (count_2 / 12) : (count_1 / 12);
-    while(count_1 >=12 && count_2 >= 12){
-        count_1 -= 12;
-        count_2 -= 12;
-        MPU6050_read_fifo_data(MPU6050_1_fd, fifo_data_1);
-        MPU6050_read_fifo_data(MPU6050_2_fd, fifo_data_2);
-        combined_data[0] = (fifo_data_2[0] + fifo_data_1[0]) / 2.0;
-        combined_data[1] = (fifo_data_2[1] + fifo_data_1[1]) / 2.0;
-        combined_data[2] = (fifo_data_2[2] + fifo_data_1[2]) / 2.0;
-        combined_data[3] = (fifo_data_2[3] + fifo_data_1[3]) / 2.0;
-        combined_data[4] = (fifo_data_2[4] + fifo_data_1[4]) / 2.0;
-        combined_data[5] = (fifo_data_2[5] + fifo_data_1[5]) / 2.0;
-
-//        for(i=0; i<6; ++i) combined_data[i] = (fifo_data_2[i] - fifo_data_1[i]) / 2.0;
-               
-        calculate(combined_data[3],combined_data[4],combined_data[5], combined_data[0],combined_data[1],combined_data[2],sample_period);
-        if(command != 2){
-            head = (head + 1) % BUFFERSIZE;
-            available += 1;
-        }
-        rateBuffer[head] = combined_data[3];
-        angleBuffer[head] = roll;
-    }
-    if(available < PUSHBATCH + SAVGOLLENGTH || command == 2) return;
+    if(!RUNNING) return;
+    if(available < PUSHBATCH + SAVGOLLENGTH) return;
 
     for(int counter = available; counter > SAVGOLLENGTH; --counter){
+
         taccn = savGol(tail);
         if(taccn * accn < 0.0 && angleBuffer[tail] > 170.0 && angleBuffer[tail] < 190.0  && nudgeCount == 0) {
+            unsigned int lastTail = (tail == 0) ? BUFFERSIZE-1 : tail -1;
             float nudgeFactor = accn /(accn - taccn);
-            float angleDiffFrom180 = (angleBuffer[((tail -1) % BUFFERSIZE + BUFFERSIZE) % BUFFERSIZE] + nudgeFactor*(angleBuffer[tail]-angleBuffer[((tail -1) % BUFFERSIZE + BUFFERSIZE) % BUFFERSIZE]) ) - 180.0;
+            float angleDiffFrom180 = (angleBuffer[lastTail] + nudgeFactor*(angleBuffer[tail]-angleBuffer[lastTail])) - 180.0;
             if(nudgeAngle != 0.0){
                 nudgeAngle = 0.9*nudgeAngle + 0.1*angleDiffFrom180; // apply a bit of smoothing
             } else {
@@ -818,17 +570,16 @@ void MPU6050_pull_data(int command){
             nudgeCount = 5;
         } 
         if(nudgeCount != 0) nudgeCount -= 1; // don't do this twice in one half stroke
-        angleBuffer[tail] -= nudgeAngle;
         accn = taccn;
-        
-        sprintf(remote_outbuf_line, "LIVE:A:%+07.1f,R:%+07.1f,C:%+07.1f\n", angleBuffer[tail], rateBuffer[tail], accn);
+
+        sprintf(remote_outbuf_line, "LIVE:A:%+07.1f,R:%+07.1f,C:%+07.1f,N:%+07.1f\n", angleBuffer[tail]-nudgeAngle, rateBuffer[tail], accn, nudgeAngle);
         if (remote_count + strlen(remote_outbuf_line) > (sizeof remote_outbuf -2)) {
             printf("%s",remote_outbuf);
             remote_count = 0;
         }
         remote_count += sprintf(&remote_outbuf[remote_count],remote_outbuf_line);
  
-        sprintf(local_outbuf_line,"A:%+07.1f,R:%+07.1f,C:%+07.1f,NA:%+07.1f\n", angleBuffer[tail], rateBuffer[tail], accn, nudgeAngle);
+        sprintf(local_outbuf_line,"A:%+07.1f,R:%+07.1f,C:%+07.1f\n", angleBuffer[tail], rateBuffer[tail], accn);
         if (local_count + strlen(local_outbuf_line) > (sizeof local_outbuf -2)) {
             fputs(local_outbuf, fd_write_out);
             fflush(fd_write_out);
@@ -836,12 +587,100 @@ void MPU6050_pull_data(int command){
         }
         local_count += sprintf(&local_outbuf[local_count],local_outbuf_line);
         tail = (tail + 1) % BUFFERSIZE;
+        available -= 1;
 //        fprintf(fd_write_out,"A:%+07.1f,R:%+07.1f,C:%+07.1f,P:%+07.1f,Y:%+07.1f,AX:%+06.3f,AY:%+06.3f,AZ:%+06.3f,GX:%+07.1f,GY:%+07.1f,GZ:%+07.1f,X:%+06.3f,Y:%+06.3f,Z:%+06.3f\n", roll, (gyro_data[0] + last_x_gyro)/2.0, accTang, pitch, yaw, accel_data[0], accel_data[1], accel_data[2], gyro_data[0], gyro_data[1], gyro_data[2],a[0],a[1],a[2]);
     }
-    available = SAVGOLLENGTH;
-    if(remote_count != 0) printf("%s",remote_outbuf);
-//    if(local_count != 0) fputs(local_outbuf, fd_write_out);
-   
+    if(remote_count != 0) {printf("%s",remote_outbuf); remote_count = 0;}
+    if(local_count != 0) {fputs(local_outbuf, fd_write_out); local_count = 0;}  // perhaps make sd card writes less frequent but this'll do for the moment, dont' forget to increase the size of the buffer to do this.
+}
+
+void pullData(void){
+    float fifo_data_1[6];
+    float fifo_data_2[6];
+    float combined_data[6];
+    static unsigned int angleCorrection = 0;
+
+    int count_1 = readFIFOcount(BCM2835_SPI_CS0);
+    int count_2 = readFIFOcount(BCM2835_SPI_CS1);
+
+    if (count_1 > 4000 || count_2 >= 4000){ // overflow (or nearly so)
+        printf("\nEOVF:\n");
+        // some sort of recovery algorithm would be nice...
+    }
+    // ditch a sample if one fifo is running faster then the other
+    if ((count_1 - count_2) >=24){
+        readFIFO(BCM2835_SPI_CS0, fifo_data_1);
+        count_1 -= 12;
+    } else if ((count_2 - count_1) >=24){
+        readFIFO(BCM2835_SPI_CS1, fifo_data_2);
+        count_2 -= 12;
+    }
+
+    if(count_1 < 48 || count_2 < 48) return;
+    
+    if(RUNNING) OUT_COUNT += (count_1 > count_2) ? (count_2 / 48) : (count_1 / 48);
+    while(count_1 >=48 && count_2 >= 48){
+        count_1 -= 48;
+        count_2 -= 48;
+        for(int i = 0; i < 6; ++i) combined_data[i] = 0;
+        for(int i = 0; i < 4; ++i){
+            readFIFO(BCM2835_SPI_CS0, fifo_data_1);
+            readFIFO(BCM2835_SPI_CS1, fifo_data_2);
+            combined_data[0] += (fifo_data_2[0] + fifo_data_1[0]) / 2.0; // Ax
+            combined_data[1] += (fifo_data_2[1] + fifo_data_1[1]) / 2.0; // Ay
+            combined_data[2] += (fifo_data_2[2] + fifo_data_1[2]) / 2.0; // Az
+            combined_data[3] += (fifo_data_2[3] + fifo_data_1[3]) / 2.0; // Gx
+            combined_data[4] += (fifo_data_2[4] + fifo_data_1[4]) / 2.0; // Gy
+            combined_data[5] += (fifo_data_2[5] + fifo_data_1[5]) / 2.0; // Gz
+        }
+        for(int i = 0; i < 6; ++i) combined_data[i] /= 4;
+		
+		combined_data[0] = (combined_data[0]-calibrationData.accBiasX)*calibrationData.accScaleX;
+        combined_data[1] = (combined_data[1]-calibrationData.accBiasY)*calibrationData.accScaleY;
+		combined_data[2] = (combined_data[2]-calibrationData.accBiasZ)*calibrationData.accScaleZ;
+		combined_data[3] = (combined_data[3]-calibrationData.gyroBiasX)*calibrationData.gyroScaleX;
+		combined_data[4] = (combined_data[4]-calibrationData.gyroBiasY)*calibrationData.gyroScaleY;
+		combined_data[5] = (combined_data[5]-calibrationData.gyroBiasZ)*calibrationData.gyroScaleZ;
+		
+        calculate(combined_data[3],combined_data[4],combined_data[5], combined_data[0],combined_data[1],combined_data[2],calibrationData.samplePeriod);
+
+        if (CALIBRATING) fprintf (fdCalibrationData,"%+.8e %+.8e %+.8e %+.8e %+.8e %+.8e %+.8e\n", calibrationTimestamp, combined_data[3] * DEGREES_TO_RADIANS_MULTIPLIER,combined_data[4] * DEGREES_TO_RADIANS_MULTIPLIER,combined_data[5] * DEGREES_TO_RADIANS_MULTIPLIER, combined_data[0] * g0 ,combined_data[1] * g0,combined_data[2] * g0);
+        calibrationTimestamp += calibrationData.samplePeriod;
+
+        if(!RUNNING) continue;
+
+    // need to correct reported angles to match
+    // the system we are using 0 degrees = bell at
+    // balance at handstroke, 360 degrees = bell at
+    // balance at backstroke. 180 degrees = BDC. 
+
+        unsigned int lastHead = (head == 0) ? BUFFERSIZE-1 : head -1;
+        float angle = direction*(roll-tareValue)-180.0;
+        angle += angleCorrection;
+        if((angleBuffer[lastHead] - angle) > 270){
+            if(angleCorrection < 720 ) { // should always be true
+                angleCorrection += 360; 
+                angle += 360;
+            }
+        } else if ((angleBuffer[lastHead] - angle) < -270){
+            if(angleCorrection > 0){ // should always be true
+            angleCorrection -= 360; 
+            angle -= 360;
+            }
+        }
+        
+/*        float rolldiff = (roll-lastRoll) * direction;    
+        if(rolldiff > 250.0) {
+            rolldiff -= 360.0;
+        } else if (rolldiff < -250.0) {
+            rolldiff += 360.0;
+        }*/
+        rateBuffer[head] = (combined_data[3] - xGyroBias) * direction;
+        angleBuffer[head] = angle;
+        head = (head + 1) % BUFFERSIZE;
+        available += 1;
+        if(available >= BUFFERSIZE) {printf("EOVF:\n"); available -= 1;}
+    }
 }
 
 float savGol(unsigned int startPosition){
@@ -851,66 +690,6 @@ float savGol(unsigned int startPosition){
         savGolResult += ODR*(savGolCoefficients[i] * rateBuffer[(windowStartPosition +i) % BUFFERSIZE]);
     }
     return(savGolResult);
-}
-
-void MPU6050_read_fifo_data(int dfd, float *values){
-    __u8 returns[12];
-    float temp0;
-    i2cReadBlockData(dfd, MPU6050_RA_FIFO_R_W, 12, returns);
-    values[0]=(float)((returns[0] << 8) + returns[1]); 
-    values[1]=(float)((returns[2] << 8) + returns[3]);
-    values[2]=(float)((returns[4] << 8) + returns[5]);
-    values[3]=(float)((returns[6] << 8) + returns[7]); 
-    values[4]=(float)((returns[8] << 8) + returns[9]);
-    values[5]=(float)((returns[10] << 8) + returns[11]);
-/*    if(dfd == MPU6050_1_fd){
-        values[1] += yoffset_1;
-        values[1] *= yscale_1;
-        values[2] += zoffset_1;
-        values[2] *= zscale_1;
-    } else {
-        values[1] += yoffset_2;
-        values[1] *= yscale_2;
-        values[2] += zoffset_2;
-        values[2] *= zscale_2;
-    }
-*/   
-    
-    // temporary remapping of axes X->Z Y->X  X->Y
-    temp0=values[0];
-    values[0]=values[1];
-    values[1]=values[2];
-    values[2]=temp0;
-
-    temp0=values[3];
-    values[3]=values[4];
-    values[4]=values[5];
-    values[5]=temp0;
-
-
-    for(int i=0; i<3; ++i){
-        if(values[i] >= 0x8000) values[i] -= 0x10000;
-        values[i] /= MPU6050_accel_scale_factor;
-        values[i] *= ROTATIONS[i];
-    }
-
-  
-    for(int i=3; i<6; ++i){
-        if(values[i] >= 0x8000) values[i] -= 0x10000;
-        values[i] /= MPU6050_gyro_scale_factor;
-        values[i] *= ROTATIONS[i-3];
-//        if(dfd == MPU6050_1_fd){
-//            values[i] -= GYRO_BIAS_1[i-3];
-//        } else {
-//            values[i] -= GYRO_BIAS_2[i-3];
-//        }
-    }
-
-}
-
-int MPU6050_read_fifo_count(int dfd){
-    __u32 high = i2c_smbus_read_byte_data(dfd, MPU6050_RA_FIFO_COUNTH);
-    return ((high << 8) + i2c_smbus_read_byte_data(dfd, MPU6050_RA_FIFO_COUNTL)) & 0x07FF;
 }
 
 /* 
@@ -1133,13 +912,15 @@ void calculate(float u0, float u1, float u2, float z0, float z1,float z2, float 
     x[1] = x[1]/xlen;
     x[2] = x[2]/xlen;
 
+    xGyroBias=x[3]*RADIANS_TO_DEGREES_MULTIPLIER; // get this for free!
+
     // compute Euler angles (not exactly a part of the extended Kalman filter)
     // yaw integration through full rotation matrix
     float u_nb1 = u1 - x[4];
     float u_nb2 = u2 - x[5];
 
-    float cy = cos(yaw); //old angles (last state before integration)
-    float sy = sin(yaw);
+    float cy = cos(yaw * DEGREES_TO_RADIANS_MULTIPLIER); //old angles (last state before integration)
+    float sy = sin(yaw * DEGREES_TO_RADIANS_MULTIPLIER);
     float d = sqrt(x_last[1]*x_last[1] + x_last[2]*x_last[2]);
     float d_inv = 1.0 / d;
 
@@ -1158,196 +939,217 @@ void calculate(float u0, float u1, float u2, float z0, float z1,float z2, float 
 
     // compute new pitch and roll angles from a posteriori states
     pitch = asin(-x[0]) * RADIANS_TO_DEGREES_MULTIPLIER;
+    roll = atan2(x[1],x[2]) * RADIANS_TO_DEGREES_MULTIPLIER;
     
-    
-    // need to correct reported angles to match
-    // the system we are using 0 degrees = bell at
-    // balance at handstroke, 360 degrees = bell at
-    // balance at backstroke. 180 degrees = BDC. 
-    
-    float rolldiff = (atan2(x[1],x[2]) * RADIANS_TO_DEGREES_MULTIPLIER) - roll;
-    if(rolldiff > 250.0) {
-        rolldiff -= 360.0;
-    } else if (rolldiff < -250.0) {
-        rolldiff += 360.0;
-    }    
-    roll = roll + rolldiff;
-
     // save the estimated non-gravitational acceleration
     a[0] = z0-x[0]*g0;
     a[1] = z1-x[1]*g0;
     a[2] = z2-x[2]*g0;
-
 }
 
-/*
-  i2c functions
-*/
-
-
-__s32 i2cReadInt(int fd, __u8 address) {
-    __s32 res = i2c_smbus_read_word_data(fd, address);
-    if (0 > res) {
-        close(fd);
+void setup(void){
+	
+    if (!bcm2835_init()){
+        printf("Unable to inititalise bcm2835\n");
         exit(1);
     }
-    res = ((res<<8) & 0xFF00) | ((res>>8) & 0xFF);
-    return res;
-}
-
-//Write a byte
-void i2cWriteByteData(int fd, __u8 address, __u8 value) {
-    if (0 > i2c_smbus_write_byte_data(fd, address, value)) {
-        close(fd);
+	
+	//setup I2C
+    if (!bcm2835_i2c_begin()){
+        printf("Unable to inititalise i2c\n");
         exit(1);
     }
-}
+	
+    bcm2835_i2c_set_baudrate(100000);
+    bcm2835_i2c_setSlaveAddress(0x10);
 
-// Read a block of data
-void i2cReadBlockData(int fd, __u8 address, __u8 length, __u8 *values) {
-    if (0 > i2c_smbus_read_i2c_block_data(fd, address,length,values)) {
-        close(fd);
-        exit(1);
+	
+	//  setup SPI
+    if (!bcm2835_spi_begin()){
+      printf("bcm2835_spi_begin failed. \n");
+      exit(1);
     }
-}
+	
+    bcm2835_spi_setBitOrder(BCM2835_SPI_BIT_ORDER_MSBFIRST);
+    bcm2835_spi_setDataMode(BCM2835_SPI_MODE3);
+    bcm2835_spi_set_speed_hz(8000000);
+    bcm2835_spi_setChipSelectPolarity(BCM2835_SPI_CS0, LOW);
+    bcm2835_spi_setChipSelectPolarity(BCM2835_SPI_CS1, LOW);
+
+   //reset devices
+    writeRegisterBits(BCM2835_SPI_CS0,ICM20689_PWR_MGMT_1,0xFF,0x80);
+    writeRegisterBits(BCM2835_SPI_CS1,ICM20689_PWR_MGMT_1,0xFF,0x80);
+    usleep(100000);
+ 
+   //disable i2c
+    writeRegisterBits(BCM2835_SPI_CS0,ICM20689_USER_CTRL,0xFF,0x10);
+    writeRegisterBits(BCM2835_SPI_CS1,ICM20689_USER_CTRL,0xFF,0x10);
+
+    if(readRegister(BCM2835_SPI_CS0,ICM20689_WHO_AM_I) != 0x98){
+      printf("Unable to read from device 0. \n");
+      exit(1);        
+    }
+    if(readRegister(BCM2835_SPI_CS1,ICM20689_WHO_AM_I) != 0x98){
+      printf("Unable to read from device 1. \n");
+      exit(1);        
+    }
+    // bring out of sleep, set clksel (to PLL) and disable temperature sensor
+    writeRegister(BCM2835_SPI_CS0,ICM20689_PWR_MGMT_1,0x09);
+    writeRegister(BCM2835_SPI_CS1,ICM20689_PWR_MGMT_1,0x09);
+    usleep(30000); 
+
+    //configure DLPF
+    writeRegister(BCM2835_SPI_CS0,ICM20689_CONFIG,0x01);
+    writeRegister(BCM2835_SPI_CS1,ICM20689_CONFIG,0x01);
+
+    //full scale accelerometer range to 4g
+    writeRegister(BCM2835_SPI_CS0,ICM20689_ACCEL_CONFIG,0x08);
+    writeRegister(BCM2835_SPI_CS1,ICM20689_ACCEL_CONFIG,0x08);
+
+    //full scale gyro range to 500deg/s
+    writeRegister(BCM2835_SPI_CS0,ICM20689_GYRO_CONFIG,0x08);
+    writeRegister(BCM2835_SPI_CS1,ICM20689_GYRO_CONFIG,0x08);
+
+    //set sample rate divider we want 500Hz assuming base clock is 1KHz
+    writeRegister(BCM2835_SPI_CS0,ICM20689_SMPLRT_DIV,0x01);
+    writeRegister(BCM2835_SPI_CS1,ICM20689_SMPLRT_DIV,0x01);
+
+    //set FIFO size to 4K (this setting does not appear in the V1 datasheet!)
+    writeRegister(BCM2835_SPI_CS0,ICM20689_ACCEL_CONFIG_2,0xC0);
+    writeRegister(BCM2835_SPI_CS1,ICM20689_ACCEL_CONFIG_2,0xC0);
     
-__s32 i2c_smbus_access(int file, char read_write, __u8 command, int size, union i2c_smbus_data *data) {
-    struct i2c_smbus_ioctl_data args;
-    __s32 err;
-    args.read_write = read_write;
-    args.command = command;
-    args.size = size;
-    args.data = data;
-    err = ioctl(file, I2C_SMBUS, &args);
-    if (err == -1)
-        err = -errno;
-    return err;
+    //select registers for FIFO
+    writeRegister(BCM2835_SPI_CS0,ICM20689_FIFO_EN,0x78);
+    writeRegister(BCM2835_SPI_CS1,ICM20689_FIFO_EN,0x78);
+
+    //clear data paths and reset FIFO (keep i2c disabled)
+    writeRegister(BCM2835_SPI_CS0,ICM20689_USER_CTRL,0x15);
+    writeRegister(BCM2835_SPI_CS1,ICM20689_USER_CTRL,0x15);
+
+	// load up calibration data from Arduino
+	I2C_BUFFER[0]=10;
+	bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 10 (samplePeriod)
+	bcm2835_i2c_read(I2C_BUFFER,4); usleep(100);
+    float result;
+    result = extractFloat(0);
+    if(!isnan(result)) calibrationData.samplePeriod = result;
+	
+	I2C_BUFFER[0]=5;
+	bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 5 (accBiasXYZ)
+	bcm2835_i2c_read(I2C_BUFFER,12); usleep(100);
+    result = extractFloat(0);
+	if(!isnan(result)) calibrationData.accBiasX = result;
+    result = extractFloat(4);
+	if(!isnan(result)) calibrationData.accBiasY = result;
+    result = extractFloat(8);
+	if(!isnan(result)) calibrationData.accBiasZ = result;
+	
+	I2C_BUFFER[0]=6;
+	bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 6 (accScaleXYZ)
+	bcm2835_i2c_read(I2C_BUFFER,12); usleep(100);
+    result = extractFloat(0);
+	if(!isnan(result)) calibrationData.accScaleX = result;
+    result = extractFloat(4);
+	if(!isnan(result)) calibrationData.accScaleY = result;
+    result = extractFloat(8);
+	if(!isnan(result)) calibrationData.accScaleZ = result;
+
+	I2C_BUFFER[0]=7;
+	bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 7 (gyroBiasXYZ)
+	bcm2835_i2c_read(I2C_BUFFER,12); usleep(100);
+    result = extractFloat(0);
+	if(!isnan(result)) calibrationData.gyroBiasX = result;
+    result = extractFloat(4);
+	if(!isnan(result)) calibrationData.gyroBiasY = result;
+    result = extractFloat(8);
+	if(!isnan(result)) calibrationData.gyroBiasZ = result;
+
+	I2C_BUFFER[0]=8;
+	bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 8 (gyroScaleXYZ)
+	bcm2835_i2c_read(I2C_BUFFER,12); usleep(100);
+    result = extractFloat(0);
+	if(!isnan(result)) calibrationData.gyroScaleX = result;
+    result = extractFloat(4);
+	if(!isnan(result)) calibrationData.gyroScaleY = result;
+    result = extractFloat(8);
+	if(!isnan(result)) calibrationData.gyroScaleZ = result;
+
+    //start FIFO - keep i2c disabled
+    writeRegister(BCM2835_SPI_CS0,ICM20689_USER_CTRL,0x50);
+    writeRegister(BCM2835_SPI_CS1,ICM20689_USER_CTRL,0x50);
+    
 }
 
-__s32 i2c_smbus_write_quick(int file, __u8 value) {
-    return i2c_smbus_access(file, value, 0, I2C_SMBUS_QUICK, NULL);
+float extractFloat(uint8_t index){
+	floatConv._bytes[0] = I2C_BUFFER[index];
+	floatConv._bytes[1] = I2C_BUFFER[index+1];
+	floatConv._bytes[2] = I2C_BUFFER[index+2];
+	floatConv._bytes[3] = I2C_BUFFER[index+3];
+	return floatConv._float;
 }
 
-__s32 i2c_smbus_read_byte(int file) {
-    union i2c_smbus_data data;
-    int err;
-    err = i2c_smbus_access(file, I2C_SMBUS_READ, 0, I2C_SMBUS_BYTE, &data);
-    if (err < 0)
-        return err;
-    return 0x0FF & data.byte;
+
+uint16_t readFIFOcount(uint8_t device){
+    return ((uint16_t)readRegister(device,ICM20689_FIFO_COUNTH) << 8) + readRegister(device,ICM20689_FIFO_COUNTL); 
 }
 
-__s32 i2c_smbus_write_byte(int file, __u8 value) {
-    return i2c_smbus_access(file, I2C_SMBUS_WRITE, value, I2C_SMBUS_BYTE, NULL);
+void readFIFO(uint8_t device, float* values){
+    float temp0;
+    bcm2835_spi_chipSelect(device);
+    SPI_BUFFER[0] = ICM20689_FIFO_R_W | 0x80;
+    for(uint8_t i = 1; i<13; ++i){
+        SPI_BUFFER[i] = 0;  
+    }
+    bcm2835_spi_transfern(SPI_BUFFER,13);
+    values[0]=((uint16_t)SPI_BUFFER[1] << 8) + SPI_BUFFER[2]; 
+    values[1]=((uint16_t)SPI_BUFFER[3] << 8) + SPI_BUFFER[4];
+    values[2]=((uint16_t)SPI_BUFFER[5] << 8) + SPI_BUFFER[6];
+    values[3]=((uint16_t)SPI_BUFFER[7] << 8) + SPI_BUFFER[8]; 
+    values[4]=((uint16_t)SPI_BUFFER[9] << 8) + SPI_BUFFER[10];
+    values[5]=((uint16_t)SPI_BUFFER[11] << 8) + SPI_BUFFER[12];
+
+    // remapping of axes X->Z Y->X  X->Y
+    temp0=values[0];
+    values[0]=values[1];
+    values[1]=values[2];
+    values[2]=temp0;
+
+    temp0=values[3];
+    values[3]=values[4];
+    values[4]=values[5];
+    values[5]=temp0;
+
+    for(int i=0; i<3; ++i){
+        if(values[i] >= 0x8000) values[i] -= 0x10000;
+        values[i] *= (4.0/32768.0); // 4G full scale
+    }
+  
+    for(int i=3; i<6; ++i){
+        if(values[i] >= 0x8000) values[i] -= 0x10000;
+        values[i] *= (500.0/32768.0); // 500deg/sec full scale
+    }
 }
 
-__s32 i2c_smbus_read_byte_data(int file, __u8 command) {
-    union i2c_smbus_data data;
-    int err;
-    err = i2c_smbus_access(file, I2C_SMBUS_READ, command, I2C_SMBUS_BYTE_DATA, &data);
-    if (err < 0)
-        return err;
-    return 0x0FF & data.byte;
+void writeRegister(uint8_t device, uint8_t reg, uint8_t value){
+    bcm2835_spi_chipSelect(device);
+    SPI_BUFFER[0] = reg; //& 0x7F;  // set high bit for a write
+    SPI_BUFFER[1] = value;
+    bcm2835_spi_transfern(SPI_BUFFER,2);
 }
 
-__s32 i2c_smbus_write_byte_data(int file, __u8 command, __u8 value) {
-    union i2c_smbus_data data;
-    data.byte = value;
-    return i2c_smbus_access(file, I2C_SMBUS_WRITE, command, I2C_SMBUS_BYTE_DATA, &data);
+void writeRegisterBits(uint8_t device, uint8_t reg, uint8_t mask, uint8_t value){
+    uint8_t readValue;
+    readValue = readRegister(device,reg);
+    bcm2835_spi_chipSelect(device);
+    SPI_BUFFER[0] = reg; // & 0x7F;  // clear high bit for a write
+    SPI_BUFFER[1] = (readValue & mask) | value;
+    bcm2835_spi_transfern(SPI_BUFFER,2);
 }
 
-__s32 i2c_smbus_read_word_data(int file, __u8 command) {
-    union i2c_smbus_data data;
-    int err;
-    err = i2c_smbus_access(file, I2C_SMBUS_READ, command, I2C_SMBUS_WORD_DATA, &data);
-    if (err < 0)
-        return err;
-    return 0x0FFFF & data.word;
-}
-
-__s32 i2c_smbus_write_word_data(int file, __u8 command, __u16 value){
-    union i2c_smbus_data data;
-    data.word = value;
-    return i2c_smbus_access(file, I2C_SMBUS_WRITE, command, I2C_SMBUS_WORD_DATA, &data);
-}
-
-__s32 i2c_smbus_process_call(int file, __u8 command, __u16 value) {
-    union i2c_smbus_data data;
-    data.word = value;
-    if (i2c_smbus_access(file, I2C_SMBUS_WRITE, command, I2C_SMBUS_PROC_CALL, &data))
-        return -1;
-    else
-        return 0x0FFFF & data.word;
-}
-
-/* Returns the number of read bytes */
-__s32 i2c_smbus_read_block_data(int file, __u8 command, __u8 *values){
-    union i2c_smbus_data data;
-    int i, err;
-    err = i2c_smbus_access(file, I2C_SMBUS_READ, command, I2C_SMBUS_BLOCK_DATA, &data);
-    if (err < 0)
-        return err;
-
-    for (i = 1; i <= data.block[0]; i++)
-        values[i-1] = data.block[i];
-    return data.block[0];
-}
-
-__s32 i2c_smbus_write_block_data(int file, __u8 command, __u8 length, const __u8 *values) {
-    union i2c_smbus_data data;
-    int i;
-    if (length > I2C_SMBUS_BLOCK_MAX)
-        length = I2C_SMBUS_BLOCK_MAX;
-    for (i = 1; i <= length; i++)
-        data.block[i] = values[i-1];
-    data.block[0] = length;
-    return i2c_smbus_access(file, I2C_SMBUS_WRITE, command,
-                I2C_SMBUS_BLOCK_DATA, &data);
-}
-
-/* Returns the number of read bytes */
-__s32 i2c_smbus_read_i2c_block_data(int file, __u8 command, __u8 length, __u8 *values) {
-    union i2c_smbus_data data;
-    int i, err;
-    if (length > I2C_SMBUS_BLOCK_MAX)
-        length = I2C_SMBUS_BLOCK_MAX;
-    data.block[0] = length;
-    err = i2c_smbus_access(file, I2C_SMBUS_READ, command,
-                   length == 32 ? I2C_SMBUS_I2C_BLOCK_BROKEN :
-                I2C_SMBUS_I2C_BLOCK_DATA, &data);
-    if (err < 0)
-        return err;
-    for (i = 1; i <= data.block[0]; i++)
-        values[i-1] = data.block[i];
-    return data.block[0];
-}
-
-__s32 i2c_smbus_write_i2c_block_data(int file, __u8 command, __u8 length, const __u8 *values) {
-    union i2c_smbus_data data;
-    int i;
-    if (length > I2C_SMBUS_BLOCK_MAX)
-        length = I2C_SMBUS_BLOCK_MAX;
-    for (i = 1; i <= length; i++)
-        data.block[i] = values[i-1];
-    data.block[0] = length;
-    return i2c_smbus_access(file, I2C_SMBUS_WRITE, command,
-                I2C_SMBUS_I2C_BLOCK_BROKEN, &data);
-}
-
-/* Returns the number of read bytes */
-__s32 i2c_smbus_block_process_call(int file, __u8 command, __u8 length, __u8 *values) {
-    union i2c_smbus_data data;
-    int i, err;
-    if (length > I2C_SMBUS_BLOCK_MAX)
-        length = I2C_SMBUS_BLOCK_MAX;
-    for (i = 1; i <= length; i++)
-        data.block[i] = values[i-1];
-    data.block[0] = length;
-    err = i2c_smbus_access(file, I2C_SMBUS_WRITE, command,
-                   I2C_SMBUS_BLOCK_PROC_CALL, &data);
-    if (err < 0)
-        return err;
-    for (i = 1; i <= data.block[0]; i++)
-        values[i-1] = data.block[i];
-    return data.block[0];
+uint8_t readRegister(uint8_t device, uint8_t reg){
+    bcm2835_spi_chipSelect(device);
+    SPI_BUFFER[0] = reg | 0x80;  //set high bit for a read
+    SPI_BUFFER[1] = 0;
+    bcm2835_spi_transfern(SPI_BUFFER,2);
+    return SPI_BUFFER[1];
 }

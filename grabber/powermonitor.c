@@ -21,7 +21,15 @@
 * bell rope.  The Bell-Boy uses rotational acceleration of the bell as a proxy for force applied.  The
 * hardware is currently a Pi Zero running Arch Linux.
 
-* This program tests the i2c power monitoring stuff
+* This program monitors the power reports from the Arduino and executes shutdown if requested.
+* It is necessary as the grabber may not be operating so this program and the grabber program hand off
+* control to each other via the presence (or otherwise) of the /tmp/BBlive file.  The /tmp/BBlive is created by
+* the grabber so that this program knows not to query the Arduino whenever the grabber is active.
+
+* Another thing that might not be obvious is that the wifi network systemd service file creates a /tmp/HAPDstart
+* file.  This signals this program that the wifi network is up and this program then signals the Arduino of that.
+* The Arduino uses this to switch from the regular on-off green flash of the LED to an intermittent flash.  The
+* overall idea being that the Arduino can trigger a shutdown if the network does not come up.
 
 */
 #include <stdio.h>
@@ -48,6 +56,8 @@ void sig_handler(int signum) {
 int main(int argc, char const *argv[]){
     char i2cBuffer[4];
     struct sigaction sig_action;
+	int result = 0;
+
     memset(&sig_action, 0, sizeof(struct sigaction));
     sig_action.sa_handler = sig_handler;
     sigaction(SIGTERM, &sig_action, NULL);
@@ -61,43 +71,35 @@ int main(int argc, char const *argv[]){
         printf("Unable to inititalise i2c\n");
         exit(1);
     }
-    bcm2835_i2c_set_baudrate(400000);
+    bcm2835_i2c_set_baudrate(100000);
     bcm2835_i2c_setSlaveAddress(0x10);
-/*
-    i2cBuffer[0]=11;
-    bcm2835_i2c_write(i2cBuffer,1);
-    usleep(1000);
-    if(bcm2835_i2c_read(i2cBuffer,2) != BCM2835_I2C_REASON_OK ) printf("F");
-    printf("FirstVcc: %d\n", (i2cBuffer[0]<<8)+i2cBuffer[1]); 
-    usleep(1000);
-    i2cBuffer[0]=12;
-    bcm2835_i2c_write(i2cBuffer,1);    
-    usleep(1000);
-    if(bcm2835_i2c_read(i2cBuffer,2) != BCM2835_I2C_REASON_OK ) printf("F");
-    printf("SecondVcc: %d\n", (i2cBuffer[0]<<8)+i2cBuffer[1]); 
-    i2cBuffer[0]=13;
-    usleep(1000);
-    bcm2835_i2c_write(i2cBuffer,1);
-    usleep(1000);
-    if(bcm2835_i2c_read(i2cBuffer,2) != BCM2835_I2C_REASON_OK ) printf("F");
-    printf("ThirdVcc: %d\n", (i2cBuffer[0]<<8)+i2cBuffer[1]); 
-    usleep(1000);
-*/  
+
+	i2cBuffer[0]=2;
+	bcm2835_i2c_write(i2cBuffer,1); usleep(100); // set register 2 (power)
+
+	while(!sig_exit){
+		if(access("/tmp/HAPDstart", F_OK) != -1 ){
+			i2cBuffer[0]=1;
+			bcm2835_i2c_write(i2cBuffer,1); usleep(100); // set register 1 - indicates sucessful boot to Arduino
+			break;	
+		}
+		bcm2835_i2c_read(i2cBuffer,2); usleep(100);
+		result = (i2cBuffer[0]<<8)+i2cBuffer[1];
+		if(result & 0x8000) system("/usr/bin/sync && /usr/bin/shutdown -P now");
+		usleep(500000);
+	}
+  
     i2cBuffer[0]=2;
-    bcm2835_i2c_write(i2cBuffer,1);
-    int count = 0;
-    int result =0;
-    usleep(1000);
+    bcm2835_i2c_write(i2cBuffer,1); usleep(100); // set register 2 (power)
     while(!sig_exit){
-        if(bcm2835_i2c_read(i2cBuffer,2) != BCM2835_I2C_REASON_OK ) printf("F");
-        result = (i2cBuffer[0]<<8)+i2cBuffer[1];
-        if(result & 0x8000){
-            printf("Shutdown signal...%d\n",result - 0x8000);
-            system("/usr/bin/sync && /usr/bin/shutdown -P now");
-        }
-        if(!(count % 10))printf("At %d minutes, received %d\n",count/10,result);
-        count += 1;
-        usleep(6000000); // check every six seconds
+		if (access("/tmp/BBlive", F_OK) == -1){
+			bcm2835_i2c_read(i2cBuffer,2); usleep(100);
+			result = (i2cBuffer[0]<<8)+i2cBuffer[1];
+			if(result & 0x8000){
+				system("/usr/bin/sync && /usr/bin/shutdown -P now");
+			}
+		}
+        usleep(1000000); // check every second
     }
     bcm2835_i2c_end(); 
     bcm2835_close();

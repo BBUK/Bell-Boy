@@ -33,9 +33,9 @@ if [ $(id -u) -ne 0 ]; then
     exit 1
 fi
 
-if [ $(cat /boot/config.txt | grep 'dtparam=i2c_arm=on' | wc -l) -eq 0 ]; then
-  echo -e "\ndtparam=i2c_arm=on\ndtparam=i2c_arm_baudrate=400000\n" | tee -a /boot/config.txt
-fi
+#if [ $(cat /boot/config.txt | grep 'dtparam=i2c_arm=on' | wc -l) -eq 0 ]; then
+#  echo -e "\ndtparam=i2c_arm=on\ndtparam=i2c_arm_baudrate=400000\n" | tee -a /boot/config.txt
+#fi
 
 #if [ $(cat /boot/config.txt | grep 'dtoverlay=pi3-disable-wifi' | wc -l) -eq 0 ]; then
 #  echo -e "\ndtoverlay=pi3-disable-wifi\n" | tee -a /boot/config.txt
@@ -49,9 +49,9 @@ fi
 #  echo -e "\ndtoverlay=i2c-gpio,i2c_gpio_sda=2,i2c_gpio_scl=3,i2c_gpio_delay_us=0\n" | tee -a /boot/config.txt
 #fi
 
-#if [ $(cat /boot/config.txt | grep 'dtoverlay=gpio-poweroff' | wc -l) -eq 0 ]; then
-#  echo -e "\ndtoverlay=gpio-poweroff,gpiopin=18,active_low\n" | tee -a /boot/config.txt
-#fi
+if [ $(cat /boot/config.txt | grep 'dtoverlay=gpio-poweroff' | wc -l) -eq 0 ]; then
+  echo -e "\ndtoverlay=gpio-poweroff,gpiopin=4\n" | tee -a /boot/config.txt
+fi
 
 #test to see if we should have BNO080 in reset
 #if [ $(cat /boot/config.txt | grep 'gpio=24=pd' | wc -l) -eq 0 ]; then
@@ -62,9 +62,9 @@ fi
 #  echo -e "\ngpio=17=pd\n" | tee -a /boot/config.txt
 #fi
 
-if [ $(cat /etc/modules-load.d/raspberrypi.conf | grep 'i2c-dev' | wc -l) -eq 0 ]; then
-  echo -e "\ni2c-dev\n" | tee -a /etc/modules-load.d/raspberrypi.conf
-fi
+#if [ $(cat /etc/modules-load.d/raspberrypi.conf | grep 'i2c-dev' | wc -l) -eq 0 ]; then
+#  echo -e "\ni2c-dev\n" | tee -a /etc/modules-load.d/raspberrypi.conf
+#fi
 
 #this may fail on more recent firmwares but does not affect script
 if [ $(cat /etc/modules-load.d/raspberrypi.conf | grep '\#snd-bcm2835' | wc -l) -eq 0 ]; then
@@ -130,6 +130,7 @@ ExecStartPre=-/usr/bin/iw dev wlan0 set power_save off
 ExecStartPre=/usr/bin/sh -c "/usr/bin/ip addr add 10.0.0.1/24 broadcast 10.0.0.255 dev wlan0"
 ExecStartPre=/usr/bin/systemctl start hostapd
 ExecStart=/usr/bin/dhcpd -4 -q -cf /etc/dhcpd.conf -pf /run/ap.pid wlan0
+ExecStartPost=-/usr/bin/touch /tmp/HAPDstart
 ExecStopPost=/usr/bin/systemctl stop hostapd
 ExecStopPost=-/usr/bin/ip link set dev wlan0 down
 KillSignal=SIGINT
@@ -169,6 +170,7 @@ ExecStartPre=-/usr/bin/iw dev wlan1 set power_save off
 ExecStartPre=/usr/bin/sh -c "/usr/bin/ip addr add 10.0.0.1/24 broadcast 10.0.0.255 dev wlan1"
 ExecStartPre=/usr/bin/systemctl start hostapd
 ExecStart=/usr/bin/dhcpd -4 -q -cf /etc/dhcpd.conf -pf /run/ap.pid wlan1
+ExecStartPost=-/usr/bin/touch /tmp/HAPDstart
 ExecStopPost=/usr/bin/systemctl stop hostapd
 ExecStopPost=-/usr/bin/ip link set dev wlan1 down
 KillSignal=SIGINT
@@ -229,13 +231,15 @@ RestartSec=5
 WantedBy=multi-user.target
 HDHD
 
-tee /etc/systemd/system/32kHz.service <<HDHD
+tee /etc/systemd/system/powermonitor.service <<HDHD
 [Unit]
-Description= 32Khz PWM service file
+Description= BellBoy Power monitor Service File
 [Service]
 User=root
-Type=oneshot
-ExecStart=/root/32kHz
+Type=simple
+ExecStart=/root/powermonitor
+Restart=always
+RestartSec=5
 [Install]
 WantedBy=multi-user.target
 HDHD
@@ -264,8 +268,8 @@ make install  || { echo "Unable to install BCM2835 library. Exiting"; exit 1; }
 cd ~/Bell-Boy/grabber
 gcc grabber.c -o grabber -lm -lbcm2835 || { echo "Unable to compile grabber.  Exiting."; exit 1; }
 mv grabber /srv/http/
-gcc 32kHz.c -o 32kHz -lbcm2835 || { echo "Unable to compile 32kHz. Exiting"; exit 1; }
-mv 32kHz /root/
+gcc powermonitor.c -o powermonitor -lbcm2835 || { echo "Unable to compile Power monitor. Exiting"; exit 1; }
+mv powermonitor /root/
 
 cd ~/Bell-Boy
 mv images/Mounting.png /srv/http/
@@ -318,7 +322,7 @@ systemctl enable bellboy
 systemctl enable ap0.timer
 systemctl enable ap1.timer
 systemctl enable smb nmb
-systemctl enable 32kHz
+systemctl enable powermonitor
 systemctl enable updater
 
 cp ~/Bell-Boy/images/imagepack.zip /srv/http

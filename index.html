@@ -85,16 +85,6 @@
     cursor: pointer;
 	}
     
-    .filled-circle {
-    position:relative;
-    top: 2px;
-    padding: 2px 35px;
-    margin-right: 5px;
-    width:25px;
-    height:25px;
-    border-radius:25px;
-    background-color: #ff0000;
-    } 
   
     </style>
 </head>
@@ -115,15 +105,16 @@
 	<TR><TH>Change the playback speed of a loaded file or a finished live recording</TH><TH class="right">Play speed:&nbsp;<select class="selectfile" id="speedSelect"></select></TH></TR>
     <TR><TH>Some bells will show a smaller "pull strength" measurement on the display.  This setting allows you to change the scale of the signals displayed (units are arbitary)</TH><TH class="right">Scale:&nbsp;<select class="selectfile" id="scaleSelect"></select></TH></TR>
     <TR><TH>Click the button to the right to "tare" the bell.  You should only do this if the bell is down and stable. If you applied tare in the wrong position and the bell is no longer down, you can also clear the tare (a standard tare value will be applied, which may be less accurate).</TH><TH class="right"><button class="selectfile" id="tareButton">Tare</button><button class="selectfile" id="clearTareButton">Clear</button></TH></TR>
-    <TR><TH>Click the button to the right to do an initial (one time) calibration.  Move the device down so that it rests stationary each of its six faces for a second or two.  Repeat until the indicator below is green, then press save.  Press the cross on the top right to exit without saving.</TH><TH class="right"><span class="filled-circle" id="grvIndicator"></span><button class="selectfile" id="calibButton">Start</button><section><div class="face face-top"></div><div class="face face-bottom"></div><div class="face face-side1"></div><div class="face face-side2"></div><div class="face face-end1"></div><div class="face face-end2"></div></section></TH></TR>
+    <TR><TH>Click the button to the right to check the device is working.  Press the cross on the top right to exit.</TH><TH class="right"><button class="selectfile" id="calibButton">Start</button><section><div class="face face-top"></div><div class="face face-bottom"></div><div class="face face-side1"></div><div class="face face-side2"></div><div class="face face-end1"></div><div class="face face-end2"></div></section></TH></TR>
 </TABLE>
 </div></div>
-<div style="margin-top: 0px; padding-bottom: 5px; padding-top: 5px; background: #686888; text-align:center; min-width: 800px;">
+<div style="margin-top: 0px; padding-bottom: 5px; padding-top: 5px; padding-left: 60px; background: #686888; text-align:center; min-width: 800px;">
 	<img src="./circle-record-active.png" id="recordIcon" title="Record session/Stop Recording" class="invertable">
 	<img src="./circle-play-active.png" id="playIcon" title="Play downloaded or recorded session" class="invertable">
 	<img src="./circle-pause-active.png" id="pauseIcon" title="Pause playback" class="invertable">
     <img src="./settings-active.png" id="settingsIcon" title="Open settings menu" class="invertable">
 	<img src="./cloud-download-active.png" id="downloadIcon" title="Download saved session" class="invertable">
+	<img src="./battery100.png" id="batteryIcon" title="Battery: Unknown%" align="right" style="width:48px; height: 30px; padding: 3px; padding-right: 8px; margin-top: 39px;">
 </div>
 <div style="margin-top: 3px; border-radius: 0px 0px 25px 25px; background: #686888; text-align:center; min-width: 800px;">
 	<img src="./circle-back-active.png" id="backIcon" title="Skip back to previous stroke" class="invertable">

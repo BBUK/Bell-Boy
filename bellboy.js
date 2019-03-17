@@ -31,6 +31,7 @@ var wsHost="10.0.0.1"
 
 var sampleInterval = 5.0;  // milliseconds for each sample (default 200 times/sec).  Updated by SAMP: command
 var collectInterval = 50.0; // update display in ms - here 20 times/sec
+var batteryLevel = 100;
 
 var canvasBD = document.getElementById("canvasBD");
 var ctxBD = canvasBD.getContext("2d");
@@ -328,25 +329,31 @@ function parseResult(dataBack) {
     }
     if (dataBack.slice(0,5) == "SAMP:"){
         sampleInterval = parseFloat(dataBack.slice(5))*1000;
-//        setStatus("Received sample period of " + sampleInterval.toFixed(3) + "ms");
+        setStatus("Received sample period of " + sampleInterval.toFixed(3) + "ms");
         return;
     }
-    
-    if (dataBack.slice(0,5) == "CALI:"){
-        var entries = dataBack.split(",");
-        var grv = parseInt(entries[0].slice(5));
-        if(grv == 0) document.getElementById("grvIndicator").style.backgroundColor = "#F00";
-        if(grv == 1) document.getElementById("grvIndicator").style.backgroundColor = "#F80";
-        if(grv == 2) document.getElementById("grvIndicator").style.backgroundColor = "#FD0";
-        if(grv == 3) document.getElementById("grvIndicator").style.backgroundColor = "#0F0";
-
-        var roll  = 360-parseFloat(entries[1]);
-        var pitch = 360-parseFloat(entries[2]);
-        var yaw   = 360-parseFloat(entries[3]);
-        document.querySelector("section").style.transform= "rotateX(" + roll + "deg) rotateZ(" + pitch + "deg) rotateY(" + yaw + "deg)";
+	
+    if (dataBack.slice(0,5) == "BATT:"){
+        batteryLevel = parseInt(dataBack.slice(5));
+		document.getElementById("batteryIcon").alt = "Battery:" + batteryLevel + "%";
+		if(batteryLevel <= 10){
+			document.getElementById("batteryIcon").src = "battery0.png"
+		} else if(batteryLevel <= 40){
+			document.getElementById("batteryIcon").src = "battery50.png"
+		}
         return;
-        // https://www.allaboutcircuits.com/projects/bosch-absolute-orientation-sensor-bno055/
-/*        var x = parseFloat(entries[2]);
+    }
+    	
+    if (dataBack.slice(0,5) == "EYEC:"){
+        var entries = dataBack.split(",");
+
+        var roll  = 360-parseFloat(entries[0].slice(5));
+        var pitch = 360-parseFloat(entries[1]);
+        var yaw   = 0.0; //360-parseFloat(entries[2]);
+        document.querySelector("section").style.transform= "rotateX(" + roll + "deg) rotateZ(-" + pitch + "deg) rotateY(" + yaw + "deg)";
+        return;
+/*        // https://www.allaboutcircuits.com/projects/bosch-absolute-orientation-sensor-bno055/
+        var x = parseFloat(entries[2]);
         var y = parseFloat(entries[3]);
         var z = parseFloat(entries[4]);
         var w = parseFloat(entries[5]);
@@ -365,7 +372,7 @@ function parseResult(dataBack) {
         document.querySelector("section").style.transform= "matrix3D(" + (1 - (yy + zz)) + "," + (xy + wz) + "," + (xz - wy) + "," + 0 + "," + (xy - wz) + "," + (1 - (xx + zz)) + "," + (yz + wx) + "," + 0 + "," + (xz + wy) + "," + (yz - wx) + "," + (1-(xx + yy)) + "," + 0 + "," + 0 + "," + 0 + "," + 0 + "," + 1 +")";
 //        document.querySelector("section").style.transform= "matrix3D(" + (1 - (yy + zz)) + "," + (xy - wz) + "," + (xz + wy) + "," + 0 + "," + (xy + wz) + "," + (1 - (xx + zz)) + "," + (yz - wx) + "," + 0 + "," + (xz - wy) + "," + (yz + wx) + "," + (1-(xx + yy)) + "," + 0 + "," + 0 + "," + 0 + "," + 0 + "," + 1 +")";
 
-        return;*/
+        return; */
     }
 
     if (dataBack.slice(0,5) == "ESTD:"){
@@ -978,12 +985,11 @@ calibButton.onclick = function() {
     if ((currentStatus & RECORDINGSESSION) != 0) return;
     var elem = document.getElementById("calibButton");
     if (elem.innerText == "Start"){
-        elem.innerText = "Save";
-        ws.send("CALI:");
+        elem.innerText = "Stop";
+        ws.send("EYEC:");
     } else {
         elem.innerText = "Start";
-        ws.send("SAVE:");
-        ws.send("STCA:");
+        ws.send("STEC:");
     }
 };
 
