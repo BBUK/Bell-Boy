@@ -1,0 +1,55 @@
+sudo apt-get update
+sudo apt-get upgrade
+sync && sudo reboot
+sudo apt-get install build-essential cmake libeigen3-dev libqt4-dev libqt4-opengl-dev freeglut3-dev gnuplot libxmu-dev libxi-dev libgoogle-glog-dev libatlas-base-dev libsuitesparse-dev libboost-dev screen cmake-curses-gui
+wget http://ceres-solver.org/ceres-solver-1.14.0.tar.gz
+tar xzvf ceres-solver-1.14.0.tar.gz
+nano /etc/dphys-swapfile
+#change swapfile size to 500 overkill !!!
+sudo systemctl restart dphys-swapfile
+mkdir ceres-bin
+cd ceres-bin
+ccmake ../ceres-solver-1.14.0
+# 
+# set build tests to no
+# set build examples to no
+make
+sudo make install
+
+wget https://bitbucket.org/alberto_pretto/imu_tk/get/7780270fb9a2.zip -O imu_tk.zip
+unzip imu_tk.zip
+cd alberto_pretto-imu_tk-7780270fb9a2/
+nano CMakeLists.txt
+# add this to the examples section of the file (towards the bottom)
+# add_executable(BBimu_tk apps/BBimu_tk.cpp)
+# target_link_libraries( BBimu_tk ${IMU_TK_LIBS})
+# set_target_properties( BBimu_tk PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}/bin)
+
+#copy the BBimu_tk.cpp file to alberto_pretto-imu_tk-7780270fb9a2/apps directory
+mkdir build
+cd build
+cmake ..
+make
+
+nano /etc/dphys-swapfile
+#change swapfile size back to 100
+sudo systemctl restart dphys-swapfile
+
+#install bcm2835 library
+#compile calibrate.c needs ICM20689.h
+gcc calibrate.c -o calibrate -lbcm2835
+# put BBimu_tk (in alberto_pretto-imu_tk-7780270fb9a2/bin) into same directory as BBcalibrate
+
+# with bellboy device installed (need to cut 5V power and i2c pins on the pi it is installed on (for safety))
+# run calibrate
+# enter SAMP: to get sample period
+# enter CALI: to start calibration run
+# keep device stable for at least 50 secs and then move into 20-30 different positions each stable for 4 seconds
+# enter STCA:
+# (will now run imu_tk calibration)
+# enter SAVE:
+# check numbers are sane near to 0.008 for sample period
+# all bias numbers close to 0
+# all scale numbers close to 1
+# then saved to arduino on bellboy device
+

@@ -236,11 +236,11 @@ void i2cReceive(int number) {
   if(i2cRegister == 1) flags |= RECIEVEDBOOTUP;
   if(i2cRegister >= 10 && i2cRegister <= 22 && number == 5 && !(flags & WRITETOPROM)){ // got an PROM write COMMAND
     promData[0] = i2cRegister;
-	promData[1] = Wire.read();
-	promData[2] = Wire.read();
-	promData[3] = Wire.read();
-	promData[4] = Wire.read();
-	flags != WRITETOPROM;
+	  promData[1] = Wire.read();
+	  promData[2] = Wire.read();
+	  promData[3] = Wire.read();
+	  promData[4] = Wire.read();
+	  flags |= WRITETOPROM;
   }
 }
 

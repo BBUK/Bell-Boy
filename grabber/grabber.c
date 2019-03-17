@@ -237,17 +237,17 @@ int main(int argc, char const *argv[]){
         fclose(fdTare);
     }
 
-    char tmpfile[] = "/tmp/BBlive"; 
-	int filedes = mkstemp(tmpfile); // signal to powermonitor that we have taken over power monitoring
-	unlink(tmpfile);
-	usleep(100); // need to ensure that powermonitor is not doing anything before we try to access i2C
+    FILE *fdFlagRunning;
+    fdFlagRunning = fopen("/tmp/BBlive","w"); // signal to powermonitor that we have taken over power monitoring
+	unlink("/tmp/BBlive");
+	usleep(1000); // need to ensure that powermonitor is not doing anything before we try to access i2C
 
     setup();
 
     while(!sig_exit){
         usleep(LOOPSLEEP);
 		LOOPCOUNT += 1;
-		if((LOOPCOUNT == 1 || LOOPCOUNT % 2000) == 0){ // check every 100 secs but also the first time through
+		if(LOOPCOUNT == 1 || (LOOPCOUNT % 2000) == 0){ // check every 100 secs but also the first time through
 			I2C_BUFFER[0]=2;
 			bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 2 (power)
 			bcm2835_i2c_read(I2C_BUFFER,2); usleep(100);

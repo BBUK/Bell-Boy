@@ -89,17 +89,17 @@ int main(int argc, char const *argv[]){
 		usleep(500000);
 	}
   
-    i2cBuffer[0]=2;
-    bcm2835_i2c_write(i2cBuffer,1); usleep(100); // set register 2 (power)
     while(!sig_exit){
 		if (access("/tmp/BBlive", F_OK) == -1){
+            i2cBuffer[0]=2;
+            bcm2835_i2c_write(i2cBuffer,1); usleep(100); // set register 2 (power)
 			bcm2835_i2c_read(i2cBuffer,2); usleep(100);
 			result = (i2cBuffer[0]<<8)+i2cBuffer[1];
 			if(result & 0x8000){
 				system("/usr/bin/sync && /usr/bin/shutdown -P now");
 			}
 		}
-        usleep(1000000); // check every second
+        usleep(5000000); // check every 5 seconds
     }
     bcm2835_i2c_end(); 
     bcm2835_close();
