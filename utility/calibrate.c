@@ -73,22 +73,22 @@ unsigned char I2C_BUFFER[16];
 const unsigned int LOOPSLEEP = 50000;  // main loop processes every 0.05 sec.  25 samples should be in FIFO.  Max number of samples in FIFO is 341.  Should be OK.
 
 struct {
-	float samplePeriod;
-	float accBiasX;
-	float accBiasY;
-	float accBiasZ;
-	float accScaleX;
-	float accScaleY;
-	float accScaleZ;
-	float gyroBiasX;
-	float gyroBiasY;
-	float gyroBiasZ;
-	float gyroScaleX;
-	float gyroScaleY;
-	float gyroScaleZ;
-	} calibrationData = {.samplePeriod = 0.008, .accBiasX=0, .accBiasY=0, .accBiasZ = 0,
-						.accScaleX=1, .accScaleY=1, .accScaleZ=1, .gyroBiasX=0, .gyroBiasY=0,
-						.gyroBiasZ=0, .gyroScaleX=1, .gyroScaleY=1, .gyroScaleZ=1};
+    float samplePeriod;
+    float accBiasX;
+    float accBiasY;
+    float accBiasZ;
+    float accScaleX;
+    float accScaleY;
+    float accScaleZ;
+    float gyroBiasX;
+    float gyroBiasY;
+    float gyroBiasZ;
+    float gyroScaleX;
+    float gyroScaleY;
+    float gyroScaleZ;
+} calibrationData = {.samplePeriod = 0.008, .accBiasX=0, .accBiasY=0, .accBiasZ = 0,
+                    .accScaleX=1, .accScaleY=1, .accScaleZ=1, .gyroBiasX=0, .gyroBiasY=0,
+                    .gyroBiasZ=0, .gyroScaleX=1, .gyroScaleY=1, .gyroScaleZ=1};
 
 union {
     float    _float;
@@ -123,9 +123,7 @@ int main(int argc, char const *argv[]){
 	
     while(!sig_exit){
         usleep(LOOPSLEEP);
-      
         pullData();
-
         while(fgets(linein, sizeof(linein), stdin ) != NULL) {
             entries = sscanf(linein, "%5s%[^\n]", command, details);
             if(entries < 1) {
@@ -171,152 +169,143 @@ int main(int argc, char const *argv[]){
     return 0;
 }
 /*
-(registers 	10=samplePeriod
-			11=accBiasX
-			12=accBiasY
-			13=accBiasZ
-			14=accScaleX
-			15=accScaleY
-			16=accScaleZ
-			17=gyroBiasX
-			18=gyroBiasY
-			19=gyroBiasZ
-			20=gyroScaleX
-			21=gyroScaleY
-			22=gyroScaleZ)
+    (registers 	10=samplePeriod, 11=accBiasX,
+    12=accBiasY, 13=accBiasZ, 14=accScaleX, 15=accScaleY, 16=accScaleZ,
+    17=gyroBiasX, 18=gyroBiasY, 19=gyroBiasZ, 20=gyroScaleX, 21=gyroScaleY,
+    22=gyroScaleZ, 5=accBiasXYZ(all in one go 12 bytes), 6=accScaleXYZ(all in one go 12 bytes)
+    7=gyroBiasXYZ(all in one go 12 bytes), 8=gyroScaleXYZ(all in one go 12 bytes))
 */
 void save(void){
-	printf("Loading calibration...\n");
-	FILE *fdCalib;
-	unsigned char linein[100];
-	float dummy1,dummy2;
+    printf("Loading calibration...\n");
+    FILE *fdCalib;
+    unsigned char linein[100];
+    float dummy1,dummy2;
     fdCalib = fopen("BBacc.calib","r");
-	if(fgets(linein, sizeof(linein), fdCalib) == NULL) return;
-	if(fgets(linein, sizeof(linein), fdCalib) == NULL) return;
-	if(fgets(linein, sizeof(linein), fdCalib) == NULL) return;
-	if(fgets(linein, sizeof(linein), fdCalib) == NULL) return;
+    if(fgets(linein, sizeof(linein), fdCalib) == NULL) return;
+    if(fgets(linein, sizeof(linein), fdCalib) == NULL) return;
+    if(fgets(linein, sizeof(linein), fdCalib) == NULL) return;
+    if(fgets(linein, sizeof(linein), fdCalib) == NULL) return;
 
-	if(fgets(linein, sizeof(linein), fdCalib) == NULL) return;
-	sscanf(linein, "%f %f %f", &calibrationData.accScaleX, &dummy1, &dummy2);
-	if(fgets(linein, sizeof(linein), fdCalib) == NULL) return;
-	sscanf(linein, "%f %f %f", &dummy1, &calibrationData.accScaleY, &dummy2);
-	if(fgets(linein, sizeof(linein), fdCalib) == NULL) return;
-	sscanf(linein, "%f %f %f", &dummy1, &dummy2, &calibrationData.accScaleZ);
+    if(fgets(linein, sizeof(linein), fdCalib) == NULL) return;
+    sscanf(linein, "%f %f %f", &calibrationData.accScaleX, &dummy1, &dummy2);
+    if(fgets(linein, sizeof(linein), fdCalib) == NULL) return;
+    sscanf(linein, "%f %f %f", &dummy1, &calibrationData.accScaleY, &dummy2);
+    if(fgets(linein, sizeof(linein), fdCalib) == NULL) return;
+    sscanf(linein, "%f %f %f", &dummy1, &dummy2, &calibrationData.accScaleZ);
 
-	if(fgets(linein, sizeof(linein), fdCalib) == NULL) return;
+    if(fgets(linein, sizeof(linein), fdCalib) == NULL) return;
 
-	if(fgets(linein, sizeof(linein), fdCalib) == NULL) return;
-	sscanf(linein, "%f", &calibrationData.accBiasX);
-	if(fgets(linein, sizeof(linein), fdCalib) == NULL) return;
-	sscanf(linein, "%f", &calibrationData.accBiasY);
-	if(fgets(linein, sizeof(linein), fdCalib) == NULL) return;
-	sscanf(linein, "%f", &calibrationData.accBiasZ);
+    if(fgets(linein, sizeof(linein), fdCalib) == NULL) return;
+    sscanf(linein, "%f", &calibrationData.accBiasX);
+    if(fgets(linein, sizeof(linein), fdCalib) == NULL) return;
+    sscanf(linein, "%f", &calibrationData.accBiasY);
+    if(fgets(linein, sizeof(linein), fdCalib) == NULL) return;
+    sscanf(linein, "%f", &calibrationData.accBiasZ);
 
     fclose(fdCalib);
     fdCalib = fopen("BBgyro.calib","r");
 
-	if(fgets(linein, sizeof(linein), fdCalib) == NULL) return;
-	if(fgets(linein, sizeof(linein), fdCalib) == NULL) return;
-	if(fgets(linein, sizeof(linein), fdCalib) == NULL) return;
-	if(fgets(linein, sizeof(linein), fdCalib) == NULL) return;
+    if(fgets(linein, sizeof(linein), fdCalib) == NULL) return;
+    if(fgets(linein, sizeof(linein), fdCalib) == NULL) return;
+    if(fgets(linein, sizeof(linein), fdCalib) == NULL) return;
+    if(fgets(linein, sizeof(linein), fdCalib) == NULL) return;
 
-	if(fgets(linein, sizeof(linein), fdCalib) == NULL) return;
-	sscanf(linein, "%f %f %f", &calibrationData.gyroScaleX, &dummy1, &dummy2);
-	if(fgets(linein, sizeof(linein), fdCalib) == NULL) return;
-	sscanf(linein, "%f %f %f", &dummy1, &calibrationData.gyroScaleY, &dummy2);
-	if(fgets(linein, sizeof(linein), fdCalib) == NULL) return;
-	sscanf(linein, "%f %f %f", &dummy1, &dummy2, &calibrationData.gyroScaleZ);
+    if(fgets(linein, sizeof(linein), fdCalib) == NULL) return;
+    sscanf(linein, "%f %f %f", &calibrationData.gyroScaleX, &dummy1, &dummy2);
+    if(fgets(linein, sizeof(linein), fdCalib) == NULL) return;
+    sscanf(linein, "%f %f %f", &dummy1, &calibrationData.gyroScaleY, &dummy2);
+    if(fgets(linein, sizeof(linein), fdCalib) == NULL) return;
+    sscanf(linein, "%f %f %f", &dummy1, &dummy2, &calibrationData.gyroScaleZ);
 
-	if(fgets(linein, sizeof(linein), fdCalib) == NULL) return;
+    if(fgets(linein, sizeof(linein), fdCalib) == NULL) return;
 
-	if(fgets(linein, sizeof(linein), fdCalib) == NULL) return;
-	sscanf(linein, "%f", &calibrationData.gyroBiasX);
-	if(fgets(linein, sizeof(linein), fdCalib) == NULL) return;
-	sscanf(linein, "%f", &calibrationData.gyroBiasY);
-	if(fgets(linein, sizeof(linein), fdCalib) == NULL) return;
-	sscanf(linein, "%f", &calibrationData.gyroBiasZ);
+    if(fgets(linein, sizeof(linein), fdCalib) == NULL) return;
+    sscanf(linein, "%f", &calibrationData.gyroBiasX);
+    if(fgets(linein, sizeof(linein), fdCalib) == NULL) return;
+    sscanf(linein, "%f", &calibrationData.gyroBiasY);
+    if(fgets(linein, sizeof(linein), fdCalib) == NULL) return;
+    sscanf(linein, "%f", &calibrationData.gyroBiasZ);
 
     fclose(fdCalib);
     
     printf("Sample period %f\n",calibrationData.samplePeriod);
-	printf("Acc bias %f %f %f\n",calibrationData.accBiasX,calibrationData.accBiasY,calibrationData.accBiasZ);
-	printf("Acc scale %f %f %f\n",calibrationData.accScaleX,calibrationData.accScaleY,calibrationData.accScaleZ);
-	printf("Gyro bias %f %f %f\n",calibrationData.gyroBiasX,calibrationData.gyroBiasY,calibrationData.gyroBiasZ);
-	printf("Gyro scale %f %f %f\n",calibrationData.gyroScaleX,calibrationData.gyroScaleY,calibrationData.gyroScaleZ);
+    printf("Acc bias %f %f %f\n",calibrationData.accBiasX,calibrationData.accBiasY,calibrationData.accBiasZ);
+    printf("Acc scale %f %f %f\n",calibrationData.accScaleX,calibrationData.accScaleY,calibrationData.accScaleZ);
+    printf("Gyro bias %f %f %f\n",calibrationData.gyroBiasX,calibrationData.gyroBiasY,calibrationData.gyroBiasZ);
+    printf("Gyro scale %f %f %f\n",calibrationData.gyroScaleX,calibrationData.gyroScaleY,calibrationData.gyroScaleZ);
 
-	char answer;
-	printf("Do values look sane? (CTRL_C to exit in the next 20 secs) \n");
+    char answer;
+    printf("Do values look sane? (CTRL_C to exit in the next 20 secs) \n");
     usleep(20000000);
     
 	printf("Writing to prom...\n");
-	arduinoWriteFloat(10,calibrationData.samplePeriod);
-	arduinoWriteFloat(11,calibrationData.accBiasX);
-	arduinoWriteFloat(12,calibrationData.accBiasY);
-	arduinoWriteFloat(13,calibrationData.accBiasZ);
-	arduinoWriteFloat(14,calibrationData.accScaleX);
-	arduinoWriteFloat(15,calibrationData.accScaleY);
-	arduinoWriteFloat(16,calibrationData.accScaleZ);
-	arduinoWriteFloat(17,calibrationData.gyroBiasX);
-	arduinoWriteFloat(18,calibrationData.gyroBiasY);
-	arduinoWriteFloat(19,calibrationData.gyroBiasZ);
-	arduinoWriteFloat(20,calibrationData.gyroScaleX);
-	arduinoWriteFloat(21,calibrationData.gyroScaleY);
-	arduinoWriteFloat(22,calibrationData.gyroScaleZ);
-    
-	printf("Verifying...\n");
-	I2C_BUFFER[0]=10;
-	bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 10 (samplePeriod)
-	bcm2835_i2c_read(I2C_BUFFER,4); usleep(100);
-	if(calibrationData.samplePeriod != extractFloat(0)) printf("SamplePeriod: sent %f received %f \n", calibrationData.samplePeriod, extractFloat(0));
-	
-	I2C_BUFFER[0]=5;
-	bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 5 (accBiasXYZ)
-	bcm2835_i2c_read(I2C_BUFFER,12); usleep(100);
-	if(calibrationData.accBiasX != extractFloat(0)) printf("accBiasX: sent %f received %f \n", calibrationData.accBiasX, extractFloat(0));
-	if(calibrationData.accBiasY != extractFloat(4)) printf("accBiasY: sent %f received %f \n", calibrationData.accBiasY, extractFloat(4));
-	if(calibrationData.accBiasZ != extractFloat(8)) printf("accBiasZ: sent %f received %f \n", calibrationData.accBiasZ, extractFloat(8));
-	
-	I2C_BUFFER[0]=6;
-	bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 6 (accScaleXYZ)
-	bcm2835_i2c_read(I2C_BUFFER,12); usleep(100);
-	if(calibrationData.accScaleX != extractFloat(0)) printf("accScaleX: sent %f received %f \n", calibrationData.accScaleX, extractFloat(0));
-	if(calibrationData.accScaleY != extractFloat(4)) printf("accScaleY: sent %f received %f \n", calibrationData.accScaleY, extractFloat(4));
-	if(calibrationData.accScaleZ != extractFloat(8)) printf("accScaleZ: sent %f received %f \n", calibrationData.accScaleZ, extractFloat(8));
+    arduinoWriteFloat(10,calibrationData.samplePeriod);
+    arduinoWriteFloat(11,calibrationData.accBiasX);
+    arduinoWriteFloat(12,calibrationData.accBiasY);
+    arduinoWriteFloat(13,calibrationData.accBiasZ);
+    arduinoWriteFloat(14,calibrationData.accScaleX);
+    arduinoWriteFloat(15,calibrationData.accScaleY);
+    arduinoWriteFloat(16,calibrationData.accScaleZ);
+    arduinoWriteFloat(17,calibrationData.gyroBiasX);
+    arduinoWriteFloat(18,calibrationData.gyroBiasY);
+    arduinoWriteFloat(19,calibrationData.gyroBiasZ);
+    arduinoWriteFloat(20,calibrationData.gyroScaleX);
+    arduinoWriteFloat(21,calibrationData.gyroScaleY);
+    arduinoWriteFloat(22,calibrationData.gyroScaleZ);
 
-	I2C_BUFFER[0]=7;
-	bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 7 (gyroBiasXYZ)
-	bcm2835_i2c_read(I2C_BUFFER,12); usleep(100);
-	if(calibrationData.gyroBiasX != extractFloat(0)) printf("gyroBiasX: sent %f received %f \n", calibrationData.gyroBiasX, extractFloat(0));
-	if(calibrationData.gyroBiasY != extractFloat(4)) printf("gyroBiasY: sent %f received %f \n", calibrationData.gyroBiasY, extractFloat(4));
-	if(calibrationData.gyroBiasZ != extractFloat(8)) printf("gyroBiasZ: sent %f received %f \n", calibrationData.gyroBiasZ, extractFloat(8));
+    printf("Verifying...\n");
+    I2C_BUFFER[0]=10;
+    bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 10 (samplePeriod)
+    bcm2835_i2c_read(I2C_BUFFER,4); usleep(100);
+    if(calibrationData.samplePeriod != extractFloat(0)) printf("SamplePeriod: sent %f received %f \n", calibrationData.samplePeriod, extractFloat(0));
 
-	I2C_BUFFER[0]=8;
-	bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 8 (gyroScaleXYZ)
-	bcm2835_i2c_read(I2C_BUFFER,12); usleep(100);
-	if(calibrationData.gyroScaleX != extractFloat(0)) printf("gyroScaleX: sent %f received %f \n", calibrationData.gyroScaleX, extractFloat(0));
-	if(calibrationData.gyroScaleY != extractFloat(4)) printf("gyroScaleY: sent %f received %f \n", calibrationData.gyroScaleY, extractFloat(4));
-	if(calibrationData.gyroScaleZ != extractFloat(8)) printf("gyroScaleZ: sent %f received %f \n", calibrationData.gyroScaleZ, extractFloat(8));
-	printf("Verification complete.\n");
+    I2C_BUFFER[0]=5;
+    bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 5 (accBiasXYZ)
+    bcm2835_i2c_read(I2C_BUFFER,12); usleep(100);
+    if(calibrationData.accBiasX != extractFloat(0)) printf("accBiasX: sent %f received %f \n", calibrationData.accBiasX, extractFloat(0));
+    if(calibrationData.accBiasY != extractFloat(4)) printf("accBiasY: sent %f received %f \n", calibrationData.accBiasY, extractFloat(4));
+    if(calibrationData.accBiasZ != extractFloat(8)) printf("accBiasZ: sent %f received %f \n", calibrationData.accBiasZ, extractFloat(8));
 
+    I2C_BUFFER[0]=6;
+    bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 6 (accScaleXYZ)
+    bcm2835_i2c_read(I2C_BUFFER,12); usleep(100);
+    if(calibrationData.accScaleX != extractFloat(0)) printf("accScaleX: sent %f received %f \n", calibrationData.accScaleX, extractFloat(0));
+    if(calibrationData.accScaleY != extractFloat(4)) printf("accScaleY: sent %f received %f \n", calibrationData.accScaleY, extractFloat(4));
+    if(calibrationData.accScaleZ != extractFloat(8)) printf("accScaleZ: sent %f received %f \n", calibrationData.accScaleZ, extractFloat(8));
+
+    I2C_BUFFER[0]=7;
+    bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 7 (gyroBiasXYZ)
+    bcm2835_i2c_read(I2C_BUFFER,12); usleep(100);
+    if(calibrationData.gyroBiasX != extractFloat(0)) printf("gyroBiasX: sent %f received %f \n", calibrationData.gyroBiasX, extractFloat(0));
+    if(calibrationData.gyroBiasY != extractFloat(4)) printf("gyroBiasY: sent %f received %f \n", calibrationData.gyroBiasY, extractFloat(4));
+    if(calibrationData.gyroBiasZ != extractFloat(8)) printf("gyroBiasZ: sent %f received %f \n", calibrationData.gyroBiasZ, extractFloat(8));
+
+    I2C_BUFFER[0]=8;
+    bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 8 (gyroScaleXYZ)
+    bcm2835_i2c_read(I2C_BUFFER,12); usleep(100);
+    if(calibrationData.gyroScaleX != extractFloat(0)) printf("gyroScaleX: sent %f received %f \n", calibrationData.gyroScaleX, extractFloat(0));
+    if(calibrationData.gyroScaleY != extractFloat(4)) printf("gyroScaleY: sent %f received %f \n", calibrationData.gyroScaleY, extractFloat(4));
+    if(calibrationData.gyroScaleZ != extractFloat(8)) printf("gyroScaleZ: sent %f received %f \n", calibrationData.gyroScaleZ, extractFloat(8));
+    printf("Verification complete.\n");
 }
 
 void arduinoWriteFloat(uint8_t reg,float value){
-	I2C_BUFFER[0]=reg;
-	floatConv._float = value;
-	I2C_BUFFER[1] = floatConv._bytes[0];
-	I2C_BUFFER[2] = floatConv._bytes[1];
-	I2C_BUFFER[3] = floatConv._bytes[2];
-	I2C_BUFFER[4] = floatConv._bytes[3];
-	bcm2835_i2c_write(I2C_BUFFER,5); 
-	usleep(750000); 
+    I2C_BUFFER[0]=reg;
+    floatConv._float = value;
+    I2C_BUFFER[1] = floatConv._bytes[0];
+    I2C_BUFFER[2] = floatConv._bytes[1];
+    I2C_BUFFER[3] = floatConv._bytes[2];
+    I2C_BUFFER[4] = floatConv._bytes[3];
+    bcm2835_i2c_write(I2C_BUFFER,5); 
+    usleep(750000); 
 }
 
 float extractFloat(uint8_t index){
-	floatConv._bytes[0] = I2C_BUFFER[index];
-	floatConv._bytes[1] = I2C_BUFFER[index+1];
-	floatConv._bytes[2] = I2C_BUFFER[index+2];
-	floatConv._bytes[3] = I2C_BUFFER[index+3];
-	return floatConv._float;
+    floatConv._bytes[0] = I2C_BUFFER[index];
+    floatConv._bytes[1] = I2C_BUFFER[index+1];
+    floatConv._bytes[2] = I2C_BUFFER[index+2];
+    floatConv._bytes[3] = I2C_BUFFER[index+3];
+    return floatConv._float;
 }
 
 void fifoTimer(void){
@@ -411,13 +400,11 @@ void setup(void){
         printf("Unable to inititalise bcm2835\n");
         exit(1);
     }
-	
 	//setup I2C
     if (!bcm2835_i2c_begin()){
         printf("Unable to inititalise i2c\n");
         exit(1);
     }
-	
     bcm2835_i2c_set_baudrate(100000);
     bcm2835_i2c_setSlaveAddress(0x10);
 	
@@ -426,7 +413,6 @@ void setup(void){
       printf("bcm2835_spi_begin failed. \n");
       exit(1);
     }
-	
     bcm2835_spi_setBitOrder(BCM2835_SPI_BIT_ORDER_MSBFIRST);
     bcm2835_spi_setDataMode(BCM2835_SPI_MODE3);
     bcm2835_spi_set_speed_hz(8000000);

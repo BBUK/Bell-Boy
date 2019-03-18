@@ -1,9 +1,0 @@
-EESchema-DOCLIB  Version 2.0
-#
-$CMP ICM-20689
-D InvenSense 6-Axis Motion Sensor, Gyroscope, Accelerometer, I2C
-K mems
-F https://store.invensense.com/datasheets/invensense/MPU-6050_DataSheet_V3%204.pdf
-$ENDCMP
-#
-#End Doc Library

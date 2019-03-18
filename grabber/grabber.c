@@ -62,16 +62,8 @@ float tareValue = 0.0;
 float a[3];
 float xGyroBias = 0.0;
 
-FILE *fdCalibrationData;
-double calibrationTimestamp = 0.0;
-
 int ODR = 125;
-
-//int FS_GYRO = 0;
-//int FS_ACCEL = 0;
-
 int RUNNING = 0;
-int CALIBRATING = 0;
 int EYECANDY = 0;
 int OUT_COUNT = 0;
 
@@ -88,28 +80,23 @@ const unsigned int LOOPSLEEP = 50000;  // main loop processes every 0.05 sec.  2
 unsigned int LOOPCOUNT = 0;
 
 struct {
-	float samplePeriod;
-	float accBiasX;
-	float accBiasY;
-	float accBiasZ;
-	float accScaleX;
-	float accScaleY;
-	float accScaleZ;
-	float gyroBiasX;
-	float gyroBiasY;
-	float gyroBiasZ;
-	float gyroScaleX;
-	float gyroScaleY;
-	float gyroScaleZ;
-	} calibrationData = {.samplePeriod = 0.008, .accBiasX=0, .accBiasY=0, .accBiasZ = 0,
-						.accScaleX=1, .accScaleY=1, .accScaleZ=1, .gyroBiasX=0, .gyroBiasY=0,
-						.gyroBiasZ=0, .gyroScaleX=1, .gyroScaleY=1, .gyroScaleZ=1};
+    float samplePeriod;
+    float accBiasX;
+    float accBiasY;
+    float accBiasZ;
+    float accScaleX;
+    float accScaleY;
+    float accScaleZ;
+    float gyroBiasX;
+    float gyroBiasY;
+    float gyroBiasZ;
+    float gyroScaleX;
+    float gyroScaleY;
+    float gyroScaleZ;
+} calibrationData = {.samplePeriod = 0.008, .accBiasX=0, .accBiasY=0, .accBiasZ = 0,
+                    .accScaleX=1, .accScaleY=1, .accScaleZ=1, .gyroBiasX=0, .gyroBiasY=0,
+                    .gyroBiasZ=0, .gyroScaleX=1, .gyroScaleY=1, .gyroScaleZ=1};
 
-union {
-    float    _float;
-    uint8_t  _bytes[sizeof(float)];
-} floatConv;
- 
 volatile sig_atomic_t sig_exit = 0;
 void sig_handler(int signum) {
     if (signum == SIGINT) fprintf(stderr, "received SIGINT\n");
@@ -138,25 +125,7 @@ void sig_handler(int signum) {
 # (j)   TARE: tares the bell (bell must be down and stable  - not confirmed by code)
 # (k)   EYEC: starts eye candy demo
 # (l)   STEC: stops eye candy demo
-# (m)	CALI: starts initial calibration
-# (n)	STCA: stops initial calibration
-# (o)	SAVE: saves calibration to Arduino (registers 	10=samplePeriod
-# 														11=accBiasX
-#														12=accBiasY
-#														13=accBiasZ
-#														14=accScaleX
-# 														15=accScaleY
-#														16=accScaleZ
-# 														17=gyroBiasX
-#														18=gyroBiasY
-#														19=gyroBiasZ
-#														20=gyroScaleX
-# 														21=gyroScaleY
-#														22=gyroScaleZ
-#														5=accBiasXYZ(all in one go 12 bytes)
-#														6=accScaleXYZ(all in one go 12 bytes)
-#														7=gyroBiasXYZ(all in one go 12 bytes)
-#														8=gyroScaleXYZ(all in one go 12 bytes))
+#
 # There are the following responses back to the user's browser:
 # (i)   STPD: tells the browser that the device has sucessfully stopped sampling
 # (ii)  ESTP: signals an error in the stop process (an attempt to stopped when not started)
@@ -239,8 +208,8 @@ int main(int argc, char const *argv[]){
 
     FILE *fdFlagRunning;
     fdFlagRunning = fopen("/tmp/BBlive","w"); // signal to powermonitor that we have taken over power monitoring
-	unlink("/tmp/BBlive");
-	usleep(1000); // need to ensure that powermonitor is not doing anything before we try to access i2C
+    unlink("/tmp/BBlive");
+    usleep(1000); // need to ensure that powermonitor is not doing anything before we try to access i2C
 
     setup();
 
@@ -294,7 +263,6 @@ int main(int argc, char const *argv[]){
                 continue;
             }
             if(strcmp("SAMP:", command) == 0) {
-//                fifoTimer();
                 printf("SAMP:%f\n",calibrationData.samplePeriod);
                 continue;
             }
@@ -315,32 +283,12 @@ int main(int argc, char const *argv[]){
                 continue;
             }
             if(strcmp("EYEC:", command) == 0) {
-                if(RUNNING || CALIBRATING) continue;
+                if(RUNNING) continue;
 				EYECANDY = 1;
                 continue;
             }
             if(strcmp("STEC:", command) == 0) {
 				EYECANDY = 0;
-                continue;
-            }
-
-            if(strcmp("CALI:", command) == 0) {
-                if(RUNNING) { printf("ECAL:\n"); continue; }
-                calibrationTimestamp = 0.0;
-                fdCalibrationData = fopen("/data/samples/CALIBRATIONDATA","w");
-                if(fdCalibrationData == NULL) {
-                    fprintf(stderr, "Could not open calibration file for writing\n");
-                    printf("ESTR:\n");
-                    continue;
-                }
-				CALIBRATING = 1;
-                continue;
-            }
-            if(strcmp("STCA:", command) == 0) {
-                fflush(fdCalibrationData);
-                fclose(fdCalibrationData);
-                fdCalibrationData = NULL;
-				CALIBRATING = 0;
                 continue;
             }
             if(strcmp("TARE:", command) == 0) {
@@ -435,14 +383,8 @@ int main(int argc, char const *argv[]){
 }
 
 void startRun(void){
-
-//    if(stabilityData.status != 1 && stabilityData.status != 2) {
-//        printf("EMOV:%+07.1f\n",gyroIntegratedRotationVectorData.lastRoll); // bell is moving
-//        return(0);
-//    }
     if(abs(roll-tareValue) < 160 || abs(roll-tareValue) > 178){
         printf("ESTD:%+07.1f\n",roll-tareValue); // bell not at stand
-//        printf("STPD:\n");
         return;
     }
 
@@ -461,79 +403,8 @@ void startRun(void){
     available = SAVGOLHALF;
 
     RUNNING = 1;
-    CALIBRATING = 0;
 	EYECANDY=0;
     return;
-
-/*    if(roll < 0) {  // this bit works out which way the bell rose and adjusts accordingly
-        direction = -1;
-        angleBuffer[0] = (-180.0-roll)+tareValue;        
-    } else {
-        direction = +1;
-        angleBuffer[0] = (roll-180.0)-tareValue;
-    }
-
-    rateBuffer[0] = 0;
-    for(int i = 1; i< BUFFERSIZE; ++i){ // initialise with dummy data for savgol alignment
-        rateBuffer[i] = 0;
-        angleBuffer[i] = angleBuffer[i-1];
-    }
-    head = SAVGOLHALF;
-    tail = 0;
-    available = SAVGOLHALF;
-
-    RUNNING = 1;
-    return;*/
-}
-
-
-void fifoTimer(void){
-    float result1 = 0.0, result2 = 0.0;
-    float dummy[6];
-    result1 = timer(BCM2835_SPI_CS0);
-    result2 = timer(BCM2835_SPI_CS1);
-    while (readFIFOcount(BCM2835_SPI_CS0) != 0) readFIFO(BCM2835_SPI_CS0, dummy);
-    while (readFIFOcount(BCM2835_SPI_CS1) != 0) readFIFO(BCM2835_SPI_CS1, dummy);
-/*    //clear data paths and reset FIFO (keep i2c disabled)
-    writeRegister(BCM2835_SPI_CS0,ICM20689_USER_CTRL,0x15);
-    writeRegister(BCM2835_SPI_CS1,ICM20689_USER_CTRL,0x15);
-    usleep(1000);
-
-    //start FIFO - keep i2c disabled
-    writeRegister(BCM2835_SPI_CS0,ICM20689_USER_CTRL,0x50);
-    writeRegister(BCM2835_SPI_CS1,ICM20689_USER_CTRL,0x50); */
-    
-    calibrationData.samplePeriod = (result1 > result2) ? result1 : result2;
-}
-
-float timer(uint8_t device){
-    struct timeval start, stop;
-    int cco, loops;
-    float dummy[6];
-    float result = 0.0;
-    loops = 4;
-    for(int i = 0; i < loops; ++i){
-        while (readFIFOcount(device) != 0) readFIFO(device, dummy);
-        while (readFIFOcount(device) == 0);
-        gettimeofday(&start, NULL);
-        readFIFO(device, dummy);
-        while (readFIFOcount(device) < (196 * 12)) usleep(4000);  // sleep for about 2 periods
-        while(1){
-            usleep(100);
-            cco = readFIFOcount(device);
-            if(cco == (200 * 12)) {
-                gettimeofday(&stop, NULL);
-                result += (float)((stop.tv_sec-start.tv_sec)+(float)((stop.tv_usec-start.tv_usec)-50)/1000000.0);
-                break;
-            }
-            if(cco > (200 * 12)) {
-                i -= 1;
-                break;
-            }
-        }
-        usleep(5000);
-    }
-    return (result/(200*loops))*4;
 }
 
 void pushData(void){
@@ -544,9 +415,9 @@ void pushData(void){
     static int local_count = 0;
     int remote_count = 0;
     static float accn = 0;
-	static float nudgeAngle=0;
-	static int nudgeCount =0;
-	float taccn;
+    static float nudgeAngle=0;
+    static int nudgeCount =0;
+    float taccn;
 
     pullData();
 
@@ -556,7 +427,6 @@ void pushData(void){
     if(available < PUSHBATCH + SAVGOLLENGTH) return;
 
     for(int counter = available; counter > SAVGOLLENGTH; --counter){
-
         taccn = savGol(tail);
         if(taccn * accn < 0.0 && angleBuffer[tail] > 170.0 && angleBuffer[tail] < 190.0  && nudgeCount == 0) {
             unsigned int lastTail = (tail == 0) ? BUFFERSIZE-1 : tail -1;
@@ -635,17 +505,14 @@ void pullData(void){
         }
         for(int i = 0; i < 6; ++i) combined_data[i] /= 4;
 		
-		combined_data[0] = (combined_data[0]-calibrationData.accBiasX)*calibrationData.accScaleX;
+        combined_data[0] = (combined_data[0]-calibrationData.accBiasX)*calibrationData.accScaleX;
         combined_data[1] = (combined_data[1]-calibrationData.accBiasY)*calibrationData.accScaleY;
-		combined_data[2] = (combined_data[2]-calibrationData.accBiasZ)*calibrationData.accScaleZ;
-		combined_data[3] = (combined_data[3]-calibrationData.gyroBiasX)*calibrationData.gyroScaleX;
-		combined_data[4] = (combined_data[4]-calibrationData.gyroBiasY)*calibrationData.gyroScaleY;
-		combined_data[5] = (combined_data[5]-calibrationData.gyroBiasZ)*calibrationData.gyroScaleZ;
+        combined_data[2] = (combined_data[2]-calibrationData.accBiasZ)*calibrationData.accScaleZ;
+        combined_data[3] = (combined_data[3]-calibrationData.gyroBiasX)*calibrationData.gyroScaleX;
+        combined_data[4] = (combined_data[4]-calibrationData.gyroBiasY)*calibrationData.gyroScaleY;
+        combined_data[5] = (combined_data[5]-calibrationData.gyroBiasZ)*calibrationData.gyroScaleZ;
 		
         calculate(combined_data[3],combined_data[4],combined_data[5], combined_data[0],combined_data[1],combined_data[2],calibrationData.samplePeriod);
-
-        if (CALIBRATING) fprintf (fdCalibrationData,"%+.8e %+.8e %+.8e %+.8e %+.8e %+.8e %+.8e\n", calibrationTimestamp, combined_data[3] * DEGREES_TO_RADIANS_MULTIPLIER,combined_data[4] * DEGREES_TO_RADIANS_MULTIPLIER,combined_data[5] * DEGREES_TO_RADIANS_MULTIPLIER, combined_data[0] * g0 ,combined_data[1] * g0,combined_data[2] * g0);
-        calibrationTimestamp += calibrationData.samplePeriod;
 
         if(!RUNNING) continue;
 
@@ -669,12 +536,6 @@ void pullData(void){
             }
         }
         
-/*        float rolldiff = (roll-lastRoll) * direction;    
-        if(rolldiff > 250.0) {
-            rolldiff -= 360.0;
-        } else if (rolldiff < -250.0) {
-            rolldiff += 360.0;
-        }*/
         rateBuffer[head] = (combined_data[3] - xGyroBias) * direction;
         angleBuffer[head] = angle;
         head = (head + 1) % BUFFERSIZE;
@@ -947,8 +808,7 @@ void calculate(float u0, float u1, float u2, float z0, float z1,float z2, float 
     a[2] = z2-x[2]*g0;
 }
 
-void setup(void){
-	
+void setup(void){	
     if (!bcm2835_init()){
         printf("Unable to inititalise bcm2835\n");
         exit(1);
@@ -962,7 +822,6 @@ void setup(void){
 	
     bcm2835_i2c_set_baudrate(100000);
     bcm2835_i2c_setSlaveAddress(0x10);
-
 	
 	//  setup SPI
     if (!bcm2835_spi_begin()){
@@ -1027,67 +886,75 @@ void setup(void){
     writeRegister(BCM2835_SPI_CS1,ICM20689_USER_CTRL,0x15);
 
 	// load up calibration data from Arduino
-	I2C_BUFFER[0]=10;
-	bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 10 (samplePeriod)
-	bcm2835_i2c_read(I2C_BUFFER,4); usleep(100);
+    // (registers 	10=samplePeriod, 11=accBiasX,
+    // 12=accBiasY, 13=accBiasZ, 14=accScaleX, 15=accScaleY, 16=accScaleZ,
+    // 17=gyroBiasX, 18=gyroBiasY, 19=gyroBiasZ, 20=gyroScaleX, 21=gyroScaleY,
+    // 22=gyroScaleZ, 5=accBiasXYZ(all in one go 12 bytes), 6=accScaleXYZ(all in one go 12 bytes)
+    // 7=gyroBiasXYZ(all in one go 12 bytes), 8=gyroScaleXYZ(all in one go 12 bytes))
+
+    I2C_BUFFER[0]=10;
+    bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 10 (samplePeriod)
+    bcm2835_i2c_read(I2C_BUFFER,4); usleep(100);
     float result;
     result = extractFloat(0);
     if(!isnan(result)) calibrationData.samplePeriod = result;
 	
-	I2C_BUFFER[0]=5;
-	bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 5 (accBiasXYZ)
-	bcm2835_i2c_read(I2C_BUFFER,12); usleep(100);
+    I2C_BUFFER[0]=5;
+    bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 5 (accBiasXYZ)
+    bcm2835_i2c_read(I2C_BUFFER,12); usleep(100);
     result = extractFloat(0);
-	if(!isnan(result)) calibrationData.accBiasX = result;
+    if(!isnan(result)) calibrationData.accBiasX = result;
     result = extractFloat(4);
-	if(!isnan(result)) calibrationData.accBiasY = result;
+    if(!isnan(result)) calibrationData.accBiasY = result;
     result = extractFloat(8);
-	if(!isnan(result)) calibrationData.accBiasZ = result;
+    if(!isnan(result)) calibrationData.accBiasZ = result;
 	
-	I2C_BUFFER[0]=6;
-	bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 6 (accScaleXYZ)
-	bcm2835_i2c_read(I2C_BUFFER,12); usleep(100);
+    I2C_BUFFER[0]=6;
+    bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 6 (accScaleXYZ)
+    bcm2835_i2c_read(I2C_BUFFER,12); usleep(100);
     result = extractFloat(0);
-	if(!isnan(result)) calibrationData.accScaleX = result;
+    if(!isnan(result)) calibrationData.accScaleX = result;
     result = extractFloat(4);
-	if(!isnan(result)) calibrationData.accScaleY = result;
+    if(!isnan(result)) calibrationData.accScaleY = result;
     result = extractFloat(8);
-	if(!isnan(result)) calibrationData.accScaleZ = result;
+    if(!isnan(result)) calibrationData.accScaleZ = result;
 
-	I2C_BUFFER[0]=7;
-	bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 7 (gyroBiasXYZ)
-	bcm2835_i2c_read(I2C_BUFFER,12); usleep(100);
+    I2C_BUFFER[0]=7;
+    bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 7 (gyroBiasXYZ)
+    bcm2835_i2c_read(I2C_BUFFER,12); usleep(100);
     result = extractFloat(0);
-	if(!isnan(result)) calibrationData.gyroBiasX = result;
+    if(!isnan(result)) calibrationData.gyroBiasX = result;
     result = extractFloat(4);
-	if(!isnan(result)) calibrationData.gyroBiasY = result;
+    if(!isnan(result)) calibrationData.gyroBiasY = result;
     result = extractFloat(8);
-	if(!isnan(result)) calibrationData.gyroBiasZ = result;
+    if(!isnan(result)) calibrationData.gyroBiasZ = result;
 
-	I2C_BUFFER[0]=8;
-	bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 8 (gyroScaleXYZ)
-	bcm2835_i2c_read(I2C_BUFFER,12); usleep(100);
+    I2C_BUFFER[0]=8;
+    bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 8 (gyroScaleXYZ)
+    bcm2835_i2c_read(I2C_BUFFER,12); usleep(100);
     result = extractFloat(0);
-	if(!isnan(result)) calibrationData.gyroScaleX = result;
+    if(!isnan(result)) calibrationData.gyroScaleX = result;
     result = extractFloat(4);
-	if(!isnan(result)) calibrationData.gyroScaleY = result;
+    if(!isnan(result)) calibrationData.gyroScaleY = result;
     result = extractFloat(8);
-	if(!isnan(result)) calibrationData.gyroScaleZ = result;
+    if(!isnan(result)) calibrationData.gyroScaleZ = result;
 
     //start FIFO - keep i2c disabled
     writeRegister(BCM2835_SPI_CS0,ICM20689_USER_CTRL,0x50);
     writeRegister(BCM2835_SPI_CS1,ICM20689_USER_CTRL,0x50);
-    
 }
 
 float extractFloat(uint8_t index){
-	floatConv._bytes[0] = I2C_BUFFER[index];
-	floatConv._bytes[1] = I2C_BUFFER[index+1];
-	floatConv._bytes[2] = I2C_BUFFER[index+2];
-	floatConv._bytes[3] = I2C_BUFFER[index+3];
-	return floatConv._float;
+    union {
+        float    _float;
+        uint8_t  _bytes[sizeof(float)];
+    } floatConv;
+    floatConv._bytes[0] = I2C_BUFFER[index];
+    floatConv._bytes[1] = I2C_BUFFER[index+1];
+    floatConv._bytes[2] = I2C_BUFFER[index+2];
+    floatConv._bytes[3] = I2C_BUFFER[index+3];
+    return floatConv._float;
 }
-
 
 uint16_t readFIFOcount(uint8_t device){
     return ((uint16_t)readRegister(device,ICM20689_FIFO_COUNTH) << 8) + readRegister(device,ICM20689_FIFO_COUNTL); 

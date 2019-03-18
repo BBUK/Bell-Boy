@@ -1,4 +1,0 @@
-(sym_lib_table
-  (lib (name BNO080)(type Legacy)(uri C:/Users/peter/Documents/Kicad/Bell-Boy/Bell-Boy/BNO080.lib)(options "")(descr ""))
-  (lib (name Invensense)(type Legacy)(uri C:/Users/peter/Documents/Kicad/Bell-Boy/Bell-Boy/Invensense.lib)(options "")(descr "")(disabled))
-)
