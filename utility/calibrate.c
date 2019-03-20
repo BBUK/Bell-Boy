@@ -27,14 +27,16 @@
 * http://www.dis.uniroma1.it/~pretto/papers/pg_imeko2014.pdf
 
 * Code and installation instructions for the imu_tk calibration routines this program relies on are here:
-* https://bitbucket.org/alberto_pretto/imu_tk 
+* https://bitbucket.org/alberto_pretto/imu_tk .  My own notes on installation are in the NotesOnInstallingimu_tk.docx
+* file in this directory.  My installation is performed on the full version of Raspbian.
 * 
 * The general idea is that this program is run and a SAMP: command is executed a few times until you are happy
 * that the result is stable.  The CALI: command is then executed and this pushes a timestamp and accelerometer 
 * data to /data/samples/CALIBRATIONDATA.  The device is kept still (i.e. resting on a table) for no 
 * less than 50 seconds and is then put into around 30-40 different resting positions each lasting about 4 seconds.
-* After this process, issue the STCA: command.  This program will then calculate the calibration data and save
-* it to the Arduino EEPROM memory.  From there it is accessed whenever the grabber file is started. 
+* After this process, issue the STCA: command.  This program will then calculate the calibrations.  Upon success
+* issue the SAVE: command and this will save the calibration dats to the Arduino EEPROM memory.  
+* From there it is accessed whenever the grabber file is started. 
 */
 
 #include <math.h>

@@ -335,7 +335,7 @@ function parseResult(dataBack) {
 	
     if (dataBack.slice(0,5) == "BATT:"){
         batteryLevel = parseInt(dataBack.slice(5));
-		document.getElementById("batteryIcon").alt = "Battery:" + batteryLevel + "%";
+		document.getElementById("batteryIcon").title = "Battery: " + batteryLevel + "%";
 		if(batteryLevel <= 10){
 			document.getElementById("batteryIcon").src = "battery0.png"
 		} else if(batteryLevel <= 40){

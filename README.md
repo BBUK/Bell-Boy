@@ -1,13 +1,17 @@
 # Bell-Boy
-This repository contains the code for the Bell-Boy Project.
+NEW VERSION IMMINENT - THIS REPOSITORY CONTAINS A GREAT DEAL OF CODE AND INFORMATION IN FLUX BETWEEN VERSIONS SO SHOULD NOT BE RELIED UPON
+
+This repository contains the code for the Bell-Boy Project.  
 
 The Bell-Boy is a device used to measure how hard a person pulls on a tower bell rope.  I hope it will be a useful training aid.  
 
 ## Hardware
 
-The core of the hardware comprises a Raspberry Pi Zero and two IMU boards.  The wiki gives construction information if you want to build your own.
+The core of the hardware comprises a Raspberry Pi Zero and a PCB mounted on it containing two IMU ICs, a ATMEGA328 with the Arduino bootloader and power management and battery charging circuitry.  The Arduino manages battery charging, controls a LED and also stores device calibration data.  The battery is a LiPo integral to the device and is charged via power sourced from the Rasperry Pi's micro USB power socket.  The wiki gives construction information if you want to build your own.
 
 The various files and a description of what they do is set out below
+
+## Software
 
 ### setupBB.sh
 
@@ -15,9 +19,20 @@ This script takes a stock installation of Arch Linux Arm (for the Raspberry Pi) 
 
 ### grabber
 
-This folder contains the source for two small executables.  The first "grabber" interfaces with websocketd (https://github.com/joewalnes/websocketd).  Websockets are used by the front-end Javascript to interface with the Bell-Boy device.  The executable takes data from the IMU ICs, applies am extended Kalman filter (from https://github.com/hhyyti/dcm-imu) then makes the data available to the browser running the front end via websocketd.
+This folder contains the source for two small executables.  
 
-The second executable "MPU6050_calibrate" is use for an optional (but worthwhile) calibration step.
+The first "grabber" takes data from the IMUs, transforms it into angle, rotational velocity and rotational acceleration and pushes the data to the users browser via a websocket.  As the force applied by the ringer on the rope needs to be distinguished from gravity, vibration and sensor noise, the solution:
+
+(a) uses two IMUs and averages the sensor data from each of them
+(b) as the IMUs will inevitably operate at slightly different data rates, it aligns the sensor outputs from the two IMUs
+(c) oversamples data from the IMUs (sensors output at 500Hz but the user sees 125Hz). 
+(d) uses an extended Kalman filter (from https://github.com/hhyyti/dcm-imu) to calculate bell angle.  This particular filter seemed
+(e) uses a Savitsky-Golay filter to smooth the measured rotational acceleration
+(f) requires an one-time calibration of the IMU system (from https://bitbucket.org/alberto_pretto/imu_tk).  This is a really useful method of scale and bias calibration that does not require the IMU to be exactly positioned.
+
+The grabber communicates with the user's broswer via websocketd (https://github.com/joewalnes/websocketd). 
+
+The second executable "powermonitor" monitors battery level reports from the Arduino and shuts down the Pi if he battery is too low.  It only operates when the grabber is not running (the grabber only runs when there is an active websocket connection to the user's browser - if there is such a connection, the grabber takes over power monitoring).
 
 ### bellboy.js
 
@@ -30,6 +45,18 @@ Index file.  Note that this file and the JS reference certain image files (icons
 ### help.html
 
 Help html file served by the Bell-Boy device.
+
+### utility
+
+Some useful utility programs and files.  There is some information here on installing imu_tk (and in particular ceres-solver which is used by imu_tk).
+
+### arduino
+
+Contains the Arduino program running on the "Arduino'd" ATMEGA328 on the Bell-Boy PCB
+
+### old 
+
+Contains some old code and in particular some code for BNO080 interfacing over the Raspberry Pi's SPI which some people may find useful.  I am no longer using the BNO080 so don't expect this code to be updated.
 
 # Donations!
 [Donations](https://paypal.me/PBUK) to this project are welcome :)

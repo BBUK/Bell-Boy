@@ -79,8 +79,8 @@ void loop() {
   if (buttonStatus & CHANGED) {
     buttonStatus &= ~CHANGED;  // switch off change flag
     if (buttonStatus & PRESS) {
-      if(STATE == 1 || STATE==2 || STATE == 4 || STATE == 5 || STATE == 7) STATE = 99;  // power button forces shutdown
-      if(STATE == 6){ // go into order shutdown mode
+      if(STATE == 1 || STATE==2 || STATE == 4 || STATE == 7) STATE = 99;  // power button forces shutdown
+      if(STATE == 5 || STATE == 6){ // go into order shutdown mode
         flags |= SENDLOWBATT;
         count = 0;
         STATE = 7;
