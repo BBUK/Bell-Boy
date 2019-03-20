@@ -73,6 +73,8 @@ unsigned char I2C_BUFFER[16];
 char READ_OUTBUF[1500];
 char READ_OUTBUF_LINE[150];
 int READ_OUTBUF_COUNT;
+char local_outbuf[4000];
+int local_count = 0;
 
 char FILENAME[50];
 
@@ -329,6 +331,7 @@ int main(int argc, char const *argv[]){
             }
             if(strcmp("STOP:", command) == 0) {
                 if(fd_write_out != NULL){
+                    if(local_count != 0) {fputs(local_outbuf, fd_write_out); local_count = 0;}
                     fflush(fd_write_out);
                     fclose(fd_write_out);
                     fd_write_out = NULL;
@@ -408,11 +411,9 @@ void startRun(void){
 }
 
 void pushData(void){
-    static char local_outbuf[4000];
-    static char remote_outbuf[4000];
-    static char local_outbuf_line[150];
-    static char remote_outbuf_line[150];
-    static int local_count = 0;
+    char local_outbuf_line[150];
+    char remote_outbuf_line[150];
+    static char remote_outbuf[4000]; // not necessary to be static as this buffer is cleared before function exits
     int remote_count = 0;
     static float accn = 0;
     static float nudgeAngle=0;
@@ -461,7 +462,6 @@ void pushData(void){
 //        fprintf(fd_write_out,"A:%+07.1f,R:%+07.1f,C:%+07.1f,P:%+07.1f,Y:%+07.1f,AX:%+06.3f,AY:%+06.3f,AZ:%+06.3f,GX:%+07.1f,GY:%+07.1f,GZ:%+07.1f,X:%+06.3f,Y:%+06.3f,Z:%+06.3f\n", roll, (gyro_data[0] + last_x_gyro)/2.0, accTang, pitch, yaw, accel_data[0], accel_data[1], accel_data[2], gyro_data[0], gyro_data[1], gyro_data[2],a[0],a[1],a[2]);
     }
     if(remote_count != 0) {printf("%s",remote_outbuf); remote_count = 0;}
-    if(local_count != 0) {fputs(local_outbuf, fd_write_out); local_count = 0;}  // perhaps make sd card writes less frequent but this'll do for the moment, dont' forget to increase the size of the buffer to do this.
 }
 
 void pullData(void){

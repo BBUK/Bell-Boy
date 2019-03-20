@@ -38,6 +38,7 @@
 #include <sys/time.h>
 #include <linux/types.h>
 #include <bcm2835.h>
+#include "ICM20689.h"
 
 #ifndef NULL
 #define NULL 0
@@ -131,26 +132,3 @@ float extractFloat(uint8_t index){
     return floatConv._float;
 }
 
-void writeRegister(uint8_t device, uint8_t reg, uint8_t value){
-    bcm2835_spi_chipSelect(device);
-    SPI_BUFFER[0] = reg; //& 0x7F;  // set high bit for a write
-    SPI_BUFFER[1] = value;
-    bcm2835_spi_transfern(SPI_BUFFER,2);
-}
-
-void writeRegisterBits(uint8_t device, uint8_t reg, uint8_t mask, uint8_t value){
-    uint8_t readValue;
-    readValue = readRegister(device,reg);
-    bcm2835_spi_chipSelect(device);
-    SPI_BUFFER[0] = reg; // & 0x7F;  // clear high bit for a write
-    SPI_BUFFER[1] = (readValue & mask) | value;
-    bcm2835_spi_transfern(SPI_BUFFER,2);
-}
-
-uint8_t readRegister(uint8_t device, uint8_t reg){
-    bcm2835_spi_chipSelect(device);
-    SPI_BUFFER[0] = reg | 0x80;  //set high bit for a read
-    SPI_BUFFER[1] = 0;
-    bcm2835_spi_transfern(SPI_BUFFER,2);
-    return SPI_BUFFER[1];
-}

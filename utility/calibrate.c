@@ -71,8 +71,10 @@ double calibrationTimestamp = 0.0;
 int CALIBRATING = 0;
 unsigned char SPI_BUFFER[256];
 unsigned char I2C_BUFFER[16];
+int local_count = 0;
+char local_outbuf[4000];
 
-const unsigned int LOOPSLEEP = 50000;  // main loop processes every 0.05 sec.  25 samples should be in FIFO.  Max number of samples in FIFO is 341.  Should be OK.
+const unsigned int LOOPSLEEP = 100000;  // main loop processes every 0.1 sec.  50 samples should be in FIFO.  Max number of samples in FIFO is 341.  Should be OK.
 
 struct {
     float samplePeriod;
@@ -150,6 +152,7 @@ int main(int argc, char const *argv[]){
             }
             if(strcmp("STCA:", command) == 0) {
 				if(fdCalibrationData != NULL) {
+                    if(local_count != 0) {fputs(local_outbuf, fdCalibrationData); local_count = 0;}
 					fflush(fdCalibrationData);
 					fclose(fdCalibrationData);
 					fdCalibrationData = NULL;
@@ -355,7 +358,7 @@ void pullData(void){
     float fifo_data_1[6];
     float fifo_data_2[6];
     float combined_data[6];
-    static unsigned int angleCorrection = 0;
+    char local_outbuf_line[150];
 
     int count_1 = readFIFOcount(BCM2835_SPI_CS0);
     int count_2 = readFIFOcount(BCM2835_SPI_CS1);
@@ -390,9 +393,16 @@ void pullData(void){
             combined_data[5] += (fifo_data_2[5] + fifo_data_1[5]) / 2.0; // Gz
         }
         for(int i = 0; i < 6; ++i) combined_data[i] /= 4;
-        
-        if (CALIBRATING) fprintf (fdCalibrationData,"%+.8e %+.8e %+.8e %+.8e %+.8e %+.8e %+.8e\n", calibrationTimestamp, combined_data[3] * DEGREES_TO_RADIANS_MULTIPLIER,combined_data[4] * DEGREES_TO_RADIANS_MULTIPLIER,combined_data[5] * DEGREES_TO_RADIANS_MULTIPLIER, combined_data[0] * g0 ,combined_data[1] * g0,combined_data[2] * g0);
-        calibrationTimestamp += calibrationData.samplePeriod;
+        if(CALIBRATING){
+            sprintf(local_outbuf_line,"%+.8e %+.8e %+.8e %+.8e %+.8e %+.8e %+.8e\n", calibrationTimestamp, combined_data[3] * DEGREES_TO_RADIANS_MULTIPLIER,combined_data[4] * DEGREES_TO_RADIANS_MULTIPLIER,combined_data[5] * DEGREES_TO_RADIANS_MULTIPLIER, combined_data[0] * g0 ,combined_data[1] * g0,combined_data[2] * g0);
+            if (local_count + strlen(local_outbuf_line) > (sizeof local_outbuf -2)) {
+                fputs(local_outbuf, fdCalibrationData);
+                fflush(fdCalibrationData);
+                local_count = 0;
+            }
+            local_count += sprintf(&local_outbuf[local_count],local_outbuf_line);
+            calibrationTimestamp += calibrationData.samplePeriod;
+        }
     }
 }
 
