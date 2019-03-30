@@ -234,7 +234,7 @@ void writeFloat(void){
 void i2cReceive(int number) {
   i2cRegister = Wire.read();
   if(i2cRegister == 1) flags |= RECIEVEDBOOTUP;
-  if(i2cRegister >= 10 && i2cRegister <= 22 && number == 5 && !(flags & WRITETOPROM)){ // got an PROM write COMMAND
+  if(i2cRegister >= 10 && i2cRegister <= 34 && number == 5 && !(flags & WRITETOPROM)){ // got an PROM write COMMAND
     promData[0] = i2cRegister;
 	  promData[1] = Wire.read();
 	  promData[2] = Wire.read();
@@ -244,6 +244,25 @@ void i2cReceive(int number) {
   }
 }
 
+
+/*
+    (registers   10=samplePeriod, 11=accBiasX,
+    12=accBiasY, 13=accBiasZ, 14=accScale00, 15=accScale01, 16=accScale02,
+    17=accScale10, 18=accScale11, 19=accScale12, 20=accScale20, 21=gyroScale21,
+    22=accScale22, 23=gyroBiasX, 24=gyroBiasY, 25=gyroBiasZ, 26=gyroScale00,
+    27=gyroScale01, 28=gyroScale02, 29=gyroScale10, 30=gyroScale11, 31=gyroScale12, 
+    32=gyroScale20, 33=gyroScale21, 34=gyroScale22, 
+    200=accBiasXYZ(all in one go 12 bytes, three floats), 
+    201=accScale0(all in one go 12 bytes, three floats),
+    202=accScale1 (all in one go 12 bytes, three floats),
+    203=accScale2 (all in one go 12 bytes, three floats),
+    204=gyroBiasXYZ(all in one go 12 bytes, three floats), 
+    205=gyroScale0(all in one go 12 bytes, three floats),
+    206=gyroScale1 (all in one go 12 bytes, three floats),
+    207=gyroScale2 (all in one go 12 bytes, three floats).
+
+*/
+
 void i2cPushData() {
   uint16_t iVolts;
   if(i2cRegister == 2){ // send voltage
@@ -252,26 +271,38 @@ void i2cPushData() {
       i2cbuffer[0] = iVolts >> 8;
       i2cbuffer[1] = iVolts & 0x00FF;
       Wire.write((char *)i2cbuffer,2);
-  } else if(i2cRegister >= 10 && i2cRegister <= 22){ // send EEPROM data
+  } else if(i2cRegister >= 10 && i2cRegister <= 34){ // send EEPROM data
       i2cbuffer[0] = EEPROM.read(i2cRegister << 2);
       i2cbuffer[1] = EEPROM.read((i2cRegister << 2)+1);
       i2cbuffer[2] = EEPROM.read((i2cRegister << 2)+2);
       i2cbuffer[3] = EEPROM.read((i2cRegister << 2)+3);
       Wire.write((char *)i2cbuffer,4);
-  } else if(i2cRegister == 5){ // send accBiasXYZ
-	  populateBuffer(44);
+  } else if(i2cRegister == 200){ // send accBiasXYZ
+	    populateBuffer(44);
       Wire.write((char *)i2cbuffer,12);
-  } else if(i2cRegister == 6){ // send accScaleXYZ
-	  populateBuffer(56);
+  } else if(i2cRegister == 201){ // send accScale0
+	    populateBuffer(56);
       Wire.write((char *)i2cbuffer,12);
-  } else if(i2cRegister == 7){ // send gyroBiasXYZ
-	  populateBuffer(68);
+  } else if(i2cRegister == 202){ // send accScale1
+      populateBuffer(68);
       Wire.write((char *)i2cbuffer,12);
-  } else if(i2cRegister == 8){ // send gyroScaleXYZ
-	  populateBuffer(80);
+  } else if(i2cRegister == 203){ // send accScale2
+      populateBuffer(80);
+      Wire.write((char *)i2cbuffer,12);
+  } else if(i2cRegister == 204){ // send gyroBiasXYZ
+	    populateBuffer(92);
+      Wire.write((char *)i2cbuffer,12);
+  } else if(i2cRegister == 205){ // send gyroScale0
+      populateBuffer(104);
+      Wire.write((char *)i2cbuffer,12);
+  } else if(i2cRegister == 206){ // send gyroScale1
+      populateBuffer(116);
+      Wire.write((char *)i2cbuffer,12);
+  } else if(i2cRegister == 207){ // send gyroScale2
+      populateBuffer(128);
       Wire.write((char *)i2cbuffer,12);
   } else {
-	  Wire.write(99);
+	    Wire.write(99);
   }
 }
 

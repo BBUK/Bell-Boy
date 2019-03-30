@@ -46,29 +46,6 @@
 
 unsigned char I2C_BUFFER[16];
 
-struct {
-    float samplePeriod;
-    float accBiasX;
-    float accBiasY;
-    float accBiasZ;
-    float accScaleX;
-    float accScaleY;
-    float accScaleZ;
-    float gyroBiasX;
-    float gyroBiasY;
-    float gyroBiasZ;
-    float gyroScaleX;
-    float gyroScaleY;
-    float gyroScaleZ;
-} calibrationData = {.samplePeriod = 0.008, .accBiasX=0, .accBiasY=0, .accBiasZ = 0,
-                    .accScaleX=1, .accScaleY=1, .accScaleZ=1, .gyroBiasX=0, .gyroBiasY=0,
-                    .gyroBiasZ=0, .gyroScaleX=1, .gyroScaleY=1, .gyroScaleZ=1};
-
-union {
-    float    _float;
-    uint8_t  _bytes[sizeof(float)];
-} floatConv;
- 
 int main(int argc, char const *argv[]){
     if (!bcm2835_init()){
         printf("Unable to inititalise bcm2835\n");
@@ -82,49 +59,80 @@ int main(int argc, char const *argv[]){
     bcm2835_i2c_set_baudrate(100000);
     bcm2835_i2c_setSlaveAddress(0x10);
 
+/*
+    (registers 	10=samplePeriod, 11=accBiasX,
+    12=accBiasY, 13=accBiasZ, 14=accScale00, 15=accScale01, 16=accScale02,
+    17=accScale10, 18=accScale11, 19=accScale12, 20=accScale20, 21=accScale21,
+    22=accScale22, 23=gyroBiasX, 24=gyroBiasY, 25=gyroBiasZ, 26=gyroScale00,
+    27=gyroScale01, 28=gyroScale02, 29=gyroScale10, 30=gyroScale11, 31=gyroScale12, 
+    32=gyroScale20, 33=gyroScale21, 34=gyroScale22, 
+    200=accBiasXYZ(all in one go 12 bytes, three floats), 
+    201=accScale0(all in one go 12 bytes, three floats),
+    202=accScale1 (all in one go 12 bytes, three floats),
+    203=accScale2 (all in one go 12 bytes, three floats),
+    204=gyroBiasXYZ(all in one go 12 bytes, three floats), 
+    205=gyroScale0(all in one go 12 bytes, three floats),
+    206=gyroScale1 (all in one go 12 bytes, three floats),
+    207=gyroScale2 (all in one go 12 bytes, three floats).
+
+*/
+
     I2C_BUFFER[0]=10;
     bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 10 (samplePeriod)
     bcm2835_i2c_read(I2C_BUFFER,4); usleep(100);
     printf("SamplePeriod: %f\n", extractFloat(0));
 
-    I2C_BUFFER[0]=5;
-    bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 5 (accBiasXYZ)
+    I2C_BUFFER[0]=200;
+    bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); 
     bcm2835_i2c_read(I2C_BUFFER,12); usleep(100);
     printf("accBiasX: %f\n", extractFloat(0));
     printf("accBiasY: %f\n", extractFloat(4));
     printf("accBiasZ: %f\n", extractFloat(8));
 
-    I2C_BUFFER[0]=6;
-    bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 6 (accScaleXYZ)
+    I2C_BUFFER[0]=201;
+    bcm2835_i2c_write(I2C_BUFFER,1); usleep(100);
     bcm2835_i2c_read(I2C_BUFFER,12); usleep(100);
-    printf("accScaleX: %f\n", extractFloat(0));
-    printf("accScaleY: %f\n", extractFloat(4));
-    printf("accScaleZ: %f\n", extractFloat(8));
-
-    I2C_BUFFER[0]=7;
-    bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 7 (gyroBiasXYZ)
+    printf("accTranform: %f %f %f\n", extractFloat(0), extractFloat(4), extractFloat(8));
+ 
+    I2C_BUFFER[0]=202;
+    bcm2835_i2c_write(I2C_BUFFER,1); usleep(100);
+    bcm2835_i2c_read(I2C_BUFFER,12); usleep(100);
+    printf("             %f %f %f\n", extractFloat(0), extractFloat(4), extractFloat(8));
+ 
+    I2C_BUFFER[0]=203;
+    bcm2835_i2c_write(I2C_BUFFER,1); usleep(100);
+    bcm2835_i2c_read(I2C_BUFFER,12); usleep(100);
+    printf("             %f %f %f\n", extractFloat(0), extractFloat(4), extractFloat(8));
+ 
+    I2C_BUFFER[0]=204;
+    bcm2835_i2c_write(I2C_BUFFER,1); usleep(100);
     bcm2835_i2c_read(I2C_BUFFER,12); usleep(100);
     printf("gyroBiasX: %f\n", extractFloat(0));
     printf("gyroBiasY: %f\n", extractFloat(4));
     printf("gyroBiasZ: %f\n", extractFloat(8));
 
-    I2C_BUFFER[0]=8;
-    bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 8 (gyroScaleXYZ)
+    I2C_BUFFER[0]=205;
+    bcm2835_i2c_write(I2C_BUFFER,1); usleep(100);
     bcm2835_i2c_read(I2C_BUFFER,12); usleep(100);
-    printf("gyroScaleX: %f\n", extractFloat(0));
-    printf("gyroScaleY: %f\n", extractFloat(4));
-    printf("gyroScaleZ: %f\n", extractFloat(8));
- 
+    printf("gyroTranform: %f %f %f\n", extractFloat(0), extractFloat(4), extractFloat(8));
+
+    I2C_BUFFER[0]=206;
+    bcm2835_i2c_write(I2C_BUFFER,1); usleep(100);
+    bcm2835_i2c_read(I2C_BUFFER,12); usleep(100);
+    printf("              %f %f %f\n", extractFloat(0), extractFloat(4), extractFloat(8));
+
+    I2C_BUFFER[0]=207;
+    bcm2835_i2c_write(I2C_BUFFER,1); usleep(100);
+    bcm2835_i2c_read(I2C_BUFFER,12); usleep(100);
+    printf("              %f %f %f\n", extractFloat(0), extractFloat(4), extractFloat(8));
 }
-/*
-    (registers 	10=samplePeriod, 11=accBiasX,
-    12=accBiasY, 13=accBiasZ, 14=accScaleX, 15=accScaleY, 16=accScaleZ,
-    17=gyroBiasX, 18=gyroBiasY, 19=gyroBiasZ, 20=gyroScaleX, 21=gyroScaleY,
-    22=gyroScaleZ, 5=accBiasXYZ(all in one go 12 bytes), 6=accScaleXYZ(all in one go 12 bytes)
-    7=gyroBiasXYZ(all in one go 12 bytes), 8=gyroScaleXYZ(all in one go 12 bytes))
-*/
 
 float extractFloat(uint8_t index){
+    union {
+    float    _float;
+    uint8_t  _bytes[sizeof(float)];
+    } floatConv;
+
     floatConv._bytes[0] = I2C_BUFFER[index];
     floatConv._bytes[1] = I2C_BUFFER[index+1];
     floatConv._bytes[2] = I2C_BUFFER[index+2];

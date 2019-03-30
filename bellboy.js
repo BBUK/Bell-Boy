@@ -1553,7 +1553,7 @@ openSpan.onclick = function() {
 settingsSpan.onclick = function() {
     settingsModal.style.display = "none";
     document.getElementById("calibButton").innerText = "Start";
-    ws.send("STCA:");
+    ws.send("STEC:");
 };
 
 recordSpan.onclick = function() {
@@ -1569,7 +1569,7 @@ window.onclick = function(event) {
     if (event.target == settingsModal) {
         settingsModal.style.display = "none";
         document.getElementById("calibButton").innerText = "Start";
-        ws.send("STCA:");
+        ws.send("STEC:");
     }
     if (event.target == recordModal) {
         recordModal.style.display = "none";

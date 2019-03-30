@@ -40,7 +40,8 @@
 #endif
 
 // these are used by the extended Kalman filter
-#define g0 9.8137 // Manchester estimation.  Use gcalculator.xlsx to work out for your latitude.  
+// Manchester estimation.  Use gcalculator.xlsx to work out for your latitude.
+#define g0 9.8137   
 #define g0_2 (g0*g0)
 #define q_dcm2 (0.1*0.1)
 #define q_gyro_bias2 (0.0001*0.0001)
@@ -59,7 +60,6 @@ float pitch = 0.0;
 float roll = 0.0;
 float direction = 0;
 float tareValue = 0.0;
-float a[3];
 float xGyroBias = 0.0;
 
 int ODR = 125;
@@ -86,18 +86,17 @@ struct {
     float accBiasX;
     float accBiasY;
     float accBiasZ;
-    float accScaleX;
-    float accScaleY;
-    float accScaleZ;
+    float accTransformMatrix[9];
     float gyroBiasX;
     float gyroBiasY;
     float gyroBiasZ;
-    float gyroScaleX;
-    float gyroScaleY;
-    float gyroScaleZ;
+    float gyroTransformMatrix[9];
 } calibrationData = {.samplePeriod = 0.008, .accBiasX=0, .accBiasY=0, .accBiasZ = 0,
-                    .accScaleX=1, .accScaleY=1, .accScaleZ=1, .gyroBiasX=0, .gyroBiasY=0,
-                    .gyroBiasZ=0, .gyroScaleX=1, .gyroScaleY=1, .gyroScaleZ=1};
+                    .accTransformMatrix[0]=1, .accTransformMatrix[1]=0, .accTransformMatrix[2]=0, .accTransformMatrix[3]=0,
+                    .accTransformMatrix[4]=1, .accTransformMatrix[5]=0, .accTransformMatrix[6]=0, .accTransformMatrix[7]=0,
+                    .accTransformMatrix[8]=1, .gyroBiasX=0, .gyroBiasY=0, .gyroBiasZ=0, .gyroTransformMatrix[0]=1, 
+                    .gyroTransformMatrix[1]=0, .gyroTransformMatrix[2]=0, .gyroTransformMatrix[3]=0, .gyroTransformMatrix[4]=1,
+                    .gyroTransformMatrix[5]=0, .gyroTransformMatrix[6]=0, .gyroTransformMatrix[7]=0, .gyroTransformMatrix[8]=1 };
 
 volatile sig_atomic_t sig_exit = 0;
 void sig_handler(int signum) {
@@ -200,7 +199,7 @@ int main(int argc, char const *argv[]){
     fcntl(STDIN_FILENO, F_SETFL, fcntl(STDIN_FILENO, F_GETFL) | O_NONBLOCK);
  
     FILE *fdTare;
-    fdTare = fopen("/tmp/bb_tare","r");
+    fdTare = fopen("/tmp/BBtare","r");
     if(fdTare != NULL) {
         if (fgets(linein, sizeof(linein), fdTare) != NULL) {
             tareValue = atof(linein);
@@ -208,9 +207,7 @@ int main(int argc, char const *argv[]){
         fclose(fdTare);
     }
 
-    FILE *fdFlagRunning;
-    fdFlagRunning = fopen("/tmp/BBlive","w"); // signal to powermonitor that we have taken over power monitoring
-    unlink("/tmp/BBlive");
+    system("/usr/bin/touch /tmp/BBlive");
     usleep(1000); // need to ensure that powermonitor is not doing anything before we try to access i2C
 
     setup();
@@ -295,7 +292,7 @@ int main(int argc, char const *argv[]){
             }
             if(strcmp("TARE:", command) == 0) {
                 tareValue = roll;
-                fdTare = fopen("/tmp/bb_tare","w");
+                fdTare = fopen("/tmp/BBtare","w");
                 if(fdTare == NULL) {
                     printf("EIMU: Could not open tare file for writing\n");
                     continue;
@@ -382,6 +379,7 @@ int main(int argc, char const *argv[]){
         }
     }
     system("/usr/bin/touch /var/lib/systemd/clock");
+    system("/usr/bin/rm /tmp/BBlive");
     return 0;
 }
 
@@ -443,14 +441,14 @@ void pushData(void){
         if(nudgeCount != 0) nudgeCount -= 1; // don't do this twice in one half stroke
         accn = taccn;
 
-        sprintf(remote_outbuf_line, "LIVE:A:%+07.1f,R:%+07.1f,C:%+07.1f,N:%+07.1f\n", angleBuffer[tail]-nudgeAngle, rateBuffer[tail], accn, nudgeAngle);
+        sprintf(remote_outbuf_line, "LIVE:A:%+07.1f,R:%+07.1f,C:%+07.1f\n", angleBuffer[tail], rateBuffer[tail], accn);
         if (remote_count + strlen(remote_outbuf_line) > (sizeof remote_outbuf -2)) {
             printf("%s",remote_outbuf);
             remote_count = 0;
         }
         remote_count += sprintf(&remote_outbuf[remote_count],remote_outbuf_line);
  
-        sprintf(local_outbuf_line,"A:%+07.1f,R:%+07.1f,C:%+07.1f\n", angleBuffer[tail], rateBuffer[tail], accn);
+        sprintf(local_outbuf_line,"A:%+07.1f,R:%+07.1f,C:%+07.1f,N:%+07.1f\n", angleBuffer[tail], rateBuffer[tail], accn, nudgeAngle);
         if (local_count + strlen(local_outbuf_line) > (sizeof local_outbuf -2)) {
             fputs(local_outbuf, fd_write_out);
             fflush(fd_write_out);
@@ -465,9 +463,9 @@ void pushData(void){
 }
 
 void pullData(void){
+    float angularVelocity;
     float fifo_data_1[6];
     float fifo_data_2[6];
-    float combined_data[6];
     static unsigned int angleCorrection = 0;
 
     int count_1 = readFIFOcount(BCM2835_SPI_CS0);
@@ -492,27 +490,7 @@ void pullData(void){
     while(count_1 >=48 && count_2 >= 48){
         count_1 -= 48;
         count_2 -= 48;
-        for(int i = 0; i < 6; ++i) combined_data[i] = 0;
-        for(int i = 0; i < 4; ++i){
-            readFIFO(BCM2835_SPI_CS0, fifo_data_1);
-            readFIFO(BCM2835_SPI_CS1, fifo_data_2);
-            combined_data[0] += (fifo_data_2[0] + fifo_data_1[0]) / 2.0; // Ax
-            combined_data[1] += (fifo_data_2[1] + fifo_data_1[1]) / 2.0; // Ay
-            combined_data[2] += (fifo_data_2[2] + fifo_data_1[2]) / 2.0; // Az
-            combined_data[3] += (fifo_data_2[3] + fifo_data_1[3]) / 2.0; // Gx
-            combined_data[4] += (fifo_data_2[4] + fifo_data_1[4]) / 2.0; // Gy
-            combined_data[5] += (fifo_data_2[5] + fifo_data_1[5]) / 2.0; // Gz
-        }
-        for(int i = 0; i < 6; ++i) combined_data[i] /= 4;
-		
-        combined_data[0] = (combined_data[0]-calibrationData.accBiasX)*calibrationData.accScaleX;
-        combined_data[1] = (combined_data[1]-calibrationData.accBiasY)*calibrationData.accScaleY;
-        combined_data[2] = (combined_data[2]-calibrationData.accBiasZ)*calibrationData.accScaleZ;
-        combined_data[3] = (combined_data[3]-calibrationData.gyroBiasX)*calibrationData.gyroScaleX;
-        combined_data[4] = (combined_data[4]-calibrationData.gyroBiasY)*calibrationData.gyroScaleY;
-        combined_data[5] = (combined_data[5]-calibrationData.gyroBiasZ)*calibrationData.gyroScaleZ;
-		
-        calculate(combined_data[3],combined_data[4],combined_data[5], combined_data[0],combined_data[1],combined_data[2],calibrationData.samplePeriod);
+        angularVelocity = pullAndTransform();
 
         if(!RUNNING) continue;
 
@@ -536,12 +514,59 @@ void pullData(void){
             }
         }
         
-        rateBuffer[head] = (combined_data[3] - xGyroBias) * direction;
+        rateBuffer[head] = (angularVelocity - xGyroBias) * direction;
         angleBuffer[head] = angle;
         head = (head + 1) % BUFFERSIZE;
         available += 1;
         if(available >= BUFFERSIZE) {printf("EOVF:\n"); available -= 1;}
     }
+}
+
+float pullAndTransform(){
+    float fifo_data_1[6];
+    float fifo_data_2[6];
+    float combinedData[6] = {0};
+
+    for(int i = 0; i < 4; ++i){
+        readFIFO(BCM2835_SPI_CS0, fifo_data_1);
+        readFIFO(BCM2835_SPI_CS1, fifo_data_2);
+        combined_data[0] += (fifo_data_2[0] + fifo_data_1[0]) / 2.0; // Ax
+        combined_data[1] += (fifo_data_2[1] + fifo_data_1[1]) / 2.0; // Ay
+        combined_data[2] += (fifo_data_2[2] + fifo_data_1[2]) / 2.0; // Az
+        combined_data[3] += (fifo_data_2[3] + fifo_data_1[3]) / 2.0; // Gx
+        combined_data[4] += (fifo_data_2[4] + fifo_data_1[4]) / 2.0; // Gy
+        combined_data[5] += (fifo_data_2[5] + fifo_data_1[5]) / 2.0; // Gz
+    }
+    for(int i = 0; i < 6; ++i) combined_data[i] /= 4;
+
+    combinedData[0] = (combinedData[0]-calibrationData.accBiasX)*calibrationData.accTransformMatrix[0]
+                        + (combinedData[1]-calibrationData.accBiasY)*calibrationData.accTransformMatrix[1]
+                        + (combinedData[2]-calibrationData.accBiasZ)*calibrationData.accTransformMatrix[2];
+
+    combinedData[1] = (combinedData[0]-calibrationData.accBiasX)*calibrationData.accTransformMatrix[3]
+                        + (combinedData[1]-calibrationData.accBiasY)*calibrationData.accTransformMatrix[4]
+                        + (combinedData[2]-calibrationData.accBiasZ)*calibrationData.accTransformMatrix[5];
+
+    combinedData[2] = (combinedData[0]-calibrationData.accBiasX)*calibrationData.accTransformMatrix[6]
+                        + (combinedData[1]-calibrationData.accBiasY)*calibrationData.accTransformMatrix[7]
+                        + (combinedData[2]-calibrationData.accBiasZ)*calibrationData.accTransformMatrix[8];
+
+    combinedData[3] = (combinedData[3]-calibrationData.gyroBiasX)*calibrationData.gyroTransformMatrix[0]
+                        + (combinedData[4]-calibrationData.gyroBiasY)*calibrationData.gyroTransformMatrix[1]
+                        + (combinedData[5]-calibrationData.gyroBiasZ)*calibrationData.gyroTransformMatrix[2];
+
+    combinedData[4] = (combinedData[3]-calibrationData.gyroBiasX)*calibrationData.gyroTransformMatrix[3]
+                        + (combinedData[4]-calibrationData.gyroBiasY)*calibrationData.gyroTransformMatrix[4]
+                        + (combinedData[5]-calibrationData.gyroBiasZ)*calibrationData.gyroTransformMatrix[5];
+
+    combinedData[5] = (combinedData[3]-calibrationData.gyroBiasX)*calibrationData.gyroTransformMatrix[6]
+                        + (combinedData[4]-calibrationData.gyroBiasY)*calibrationData.gyroTransformMatrix[7]
+                        + (combinedData[5]-calibrationData.gyroBiasZ)*calibrationData.gyroTransformMatrix[8];
+
+
+    calculate(combinedData[3],combinedData[4],combinedData[5], combinedData[0],combinedData[1],combinedData[2],calibrationData.samplePeriod);
+
+    return(combinedData[3]);
 }
 
 float savGol(unsigned int startPosition){
@@ -573,14 +598,15 @@ interval (h - in seconds from the last time the function was called)
 
 void calculate(float u0, float u1, float u2, float z0, float z1,float z2, float h){
 
-    static float x[] = {0.0, 0.0, 1.0, 0.0, 0.0, 0.0};
+    static double x[] = {0.0, 0.0, 1.0, 0.0, 0.0, 0.0};
 
-    static float P[6][6] = {    {1.0, 0.0, 0.0, 0.0, 0.0, 0.0},
-                                {0.0, 1.0, 0.0, 0.0, 0.0, 0.0},
-                                {0.0, 0.0, 1.0, 0.0, 0.0, 0.0},
-                                {0.0, 0.0, 0.0, 1.0, 0.0, 0.0},
-                                {0.0, 0.0, 0.0, 0.0, 1.0, 0.0},
-                                {0.0, 0.0, 0.0, 0.0, 0.0, 1.0}};
+    static double P[6][6] = {    {q_dcm2_init, 0.0, 0.0, 0.0, 0.0, 0.0},
+                                {0.0, q_dcm2_init, 0.0, 0.0, 0.0, 0.0},
+                                {0.0, 0.0, q_dcm2_init, 0.0, 0.0, 0.0},
+                                {0.0, 0.0, 0.0, q_gyro_bias2_init, 0.0, 0.0},
+                                {0.0, 0.0, 0.0, 0.0, q_gyro_bias2_init, 0.0},
+                                {0.0, 0.0, 0.0, 0.0, 0.0, q_gyro_bias2_init}};
+    float a[3];
 
 // convert units
     u0 = u0 * DEGREES_TO_RADIANS_MULTIPLIER;
@@ -886,11 +912,23 @@ void setup(void){
     writeRegister(BCM2835_SPI_CS1,ICM20689_USER_CTRL,0x15);
 
 	// load up calibration data from Arduino
-    // (registers 	10=samplePeriod, 11=accBiasX,
-    // 12=accBiasY, 13=accBiasZ, 14=accScaleX, 15=accScaleY, 16=accScaleZ,
-    // 17=gyroBiasX, 18=gyroBiasY, 19=gyroBiasZ, 20=gyroScaleX, 21=gyroScaleY,
-    // 22=gyroScaleZ, 5=accBiasXYZ(all in one go 12 bytes), 6=accScaleXYZ(all in one go 12 bytes)
-    // 7=gyroBiasXYZ(all in one go 12 bytes), 8=gyroScaleXYZ(all in one go 12 bytes))
+/*
+    (registers 	10=samplePeriod, 11=accBiasX,
+    12=accBiasY, 13=accBiasZ, 14=accScale00, 15=accScale01, 16=accScale02,
+    17=accScale10, 18=accScale11, 19=accScale12, 20=accScale20, 21=accScale21,
+    22=accScale22, 23=gyroBiasX, 24=gyroBiasY, 25=gyroBiasZ, 26=gyroScale00,
+    27=gyroScale01, 28=gyroScale02, 29=gyroScale10, 30=gyroScale11, 31=gyroScale12, 
+    32=gyroScale20, 33=gyroScale21, 34=gyroScale22, 
+    200=accBiasXYZ(all in one go 12 bytes, three floats), 
+    201=accScale0(all in one go 12 bytes, three floats),
+    202=accScale1 (all in one go 12 bytes, three floats),
+    203=accScale2 (all in one go 12 bytes, three floats),
+    204=gyroBiasXYZ(all in one go 12 bytes, three floats), 
+    205=gyroScale0(all in one go 12 bytes, three floats),
+    206=gyroScale1 (all in one go 12 bytes, three floats),
+    207=gyroScale2 (all in one go 12 bytes, three floats).
+
+*/
 
     I2C_BUFFER[0]=10;
     bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 10 (samplePeriod)
@@ -899,45 +937,86 @@ void setup(void){
     result = extractFloat(0);
     if(!isnan(result)) calibrationData.samplePeriod = result;
 	
-    I2C_BUFFER[0]=5;
-    bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 5 (accBiasXYZ)
+    I2C_BUFFER[0]=200;
+    bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 200 (accBiasXYZ)
     bcm2835_i2c_read(I2C_BUFFER,12); usleep(100);
     result = extractFloat(0);
-    if(!isnan(result)) calibrationData.accBiasX = result;
+    if(!isnan(result)) calibrationData.accBiasX = result/g0;
     result = extractFloat(4);
-    if(!isnan(result)) calibrationData.accBiasY = result;
+    if(!isnan(result)) calibrationData.accBiasY = result/g0;
     result = extractFloat(8);
-    if(!isnan(result)) calibrationData.accBiasZ = result;
+    if(!isnan(result)) calibrationData.accBiasZ = result/g0;
 	
-    I2C_BUFFER[0]=6;
-    bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 6 (accScaleXYZ)
+    I2C_BUFFER[0]=201;
+    bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 201 (accScale0)
     bcm2835_i2c_read(I2C_BUFFER,12); usleep(100);
     result = extractFloat(0);
-    if(!isnan(result)) calibrationData.accScaleX = result;
+    if(!isnan(result)) calibrationData.accTransformMatrix[0] = result;
     result = extractFloat(4);
-    if(!isnan(result)) calibrationData.accScaleY = result;
+    if(!isnan(result)) calibrationData.accTransformMatrix[1] = result;
     result = extractFloat(8);
-    if(!isnan(result)) calibrationData.accScaleZ = result;
+    if(!isnan(result)) calibrationData.accTransformMatrix[2] = result;
 
-    I2C_BUFFER[0]=7;
-    bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 7 (gyroBiasXYZ)
+    I2C_BUFFER[0]=202;
+    bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 201 (accScale1)
     bcm2835_i2c_read(I2C_BUFFER,12); usleep(100);
     result = extractFloat(0);
-    if(!isnan(result)) calibrationData.gyroBiasX = result;
+    if(!isnan(result)) calibrationData.accTransformMatrix[3] = result;
     result = extractFloat(4);
-    if(!isnan(result)) calibrationData.gyroBiasY = result;
+    if(!isnan(result)) calibrationData.accTransformMatrix[4] = result;
     result = extractFloat(8);
-    if(!isnan(result)) calibrationData.gyroBiasZ = result;
+    if(!isnan(result)) calibrationData.accTransformMatrix[5] = result;
 
-    I2C_BUFFER[0]=8;
-    bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 8 (gyroScaleXYZ)
+    I2C_BUFFER[0]=203;
+    bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 203 (accScale2)
     bcm2835_i2c_read(I2C_BUFFER,12); usleep(100);
     result = extractFloat(0);
-    if(!isnan(result)) calibrationData.gyroScaleX = result;
+    if(!isnan(result)) calibrationData.accTransformMatrix[6] = result;
     result = extractFloat(4);
-    if(!isnan(result)) calibrationData.gyroScaleY = result;
+    if(!isnan(result)) calibrationData.accTransformMatrix[7] = result;
     result = extractFloat(8);
-    if(!isnan(result)) calibrationData.gyroScaleZ = result;
+    if(!isnan(result)) calibrationData.accTransformMatrix[8] = result;
+
+    I2C_BUFFER[0]=204;
+    bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 204 (gyroBiasXYZ)
+    bcm2835_i2c_read(I2C_BUFFER,12); usleep(100);
+    result = extractFloat(0);
+    if(!isnan(result)) calibrationData.gyroBiasX = result*RADIANS_TO_DEGREES_MULTIPLIER;
+    result = extractFloat(4);
+    if(!isnan(result)) calibrationData.gyroBiasY = result*RADIANS_TO_DEGREES_MULTIPLIER;
+    result = extractFloat(8);
+    if(!isnan(result)) calibrationData.gyroBiasZ = result*RADIANS_TO_DEGREES_MULTIPLIER;
+
+    I2C_BUFFER[0]=205;
+    bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 205 (gyroScale0)
+    bcm2835_i2c_read(I2C_BUFFER,12); usleep(100);
+    result = extractFloat(0);
+    if(!isnan(result)) calibrationData.gyroTransformMatrix[0] = result;
+    result = extractFloat(4);
+    if(!isnan(result)) calibrationData.gyroTransformMatrix[1] = result;
+    result = extractFloat(8);
+    if(!isnan(result)) calibrationData.gyroTransformMatrix[2] = result;
+
+    I2C_BUFFER[0]=206;
+    bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 206 (gyroScale1)
+    bcm2835_i2c_read(I2C_BUFFER,12); usleep(100);
+    result = extractFloat(0);
+    if(!isnan(result)) calibrationData.gyroTransformMatrix[3] = result;
+    result = extractFloat(4);
+    if(!isnan(result)) calibrationData.gyroTransformMatrix[4] = result;
+    result = extractFloat(8);
+    if(!isnan(result)) calibrationData.gyroTransformMatrix[5] = result;
+
+    I2C_BUFFER[0]=207;
+    bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 207 (gyroScale2)
+    bcm2835_i2c_read(I2C_BUFFER,12); usleep(100);
+    result = extractFloat(0);
+    if(!isnan(result)) calibrationData.gyroTransformMatrix[6] = result;
+    result = extractFloat(4);
+    if(!isnan(result)) calibrationData.gyroTransformMatrix[7] = result;
+    result = extractFloat(8);
+    if(!isnan(result)) calibrationData.gyroTransformMatrix[8] = result;
+
 
     //start FIFO - keep i2c disabled
     writeRegister(BCM2835_SPI_CS0,ICM20689_USER_CTRL,0x50);
