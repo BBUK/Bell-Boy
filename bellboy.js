@@ -347,16 +347,16 @@ function parseResult(dataBack) {
     if (dataBack.slice(0,5) == "EYEC:"){
         var entries = dataBack.split(",");
 
-        var roll  = 360-parseFloat(entries[0].slice(5));
-        var pitch = 360-parseFloat(entries[1]);
-        var yaw   = 0.0; //360-parseFloat(entries[2]);
-        document.querySelector("section").style.transform= "rotateX(" + roll + "deg) rotateZ(-" + pitch + "deg) rotateY(" + yaw + "deg)";
-        return;
-/*        // https://www.allaboutcircuits.com/projects/bosch-absolute-orientation-sensor-bno055/
-        var x = parseFloat(entries[2]);
-        var y = parseFloat(entries[3]);
-        var z = parseFloat(entries[4]);
-        var w = parseFloat(entries[5]);
+//        var roll  = 360-parseFloat(entries[0].slice(5));
+//        var pitch = 360-parseFloat(entries[1]);
+//        var yaw   = 0.0; //360-parseFloat(entries[2]);
+//        document.querySelector("section").style.transform= "rotateX(" + roll + "deg) rotateZ(-" + pitch + "deg) rotateY(" + yaw + "deg)";
+//        return;
+        // https://www.allaboutcircuits.com/projects/bosch-absolute-orientation-sensor-bno055/
+        var x = -parseFloat(entries[4]);
+        var y = parseFloat(entries[6]);
+        var z = parseFloat(entries[5]);
+        var w = parseFloat(entries[3]);
         var x2 = x + x;
         var y2 = y + y;
         var z2 = z + z;
@@ -372,7 +372,7 @@ function parseResult(dataBack) {
         document.querySelector("section").style.transform= "matrix3D(" + (1 - (yy + zz)) + "," + (xy + wz) + "," + (xz - wy) + "," + 0 + "," + (xy - wz) + "," + (1 - (xx + zz)) + "," + (yz + wx) + "," + 0 + "," + (xz + wy) + "," + (yz - wx) + "," + (1-(xx + yy)) + "," + 0 + "," + 0 + "," + 0 + "," + 0 + "," + 1 +")";
 //        document.querySelector("section").style.transform= "matrix3D(" + (1 - (yy + zz)) + "," + (xy - wz) + "," + (xz + wy) + "," + 0 + "," + (xy + wz) + "," + (1 - (xx + zz)) + "," + (yz - wx) + "," + 0 + "," + (xz - wy) + "," + (yz + wx) + "," + (1-(xx + yy)) + "," + 0 + "," + 0 + "," + 0 + "," + 0 + "," + 1 +")";
 
-        return; */
+        return;
     }
 
     if (dataBack.slice(0,5) == "ESTD:"){

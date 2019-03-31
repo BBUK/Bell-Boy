@@ -73,7 +73,7 @@ void setup(void);
 void start(uint32_t dataRate);
 void saveCalibration(void);
 void setCalibration(char accel, char gyro, char mag);
-void calculate(float u0, float u1, float u2, float z0, float z1,float z2, float h);
+void calculate(float gx, float gy, float gz, float ax, float ay, float az, float h);
 void pushData(void);
 float savGol(unsigned int startPosition);
 void startRun(void);

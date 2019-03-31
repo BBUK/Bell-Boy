@@ -1,3 +1,5 @@
+Start with Raspbian full standard installation
+
 sudo apt-get update
 sudo apt-get upgrade
 sync && sudo reboot
@@ -5,7 +7,7 @@ sudo apt-get install build-essential cmake libeigen3-dev libqt4-dev libqt4-openg
 wget http://ceres-solver.org/ceres-solver-1.14.0.tar.gz
 tar xzvf ceres-solver-1.14.0.tar.gz
 nano /etc/dphys-swapfile
-#change swapfile size to 500 overkill !!!
+#change swapfile size to 500. Probably overkill but leave it like this after installation as memory usage for actual calibration runs is huge
 sudo systemctl restart dphys-swapfile
 mkdir ceres-bin
 cd ceres-bin
@@ -30,10 +32,6 @@ mkdir build
 cd build
 cmake ..
 make
-
-nano /etc/dphys-swapfile
-#change swapfile size back to 100
-sudo systemctl restart dphys-swapfile
 
 #install bcm2835 library
 #compile calibrate.c needs ICM20689.h

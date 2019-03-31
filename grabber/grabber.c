@@ -39,28 +39,25 @@
 #define NULL 0
 #endif
 
-// these are used by the extended Kalman filter
 // Manchester estimation.  Use gcalculator.xlsx to work out for your latitude.
 #define g0 9.8137   
-#define g0_2 (g0*g0)
-#define q_dcm2 (0.1*0.1)
-#define q_gyro_bias2 (0.0001*0.0001)
-#define r_acc2 (0.5*0.5)
-#define r_a2 (10*10)
-#define q_dcm2_init (1*1)
-#define q_gyro_bias2_init (0.1*0.1)
 
 #define DEGREES_TO_RADIANS_MULTIPLIER 0.017453 
 #define RADIANS_TO_DEGREES_MULTIPLIER 57.29578 
 
 FILE *fd_write_out;
 
+// calculated by calculate function
+float q0 = 1;
+float q1 = 0;
+float q2 = 0;
+float q3 = 0;
 float yaw = 0.0;
 float pitch = 0.0;
 float roll = 0.0;
+
 float direction = 0;
 float tareValue = 0.0;
-float xGyroBias = 0.0;
 
 int ODR = 125;
 int RUNNING = 0;
@@ -248,7 +245,7 @@ int main(int argc, char const *argv[]){
       
         pushData();
 
-        if(EYECANDY) printf("EYEC:%+07.1f, %+07.1f, %+07.1f\n", roll, pitch, yaw);
+        if(EYECANDY) printf("EYEC:%+07.1f, %+07.1f, %+07.1f, %+07.4f, %+07.4f, %+07.4f, %+07.4f\n", roll, pitch, yaw, q0, q1, q2, q3);
 
         while(fgets(linein, sizeof(linein), stdin ) != NULL) {
             entries = sscanf(linein, "%5s%[^\n]", command, details);
@@ -414,25 +411,36 @@ void pushData(void){
     static char remote_outbuf[4000]; // not necessary to be static as this buffer is cleared before function exits
     int remote_count = 0;
     static float accn = 0;
-    static float nudgeAngle=0;
+    static float nudgeAngle=0;  // delete this and code below if not needed
     static int nudgeCount =0;
     float taccn;
 
     pullData();
-
-    pullData();
+    pullData(); // call a second time to catch any fresh samples that arrived during processing of the first round
 
     if(!RUNNING) return;
+
+    // I calculate angular accelerations from the rates reported by gyro using a Savitsky Golay
+    // filter set to differentiate.  Optimal filter length determined by experiment.
+    // Need to have at least SAVGOLLENGTH samples ready in buffer but don't go through this unless there are also
+    // an additional PUSHBATCH samples available.
+    // Samples are pushed into the rateBuffer and angleBuffer circular buffers by pullData function.
+    // available and tail variables are global and are used to keep track of circular buffer (as is the head
+    // variable but that is updated by the pullData function)
     if(available < PUSHBATCH + SAVGOLLENGTH) return;
 
     for(int counter = available; counter > SAVGOLLENGTH; --counter){
         taccn = savGol(tail);
+        // This bit probably not needed.  It counteracted angle drift knowing that BDC = 180 degrees.
+        // and that is the point when the bell's angular acceleration is zero.  Drift is really low
+        // even without this but there might be some really long methods or a peal or something so monitor this
+        // for the time being.
         if(taccn * accn < 0.0 && angleBuffer[tail] > 170.0 && angleBuffer[tail] < 190.0  && nudgeCount == 0) {
             unsigned int lastTail = (tail == 0) ? BUFFERSIZE-1 : tail -1;
             float nudgeFactor = accn /(accn - taccn);
             float angleDiffFrom180 = (angleBuffer[lastTail] + nudgeFactor*(angleBuffer[tail]-angleBuffer[lastTail])) - 180.0;
             if(nudgeAngle != 0.0){
-                nudgeAngle = 0.9*nudgeAngle + 0.1*angleDiffFrom180; // apply a bit of smoothing
+                nudgeAngle = 0.5*nudgeAngle + 0.5*angleDiffFrom180; // apply a bit of smoothing 
             } else {
                 nudgeAngle = angleDiffFrom180;
             }
@@ -464,23 +472,29 @@ void pushData(void){
 
 void pullData(void){
     float angularVelocity;
-    float fifo_data_1[6];
-    float fifo_data_2[6];
+    float dummy[6];
     static unsigned int angleCorrection = 0;
 
     int count_1 = readFIFOcount(BCM2835_SPI_CS0);
     int count_2 = readFIFOcount(BCM2835_SPI_CS1);
 
     if (count_1 > 4000 || count_2 >= 4000){ // overflow (or nearly so)
-        printf("\nEOVF:\n");
-        // some sort of recovery algorithm would be nice...
+        printf("\nEOVF:\n"); //shouldn't happen
+        //clear data paths and reset FIFO (keep i2c disabled)
+        writeRegister(BCM2835_SPI_CS0,ICM20689_USER_CTRL,0x15);
+        writeRegister(BCM2835_SPI_CS1,ICM20689_USER_CTRL,0x15);
+        usleep(1000);
+ 
+        //restart FIFO - keep i2c disabled
+        writeRegister(BCM2835_SPI_CS0,ICM20689_USER_CTRL,0x50);
+        writeRegister(BCM2835_SPI_CS1,ICM20689_USER_CTRL,0x50);
     }
     // ditch a sample if one fifo is running faster then the other
     if ((count_1 - count_2) >=24){
-        readFIFO(BCM2835_SPI_CS0, fifo_data_1);
+        readFIFO(BCM2835_SPI_CS0, dummy);
         count_1 -= 12;
     } else if ((count_2 - count_1) >=24){
-        readFIFO(BCM2835_SPI_CS1, fifo_data_2);
+        readFIFO(BCM2835_SPI_CS1, dummy);
         count_2 -= 12;
     }
 
@@ -494,10 +508,9 @@ void pullData(void){
 
         if(!RUNNING) continue;
 
-    // need to correct reported angles to match
-    // the system we are using 0 degrees = bell at
-    // balance at handstroke, 360 degrees = bell at
-    // balance at backstroke. 180 degrees = BDC. 
+    // need to correct reported angles to match the system we are 
+    // using 0 degrees = bell at balance at handstroke, 
+    // 360 degrees = bell at balance at backstroke. 180 degrees = BDC. 
 
         unsigned int lastHead = (head == 0) ? BUFFERSIZE-1 : head -1;
         float angle = direction*(roll-tareValue)-180.0;
@@ -514,59 +527,95 @@ void pullData(void){
             }
         }
         
-        rateBuffer[head] = (angularVelocity - xGyroBias) * direction;
+        rateBuffer[head] = angularVelocity * direction;
         angleBuffer[head] = angle;
         head = (head + 1) % BUFFERSIZE;
         available += 1;
-        if(available >= BUFFERSIZE) {printf("EOVF:\n"); available -= 1;}
+        if(available >= BUFFERSIZE) {printf("EOVF:\n"); available -= 1;} // circular buffer full - should never happen
     }
 }
 
 float pullAndTransform(){
-    float fifo_data_1[6];
-    float fifo_data_2[6];
-    float combinedData[6] = {0};
+    static float peaks[3] = {0};
+    static float averages[3] = {0};
+    static unsigned int count = 0;
+    float fifoData1[6];
+    float fifoData2[6];
+    float combinedData[6];
 
-    for(int i = 0; i < 4; ++i){
-        readFIFO(BCM2835_SPI_CS0, fifo_data_1);
-        readFIFO(BCM2835_SPI_CS1, fifo_data_2);
-        combined_data[0] += (fifo_data_2[0] + fifo_data_1[0]) / 2.0; // Ax
-        combined_data[1] += (fifo_data_2[1] + fifo_data_1[1]) / 2.0; // Ay
-        combined_data[2] += (fifo_data_2[2] + fifo_data_1[2]) / 2.0; // Az
-        combined_data[3] += (fifo_data_2[3] + fifo_data_1[3]) / 2.0; // Gx
-        combined_data[4] += (fifo_data_2[4] + fifo_data_1[4]) / 2.0; // Gy
-        combined_data[5] += (fifo_data_2[5] + fifo_data_1[5]) / 2.0; // Gz
+    // Although the browser get samples at 125Hz, the ICM20689s are set up 
+    // to push data samples out at 500Hz.  The angles and quaternion 
+    // are computed at the higher rate as some filters operate better at
+    // higher sample rates (although I have not tested whether the Mahony filter
+    // (see calculate function) is actually any better).  The browser will only
+    // see the last of these samples.
+    for(int i = 0; i < 4; ++i){ 
+        readFIFO(BCM2835_SPI_CS0, fifoData1);
+        readFIFO(BCM2835_SPI_CS1, fifoData2);
+        combinedData[0] = (fifoData2[0] + fifoData1[0]) / 2.0; // Ax
+        combinedData[1] = (fifoData2[1] + fifoData1[1]) / 2.0; // Ay
+        combinedData[2] = (fifoData2[2] + fifoData1[2]) / 2.0; // Az
+        combinedData[3] = (fifoData2[3] + fifoData1[3]) / 2.0; // Gx
+        combinedData[4] = (fifoData2[4] + fifoData1[4]) / 2.0; // Gy
+        combinedData[5] = (fifoData2[5] + fifoData1[5]) / 2.0; // Gz
+
+        for(int i = 0; i < 3; ++i){
+            averages[i] += combinedData[3+i];
+        }
+
+        combinedData[0] -= calibrationData.accBiasX;
+        combinedData[1] -= calibrationData.accBiasY;
+        combinedData[2] -= calibrationData.accBiasZ;
+
+        combinedData[3] -= calibrationData.gyroBiasX;
+        combinedData[4] -= calibrationData.gyroBiasY;
+        combinedData[5] -= calibrationData.gyroBiasZ;
+
+        for(int i = 0; i < 3; ++i){
+            if(abs(combinedData[3+i]) > peaks[i]) peaks[i] = abs(combinedData[3+i]);
+        }
+
+        combinedData[0] = combinedData[0]*calibrationData.accTransformMatrix[0]
+                            + combinedData[1]*calibrationData.accTransformMatrix[1]
+                            + combinedData[2]*calibrationData.accTransformMatrix[2];
+
+        combinedData[1] = combinedData[0]*calibrationData.accTransformMatrix[3]
+                            + combinedData[1]*calibrationData.accTransformMatrix[4]
+                            + combinedData[2]*calibrationData.accTransformMatrix[5];
+
+        combinedData[2] = combinedData[0]*calibrationData.accTransformMatrix[6]
+                            + combinedData[1]*calibrationData.accTransformMatrix[7]
+                            + combinedData[2]*calibrationData.accTransformMatrix[8];
+
+        combinedData[3] = combinedData[3]*calibrationData.gyroTransformMatrix[0]
+                            + combinedData[4]*calibrationData.gyroTransformMatrix[1]
+                            + combinedData[5]*calibrationData.gyroTransformMatrix[2];
+
+        combinedData[4] = combinedData[3]*calibrationData.gyroTransformMatrix[3]
+                            + combinedData[4]*calibrationData.gyroTransformMatrix[4]
+                            + combinedData[5]*calibrationData.gyroTransformMatrix[5];
+
+        combinedData[5] = combinedData[3]*calibrationData.gyroTransformMatrix[6]
+                            + combinedData[4]*calibrationData.gyroTransformMatrix[7]
+                            + combinedData[5]*calibrationData.gyroTransformMatrix[8];
+
+        count +=1;
+        if((count % 5000) == 0){ // check once every 10 seconds
+            for(int i = 0; i < 3; ++i) averages[i] /= 5000.0;
+            if(peaks[0] < 1.4 && peaks[1] < 1.4 && peaks[2] < 1.4){  // no peaks in gyro rate so can take the last 10 seconds as stationary
+                calibrationData.gyroBiasX = averages[0];
+                calibrationData.gyroBiasY = averages[1];
+                calibrationData.gyroBiasZ = averages[2];
+            }
+            for(int i = 0; i < 3; ++i) { averages[i] = 0.0; peaks[i] = 0.0; }
+        }
+        // This function is called 4x faster than the sample interval to the browser so adjust sample interval accordingly
+        // It calculates angles and a quaternion from the gyro and accelerometer measurement. The q0, q1,q2,q3, roll, pitch and yaw globals
+        // are updated by this function (hence no return value)
+        calculate(combinedData[3],combinedData[4],combinedData[5], combinedData[0],combinedData[1],combinedData[2],calibrationData.samplePeriod/4.0);
     }
-    for(int i = 0; i < 6; ++i) combined_data[i] /= 4;
 
-    combinedData[0] = (combinedData[0]-calibrationData.accBiasX)*calibrationData.accTransformMatrix[0]
-                        + (combinedData[1]-calibrationData.accBiasY)*calibrationData.accTransformMatrix[1]
-                        + (combinedData[2]-calibrationData.accBiasZ)*calibrationData.accTransformMatrix[2];
-
-    combinedData[1] = (combinedData[0]-calibrationData.accBiasX)*calibrationData.accTransformMatrix[3]
-                        + (combinedData[1]-calibrationData.accBiasY)*calibrationData.accTransformMatrix[4]
-                        + (combinedData[2]-calibrationData.accBiasZ)*calibrationData.accTransformMatrix[5];
-
-    combinedData[2] = (combinedData[0]-calibrationData.accBiasX)*calibrationData.accTransformMatrix[6]
-                        + (combinedData[1]-calibrationData.accBiasY)*calibrationData.accTransformMatrix[7]
-                        + (combinedData[2]-calibrationData.accBiasZ)*calibrationData.accTransformMatrix[8];
-
-    combinedData[3] = (combinedData[3]-calibrationData.gyroBiasX)*calibrationData.gyroTransformMatrix[0]
-                        + (combinedData[4]-calibrationData.gyroBiasY)*calibrationData.gyroTransformMatrix[1]
-                        + (combinedData[5]-calibrationData.gyroBiasZ)*calibrationData.gyroTransformMatrix[2];
-
-    combinedData[4] = (combinedData[3]-calibrationData.gyroBiasX)*calibrationData.gyroTransformMatrix[3]
-                        + (combinedData[4]-calibrationData.gyroBiasY)*calibrationData.gyroTransformMatrix[4]
-                        + (combinedData[5]-calibrationData.gyroBiasZ)*calibrationData.gyroTransformMatrix[5];
-
-    combinedData[5] = (combinedData[3]-calibrationData.gyroBiasX)*calibrationData.gyroTransformMatrix[6]
-                        + (combinedData[4]-calibrationData.gyroBiasY)*calibrationData.gyroTransformMatrix[7]
-                        + (combinedData[5]-calibrationData.gyroBiasZ)*calibrationData.gyroTransformMatrix[8];
-
-
-    calculate(combinedData[3],combinedData[4],combinedData[5], combinedData[0],combinedData[1],combinedData[2],calibrationData.samplePeriod);
-
-    return(combinedData[3]);
+    return(combinedData[3]);  // Just "x" gyro rate needed by the calling function (pullData).
 }
 
 float savGol(unsigned int startPosition){
@@ -578,260 +627,62 @@ float savGol(unsigned int startPosition){
     return(savGolResult);
 }
 
-/* 
-This function does some magic with an Extended Kalman Filter to produce roll
-pitch and yaw measurements from accelerometer/gyro data.  Of the filters tested,
-it produced the best results.
+// Madgwick's implementation of the Mahony filter.
+// http://x-io.co.uk/open-source-imu-and-ahrs-algorithms/
+// Neat as it does not have an internal state that needs to be maintained
+// like the Kalman filters (other than the quaternion of course).
+// Stripped out all the Ki stuff as we don't need to worry about gyro biases :)
+// Units here are degrees per second for the gyro.  It does not matter
+// what units the accelerometers are in as the measurements are normalised.
+// h is sample interval (time in seconds since the last sample)
+// The q0, q1, q2, q3, roll, pitch and yaw outputs are globals 
+void calculate(float gx, float gy, float gz, float ax, float ay, float az, float h) {
+    const float twoKp = 0.7;  // Magic number determined by experimentation
+    float recipNorm;
+    float halfvx, halfvy, halfvz;
+    float halfex, halfey, halfez;
+    float qa, qb, qc;
 
-Github is here: https://github.com/hhyyti/dcm-imu 
+    gx *= DEGREES_TO_RADIANS_MULTIPLIER;
+    gy *= DEGREES_TO_RADIANS_MULTIPLIER;
+    gz *= DEGREES_TO_RADIANS_MULTIPLIER;
 
-MIT licence but the readme includes this line:
-    If you use the algorithm in any scientific context, please cite: Heikki Hyyti and Arto Visala, 
-    "A DCM Based Attitude Estimation Algorithm for Low-Cost MEMS IMUs," International Journal 
-    of Navigation and Observation, vol. 2015, Article ID 503814, 18 pages, 2015. http://dx.doi.org/10.1155/2015/503814
+    if(!((ax == 0.0) && (ay == 0.0) && (az == 0.0))) {
+        recipNorm = sqrt(ax * ax + ay * ay + az * az);
+        ax /= recipNorm;
+        ay /= recipNorm;
+        az /= recipNorm;
+        halfvx = q1 * q3 - q0 * q2;
+        halfvy = q0 * q1 + q2 * q3;
+        halfvz = q0 * q0 - 0.5 + q3 * q3;
+        halfex = (ay * halfvz - az * halfvy);
+        halfey = (az * halfvx - ax * halfvz);
+        halfez = (ax * halfvy - ay * halfvx);
+        gx += twoKp * halfex;
+        gy += twoKp * halfey;
+        gz += twoKp * halfez;
+	}
+    gx *= (0.5 * h);
+    gy *= (0.5 * h);
+    gz *= (0.5 * h);
+    qa = q0;
+    qb = q1;
+    qc = q2;
 
-function inputs are 
-Xgyro (u0 - in degrees/sec), Ygyro (u1 - in degrees/sec), Zgyro (u2 - in degrees/sec), 
-Xaccel (z0 - in g), Yaccel (z1 - in g), Zaccel (z2 - in g),
-interval (h - in seconds from the last time the function was called)
-*/
+    q0 += (-qb * gx - qc * gy - q3 * gz);
+    q1 += (qa * gx + qc * gz - q3 * gy);
+    q2 += (qa * gy - qb * gz + q3 * gx);
+    q3 += (qa * gz + qb * gy - qc * gx);
 
-void calculate(float u0, float u1, float u2, float z0, float z1,float z2, float h){
+    recipNorm = sqrt(q0 * q0 + q1 * q1 + q2 * q2 + q3 * q3);
+    q0 /= recipNorm;
+    q1 /= recipNorm;
+    q2 /= recipNorm;
+    q3 /= recipNorm;
 
-    static double x[] = {0.0, 0.0, 1.0, 0.0, 0.0, 0.0};
-
-    static double P[6][6] = {    {q_dcm2_init, 0.0, 0.0, 0.0, 0.0, 0.0},
-                                {0.0, q_dcm2_init, 0.0, 0.0, 0.0, 0.0},
-                                {0.0, 0.0, q_dcm2_init, 0.0, 0.0, 0.0},
-                                {0.0, 0.0, 0.0, q_gyro_bias2_init, 0.0, 0.0},
-                                {0.0, 0.0, 0.0, 0.0, q_gyro_bias2_init, 0.0},
-                                {0.0, 0.0, 0.0, 0.0, 0.0, q_gyro_bias2_init}};
-    float a[3];
-
-// convert units
-    u0 = u0 * DEGREES_TO_RADIANS_MULTIPLIER;
-    u1 = u1 * DEGREES_TO_RADIANS_MULTIPLIER;
-    u2 = u2 * DEGREES_TO_RADIANS_MULTIPLIER;
-    
-    z0 = z0 * g0;
-    z1 = z1 * g0;
-    z2 = z2 * g0;
-    
-    float x_last[] = {x[0], x[1], x[2]};
-    float x_0 = x[0]-h*(u1*x[2]-u2*x[1]+x[1]*x[5]-x[2]*x[4]);
-    float x_1 = x[1]+h*(u0*x[2]-u2*x[0]+x[0]*x[5]-x[2]*x[3]);
-    float x_2 = x[2]-h*(u0*x[1]-u1*x[0]+x[0]*x[4]-x[1]*x[3]);
-    float x_3 = x[3];
-    float x_4 = x[4];
-    float x_5 = x[5];
-
-    float hh = h*h;
-    float P_00 = P[0][0]-h*(P[0][5]*x[1]-P[0][4]*x[2]-P[4][0]*x[2]+P[5][0]*x[1]+P[0][2]*(u1-x[4])+P[2][0]*(u1-x[4])-P[0][1]*(u2-x[5])-P[1][0]*(u2-x[5]))+hh*(q_dcm2-x[1]*(P[4][5]*x[2]-P[5][5]*x[1]-P[2][5]*(u1-x[4])+P[1][5]*(u2-x[5]))+x[2]*(P[4][4]*x[2]-P[5][4]*x[1]-P[2][4]*(u1-x[4])+P[1][4]*(u2-x[5]))-(u1-x[4])*(P[4][2]*x[2]-P[5][2]*x[1]-P[2][2]*(u1-x[4])+P[1][2]*(u2-x[5]))+(u2-x[5])*(P[4][1]*x[2]-P[5][1]*x[1]-P[2][1]*(u1-x[4])+P[1][1]*(u2-x[5])));
-    float P_01 = P[0][1]+h*(P[0][5]*x[0]-P[0][3]*x[2]+P[4][1]*x[2]-P[5][1]*x[1]+P[0][2]*(u0-x[3])-P[0][0]*(u2-x[5])-P[2][1]*(u1-x[4])+P[1][1]*(u2-x[5]))+hh*(x[0]*(P[4][5]*x[2]-P[5][5]*x[1]-P[2][5]*(u1-x[4])+P[1][5]*(u2-x[5]))-x[2]*(P[4][3]*x[2]-P[5][3]*x[1]-P[2][3]*(u1-x[4])+P[1][3]*(u2-x[5]))+(u0-x[3])*(P[4][2]*x[2]-P[5][2]*x[1]-P[2][2]*(u1-x[4])+P[1][2]*(u2-x[5]))-(u2-x[5])*(P[4][0]*x[2]-P[5][0]*x[1]-P[2][0]*(u1-x[4])+P[1][0]*(u2-x[5])));
-    float P_02 = P[0][2]-h*(P[0][4]*x[0]-P[0][3]*x[1]-P[4][2]*x[2]+P[5][2]*x[1]+P[0][1]*(u0-x[3])-P[0][0]*(u1-x[4])+P[2][2]*(u1-x[4])-P[1][2]*(u2-x[5]))-hh*(x[0]*(P[4][4]*x[2]-P[5][4]*x[1]-P[2][4]*(u1-x[4])+P[1][4]*(u2-x[5]))-x[1]*(P[4][3]*x[2]-P[5][3]*x[1]-P[2][3]*(u1-x[4])+P[1][3]*(u2-x[5]))+(u0-x[3])*(P[4][1]*x[2]-P[5][1]*x[1]-P[2][1]*(u1-x[4])+P[1][1]*(u2-x[5]))-(u1-x[4])*(P[4][0]*x[2]-P[5][0]*x[1]-P[2][0]*(u1-x[4])+P[1][0]*(u2-x[5])));
-    float P_03 = P[0][3]+h*(P[4][3]*x[2]-P[5][3]*x[1]-P[2][3]*(u1-x[4])+P[1][3]*(u2-x[5]));
-    float P_04 = P[0][4]+h*(P[4][4]*x[2]-P[5][4]*x[1]-P[2][4]*(u1-x[4])+P[1][4]*(u2-x[5]));
-    float P_05 = P[0][5]+h*(P[4][5]*x[2]-P[5][5]*x[1]-P[2][5]*(u1-x[4])+P[1][5]*(u2-x[5]));
-    float P_10 = P[1][0]-h*(P[1][5]*x[1]-P[1][4]*x[2]+P[3][0]*x[2]-P[5][0]*x[0]-P[2][0]*(u0-x[3])+P[1][2]*(u1-x[4])+P[0][0]*(u2-x[5])-P[1][1]*(u2-x[5]))+hh*(x[1]*(P[3][5]*x[2]-P[5][5]*x[0]-P[2][5]*(u0-x[3])+P[0][5]*(u2-x[5]))-x[2]*(P[3][4]*x[2]-P[5][4]*x[0]-P[2][4]*(u0-x[3])+P[0][4]*(u2-x[5]))+(u1-x[4])*(P[3][2]*x[2]-P[5][2]*x[0]-P[2][2]*(u0-x[3])+P[0][2]*(u2-x[5]))-(u2-x[5])*(P[3][1]*x[2]-P[5][1]*x[0]-P[2][1]*(u0-x[3])+P[0][1]*(u2-x[5])));
-    float P_11 = P[1][1]+h*(P[1][5]*x[0]-P[1][3]*x[2]-P[3][1]*x[2]+P[5][1]*x[0]+P[1][2]*(u0-x[3])+P[2][1]*(u0-x[3])-P[0][1]*(u2-x[5])-P[1][0]*(u2-x[5]))+hh*(q_dcm2-x[0]*(P[3][5]*x[2]-P[5][5]*x[0]-P[2][5]*(u0-x[3])+P[0][5]*(u2-x[5]))+x[2]*(P[3][3]*x[2]-P[5][3]*x[0]-P[2][3]*(u0-x[3])+P[0][3]*(u2-x[5]))-(u0-x[3])*(P[3][2]*x[2]-P[5][2]*x[0]-P[2][2]*(u0-x[3])+P[0][2]*(u2-x[5]))+(u2-x[5])*(P[3][0]*x[2]-P[5][0]*x[0]-P[2][0]*(u0-x[3])+P[0][0]*(u2-x[5])));
-    float P_12 = P[1][2]-h*(P[1][4]*x[0]-P[1][3]*x[1]+P[3][2]*x[2]-P[5][2]*x[0]+P[1][1]*(u0-x[3])-P[2][2]*(u0-x[3])-P[1][0]*(u1-x[4])+P[0][2]*(u2-x[5]))+hh*(x[0]*(P[3][4]*x[2]-P[5][4]*x[0]-P[2][4]*(u0-x[3])+P[0][4]*(u2-x[5]))-x[1]*(P[3][3]*x[2]-P[5][3]*x[0]-P[2][3]*(u0-x[3])+P[0][3]*(u2-x[5]))+(u0-x[3])*(P[3][1]*x[2]-P[5][1]*x[0]-P[2][1]*(u0-x[3])+P[0][1]*(u2-x[5]))-(u1-x[4])*(P[3][0]*x[2]-P[5][0]*x[0]-P[2][0]*(u0-x[3])+P[0][0]*(u2-x[5])));
-    float P_13 = P[1][3]-h*(P[3][3]*x[2]-P[5][3]*x[0]-P[2][3]*(u0-x[3])+P[0][3]*(u2-x[5]));
-    float P_14 = P[1][4]-h*(P[3][4]*x[2]-P[5][4]*x[0]-P[2][4]*(u0-x[3])+P[0][4]*(u2-x[5]));
-    float P_15 = P[1][5]-h*(P[3][5]*x[2]-P[5][5]*x[0]-P[2][5]*(u0-x[3])+P[0][5]*(u2-x[5]));
-    float P_20 = P[2][0]-h*(P[2][5]*x[1]-P[3][0]*x[1]+P[4][0]*x[0]-P[2][4]*x[2]+P[1][0]*(u0-x[3])-P[0][0]*(u1-x[4])+P[2][2]*(u1-x[4])-P[2][1]*(u2-x[5]))-hh*(x[1]*(P[3][5]*x[1]-P[4][5]*x[0]-P[1][5]*(u0-x[3])+P[0][5]*(u1-x[4]))-x[2]*(P[3][4]*x[1]-P[4][4]*x[0]-P[1][4]*(u0-x[3])+P[0][4]*(u1-x[4]))+(u1-x[4])*(P[3][2]*x[1]-P[4][2]*x[0]-P[1][2]*(u0-x[3])+P[0][2]*(u1-x[4]))-(u2-x[5])*(P[3][1]*x[1]-P[4][1]*x[0]-P[1][1]*(u0-x[3])+P[0][1]*(u1-x[4])));
-    float P_21 = P[2][1]+h*(P[2][5]*x[0]+P[3][1]*x[1]-P[4][1]*x[0]-P[2][3]*x[2]-P[1][1]*(u0-x[3])+P[0][1]*(u1-x[4])+P[2][2]*(u0-x[3])-P[2][0]*(u2-x[5]))+hh*(x[0]*(P[3][5]*x[1]-P[4][5]*x[0]-P[1][5]*(u0-x[3])+P[0][5]*(u1-x[4]))-x[2]*(P[3][3]*x[1]-P[4][3]*x[0]-P[1][3]*(u0-x[3])+P[0][3]*(u1-x[4]))+(u0-x[3])*(P[3][2]*x[1]-P[4][2]*x[0]-P[1][2]*(u0-x[3])+P[0][2]*(u1-x[4]))-(u2-x[5])*(P[3][0]*x[1]-P[4][0]*x[0]-P[1][0]*(u0-x[3])+P[0][0]*(u1-x[4])));
-    float P_22 = P[2][2]-h*(P[2][4]*x[0]-P[2][3]*x[1]-P[3][2]*x[1]+P[4][2]*x[0]+P[1][2]*(u0-x[3])+P[2][1]*(u0-x[3])-P[0][2]*(u1-x[4])-P[2][0]*(u1-x[4]))+hh*(q_dcm2-x[0]*(P[3][4]*x[1]-P[4][4]*x[0]-P[1][4]*(u0-x[3])+P[0][4]*(u1-x[4]))+x[1]*(P[3][3]*x[1]-P[4][3]*x[0]-P[1][3]*(u0-x[3])+P[0][3]*(u1-x[4]))-(u0-x[3])*(P[3][1]*x[1]-P[4][1]*x[0]-P[1][1]*(u0-x[3])+P[0][1]*(u1-x[4]))+(u1-x[4])*(P[3][0]*x[1]-P[4][0]*x[0]-P[1][0]*(u0-x[3])+P[0][0]*(u1-x[4])));
-    float P_23 = P[2][3]+h*(P[3][3]*x[1]-P[4][3]*x[0]-P[1][3]*(u0-x[3])+P[0][3]*(u1-x[4]));
-    float P_24 = P[2][4]+h*(P[3][4]*x[1]-P[4][4]*x[0]-P[1][4]*(u0-x[3])+P[0][4]*(u1-x[4]));
-    float P_25 = P[2][5]+h*(P[3][5]*x[1]-P[4][5]*x[0]-P[1][5]*(u0-x[3])+P[0][5]*(u1-x[4]));
-    float P_30 = P[3][0]-h*(P[3][5]*x[1]-P[3][4]*x[2]+P[3][2]*(u1-x[4])-P[3][1]*(u2-x[5]));
-    float P_31 = P[3][1]+h*(P[3][5]*x[0]-P[3][3]*x[2]+P[3][2]*(u0-x[3])-P[3][0]*(u2-x[5]));
-    float P_32 = P[3][2]-h*(P[3][4]*x[0]-P[3][3]*x[1]+P[3][1]*(u0-x[3])-P[3][0]*(u1-x[4]));
-    float P_33 = P[3][3]+hh*q_gyro_bias2;
-    float P_34 = P[3][4];
-    float P_35 = P[3][5];
-    float P_40 = P[4][0]-h*(P[4][5]*x[1]-P[4][4]*x[2]+P[4][2]*(u1-x[4])-P[4][1]*(u2-x[5]));
-    float P_41 = P[4][1]+h*(P[4][5]*x[0]-P[4][3]*x[2]+P[4][2]*(u0-x[3])-P[4][0]*(u2-x[5]));
-    float P_42 = P[4][2]-h*(P[4][4]*x[0]-P[4][3]*x[1]+P[4][1]*(u0-x[3])-P[4][0]*(u1-x[4]));
-    float P_43 = P[4][3];
-    float P_44 = P[4][4]+hh*q_gyro_bias2;
-    float P_45 = P[4][5];
-    float P_50 = P[5][0]-h*(P[5][5]*x[1]-P[5][4]*x[2]+P[5][2]*(u1-x[4])-P[5][1]*(u2-x[5]));
-    float P_51 = P[5][1]+h*(P[5][5]*x[0]-P[5][3]*x[2]+P[5][2]*(u0-x[3])-P[5][0]*(u2-x[5]));
-    float P_52 = P[5][2]-h*(P[5][4]*x[0]-P[5][3]*x[1]+P[5][1]*(u0-x[3])-P[5][0]*(u1-x[4]));
-    float P_53 = P[5][3];
-    float P_54 = P[5][4];
-    float P_55 = P[5][5]+hh*q_gyro_bias2;
-
-    // kalman innovation
-    float y0 = z0-g0*x_0;
-    float y1 = z1-g0*x_1;
-    float y2 = z2-g0*x_2;
-
-    float a_len = sqrt(y0*y0+y1*y1+y2*y2);
-
-    float S00 = r_acc2+a_len*r_a2+P_00*g0_2;
-    float S01 = P_01*g0_2;
-    float S02 = P_02*g0_2;
-    float S10 = P_10*g0_2;
-    float S11 = r_acc2+a_len*r_a2+P_11*g0_2;
-    float S12 = P_12*g0_2;
-    float S20 = P_20*g0_2;
-    float S21 = P_21*g0_2;
-    float S22 = r_acc2+a_len*r_a2+P_22*g0_2;
-
-    // Kalman gain
-    float invPart = 1.0 / (S00*S11*S22-S00*S12*S21-S01*S10*S22+S01*S12*S20+S02*S10*S21-S02*S11*S20);
-    float K00 = (g0*(P_02*S10*S21-P_02*S11*S20-P_01*S10*S22+P_01*S12*S20+P_00*S11*S22-P_00*S12*S21))*invPart;
-    float K01 = -(g0*(P_02*S00*S21-P_02*S01*S20-P_01*S00*S22+P_01*S02*S20+P_00*S01*S22-P_00*S02*S21))*invPart;
-    float K02 = (g0*(P_02*S00*S11-P_02*S01*S10-P_01*S00*S12+P_01*S02*S10+P_00*S01*S12-P_00*S02*S11))*invPart;
-    float K10 = (g0*(P_12*S10*S21-P_12*S11*S20-P_11*S10*S22+P_11*S12*S20+P_10*S11*S22-P_10*S12*S21))*invPart;
-    float K11 = -(g0*(P_12*S00*S21-P_12*S01*S20-P_11*S00*S22+P_11*S02*S20+P_10*S01*S22-P_10*S02*S21))*invPart;
-    float K12 = (g0*(P_12*S00*S11-P_12*S01*S10-P_11*S00*S12+P_11*S02*S10+P_10*S01*S12-P_10*S02*S11))*invPart;
-    float K20 = (g0*(P_22*S10*S21-P_22*S11*S20-P_21*S10*S22+P_21*S12*S20+P_20*S11*S22-P_20*S12*S21))*invPart;
-    float K21 = -(g0*(P_22*S00*S21-P_22*S01*S20-P_21*S00*S22+P_21*S02*S20+P_20*S01*S22-P_20*S02*S21))*invPart;
-    float K22 = (g0*(P_22*S00*S11-P_22*S01*S10-P_21*S00*S12+P_21*S02*S10+P_20*S01*S12-P_20*S02*S11))*invPart;
-    float K30 = (g0*(P_32*S10*S21-P_32*S11*S20-P_31*S10*S22+P_31*S12*S20+P_30*S11*S22-P_30*S12*S21))*invPart;
-    float K31 = -(g0*(P_32*S00*S21-P_32*S01*S20-P_31*S00*S22+P_31*S02*S20+P_30*S01*S22-P_30*S02*S21))*invPart;
-    float K32 = (g0*(P_32*S00*S11-P_32*S01*S10-P_31*S00*S12+P_31*S02*S10+P_30*S01*S12-P_30*S02*S11))*invPart;
-    float K40 = (g0*(P_42*S10*S21-P_42*S11*S20-P_41*S10*S22+P_41*S12*S20+P_40*S11*S22-P_40*S12*S21))*invPart;
-    float K41 = -(g0*(P_42*S00*S21-P_42*S01*S20-P_41*S00*S22+P_41*S02*S20+P_40*S01*S22-P_40*S02*S21))*invPart;
-    float K42 = (g0*(P_42*S00*S11-P_42*S01*S10-P_41*S00*S12+P_41*S02*S10+P_40*S01*S12-P_40*S02*S11))*invPart;
-    float K50 = (g0*(P_52*S10*S21-P_52*S11*S20-P_51*S10*S22+P_51*S12*S20+P_50*S11*S22-P_50*S12*S21))*invPart;
-    float K51 = -(g0*(P_52*S00*S21-P_52*S01*S20-P_51*S00*S22+P_51*S02*S20+P_50*S01*S22-P_50*S02*S21))*invPart;
-    float K52 = (g0*(P_52*S00*S11-P_52*S01*S10-P_51*S00*S12+P_51*S02*S10+P_50*S01*S12-P_50*S02*S11))*invPart;
-
-    // update a posteriori
-    x[0] = x_0+K00*y0+K01*y1+K02*y2;
-    x[1] = x_1+K10*y0+K11*y1+K12*y2;
-    x[2] = x_2+K20*y0+K21*y1+K22*y2;
-    x[3] = x_3+K30*y0+K31*y1+K32*y2;
-    x[4] = x_4+K40*y0+K41*y1+K42*y2;
-    x[5] = x_5+K50*y0+K51*y1+K52*y2;
-
-    //  update a posteriori covariance
-    float r_adab = (r_acc2+a_len*r_a2);
-    float P__00 = P_00-g0*(K00*P_00*2.0+K01*P_01+K01*P_10+K02*P_02+K02*P_20)+(K00*K00)*r_adab+(K01*K01)*r_adab+(K02*K02)*r_adab+g0_2*(K00*(K00*P_00+K01*P_10+K02*P_20)+K01*(K00*P_01+K01*P_11+K02*P_21)+K02*(K00*P_02+K01*P_12+K02*P_22));
-    float P__01 = P_01-g0*(K00*P_01+K01*P_11+K02*P_21+K10*P_00+K11*P_01+K12*P_02)+g0_2*(K10*(K00*P_00+K01*P_10+K02*P_20)+K11*(K00*P_01+K01*P_11+K02*P_21)+K12*(K00*P_02+K01*P_12+K02*P_22))+K00*K10*r_adab+K01*K11*r_adab+K02*K12*r_adab;
-    float P__02 = P_02-g0*(K00*P_02+K01*P_12+K02*P_22+K20*P_00+K21*P_01+K22*P_02)+g0_2*(K20*(K00*P_00+K01*P_10+K02*P_20)+K21*(K00*P_01+K01*P_11+K02*P_21)+K22*(K00*P_02+K01*P_12+K02*P_22))+K00*K20*r_adab+K01*K21*r_adab+K02*K22*r_adab;
-    float P__03 = P_03-g0*(K00*P_03+K01*P_13+K02*P_23+K30*P_00+K31*P_01+K32*P_02)+g0_2*(K30*(K00*P_00+K01*P_10+K02*P_20)+K31*(K00*P_01+K01*P_11+K02*P_21)+K32*(K00*P_02+K01*P_12+K02*P_22))+K00*K30*r_adab+K01*K31*r_adab+K02*K32*r_adab;
-    float P__04 = P_04-g0*(K00*P_04+K01*P_14+K02*P_24+K40*P_00+K41*P_01+K42*P_02)+g0_2*(K40*(K00*P_00+K01*P_10+K02*P_20)+K41*(K00*P_01+K01*P_11+K02*P_21)+K42*(K00*P_02+K01*P_12+K02*P_22))+K00*K40*r_adab+K01*K41*r_adab+K02*K42*r_adab;
-    float P__05 = P_05-g0*(K00*P_05+K01*P_15+K02*P_25+K50*P_00+K51*P_01+K52*P_02)+g0_2*(K50*(K00*P_00+K01*P_10+K02*P_20)+K51*(K00*P_01+K01*P_11+K02*P_21)+K52*(K00*P_02+K01*P_12+K02*P_22))+K00*K50*r_adab+K01*K51*r_adab+K02*K52*r_adab;
-    float P__10 = P_10-g0*(K00*P_10+K01*P_11+K02*P_12+K10*P_00+K11*P_10+K12*P_20)+g0_2*(K00*(K10*P_00+K11*P_10+K12*P_20)+K01*(K10*P_01+K11*P_11+K12*P_21)+K02*(K10*P_02+K11*P_12+K12*P_22))+K00*K10*r_adab+K01*K11*r_adab+K02*K12*r_adab;
-    float P__11 = P_11-g0*(K10*P_01+K10*P_10+K11*P_11*2.0+K12*P_12+K12*P_21)+(K10*K10)*r_adab+(K11*K11)*r_adab+(K12*K12)*r_adab+g0_2*(K10*(K10*P_00+K11*P_10+K12*P_20)+K11*(K10*P_01+K11*P_11+K12*P_21)+K12*(K10*P_02+K11*P_12+K12*P_22));
-    float P__12 = P_12-g0*(K10*P_02+K11*P_12+K12*P_22+K20*P_10+K21*P_11+K22*P_12)+g0_2*(K20*(K10*P_00+K11*P_10+K12*P_20)+K21*(K10*P_01+K11*P_11+K12*P_21)+K22*(K10*P_02+K11*P_12+K12*P_22))+K10*K20*r_adab+K11*K21*r_adab+K12*K22*r_adab;
-    float P__13 = P_13-g0*(K10*P_03+K11*P_13+K12*P_23+K30*P_10+K31*P_11+K32*P_12)+g0_2*(K30*(K10*P_00+K11*P_10+K12*P_20)+K31*(K10*P_01+K11*P_11+K12*P_21)+K32*(K10*P_02+K11*P_12+K12*P_22))+K10*K30*r_adab+K11*K31*r_adab+K12*K32*r_adab;
-    float P__14 = P_14-g0*(K10*P_04+K11*P_14+K12*P_24+K40*P_10+K41*P_11+K42*P_12)+g0_2*(K40*(K10*P_00+K11*P_10+K12*P_20)+K41*(K10*P_01+K11*P_11+K12*P_21)+K42*(K10*P_02+K11*P_12+K12*P_22))+K10*K40*r_adab+K11*K41*r_adab+K12*K42*r_adab;
-    float P__15 = P_15-g0*(K10*P_05+K11*P_15+K12*P_25+K50*P_10+K51*P_11+K52*P_12)+g0_2*(K50*(K10*P_00+K11*P_10+K12*P_20)+K51*(K10*P_01+K11*P_11+K12*P_21)+K52*(K10*P_02+K11*P_12+K12*P_22))+K10*K50*r_adab+K11*K51*r_adab+K12*K52*r_adab;
-    float P__20 = P_20-g0*(K00*P_20+K01*P_21+K02*P_22+K20*P_00+K21*P_10+K22*P_20)+g0_2*(K00*(K20*P_00+K21*P_10+K22*P_20)+K01*(K20*P_01+K21*P_11+K22*P_21)+K02*(K20*P_02+K21*P_12+K22*P_22))+K00*K20*r_adab+K01*K21*r_adab+K02*K22*r_adab;
-    float P__21 = P_21-g0*(K10*P_20+K11*P_21+K12*P_22+K20*P_01+K21*P_11+K22*P_21)+g0_2*(K10*(K20*P_00+K21*P_10+K22*P_20)+K11*(K20*P_01+K21*P_11+K22*P_21)+K12*(K20*P_02+K21*P_12+K22*P_22))+K10*K20*r_adab+K11*K21*r_adab+K12*K22*r_adab;
-    float P__22 = P_22-g0*(K20*P_02+K20*P_20+K21*P_12+K21*P_21+K22*P_22*2.0)+(K20*K20)*r_adab+(K21*K21)*r_adab+(K22*K22)*r_adab+g0_2*(K20*(K20*P_00+K21*P_10+K22*P_20)+K21*(K20*P_01+K21*P_11+K22*P_21)+K22*(K20*P_02+K21*P_12+K22*P_22));
-    float P__23 = P_23-g0*(K20*P_03+K21*P_13+K22*P_23+K30*P_20+K31*P_21+K32*P_22)+g0_2*(K30*(K20*P_00+K21*P_10+K22*P_20)+K31*(K20*P_01+K21*P_11+K22*P_21)+K32*(K20*P_02+K21*P_12+K22*P_22))+K20*K30*r_adab+K21*K31*r_adab+K22*K32*r_adab;
-    float P__24 = P_24-g0*(K20*P_04+K21*P_14+K22*P_24+K40*P_20+K41*P_21+K42*P_22)+g0_2*(K40*(K20*P_00+K21*P_10+K22*P_20)+K41*(K20*P_01+K21*P_11+K22*P_21)+K42*(K20*P_02+K21*P_12+K22*P_22))+K20*K40*r_adab+K21*K41*r_adab+K22*K42*r_adab;
-    float P__25 = P_25-g0*(K20*P_05+K21*P_15+K22*P_25+K50*P_20+K51*P_21+K52*P_22)+g0_2*(K50*(K20*P_00+K21*P_10+K22*P_20)+K51*(K20*P_01+K21*P_11+K22*P_21)+K52*(K20*P_02+K21*P_12+K22*P_22))+K20*K50*r_adab+K21*K51*r_adab+K22*K52*r_adab;
-    float P__30 = P_30-g0*(K00*P_30+K01*P_31+K02*P_32+K30*P_00+K31*P_10+K32*P_20)+g0_2*(K00*(K30*P_00+K31*P_10+K32*P_20)+K01*(K30*P_01+K31*P_11+K32*P_21)+K02*(K30*P_02+K31*P_12+K32*P_22))+K00*K30*r_adab+K01*K31*r_adab+K02*K32*r_adab;
-    float P__31 = P_31-g0*(K10*P_30+K11*P_31+K12*P_32+K30*P_01+K31*P_11+K32*P_21)+g0_2*(K10*(K30*P_00+K31*P_10+K32*P_20)+K11*(K30*P_01+K31*P_11+K32*P_21)+K12*(K30*P_02+K31*P_12+K32*P_22))+K10*K30*r_adab+K11*K31*r_adab+K12*K32*r_adab;
-    float P__32 = P_32-g0*(K20*P_30+K21*P_31+K22*P_32+K30*P_02+K31*P_12+K32*P_22)+g0_2*(K20*(K30*P_00+K31*P_10+K32*P_20)+K21*(K30*P_01+K31*P_11+K32*P_21)+K22*(K30*P_02+K31*P_12+K32*P_22))+K20*K30*r_adab+K21*K31*r_adab+K22*K32*r_adab;
-    float P__33 = P_33-g0*(K30*P_03+K31*P_13+K30*P_30+K31*P_31+K32*P_23+K32*P_32)+(K30*K30)*r_adab+(K31*K31)*r_adab+(K32*K32)*r_adab+g0_2*(K30*(K30*P_00+K31*P_10+K32*P_20)+K31*(K30*P_01+K31*P_11+K32*P_21)+K32*(K30*P_02+K31*P_12+K32*P_22));
-    float P__34 = P_34-g0*(K30*P_04+K31*P_14+K32*P_24+K40*P_30+K41*P_31+K42*P_32)+g0_2*(K40*(K30*P_00+K31*P_10+K32*P_20)+K41*(K30*P_01+K31*P_11+K32*P_21)+K42*(K30*P_02+K31*P_12+K32*P_22))+K30*K40*r_adab+K31*K41*r_adab+K32*K42*r_adab;
-    float P__35 = P_35-g0*(K30*P_05+K31*P_15+K32*P_25+K50*P_30+K51*P_31+K52*P_32)+g0_2*(K50*(K30*P_00+K31*P_10+K32*P_20)+K51*(K30*P_01+K31*P_11+K32*P_21)+K52*(K30*P_02+K31*P_12+K32*P_22))+K30*K50*r_adab+K31*K51*r_adab+K32*K52*r_adab;
-    float P__40 = P_40-g0*(K00*P_40+K01*P_41+K02*P_42+K40*P_00+K41*P_10+K42*P_20)+g0_2*(K00*(K40*P_00+K41*P_10+K42*P_20)+K01*(K40*P_01+K41*P_11+K42*P_21)+K02*(K40*P_02+K41*P_12+K42*P_22))+K00*K40*r_adab+K01*K41*r_adab+K02*K42*r_adab;
-    float P__41 = P_41-g0*(K10*P_40+K11*P_41+K12*P_42+K40*P_01+K41*P_11+K42*P_21)+g0_2*(K10*(K40*P_00+K41*P_10+K42*P_20)+K11*(K40*P_01+K41*P_11+K42*P_21)+K12*(K40*P_02+K41*P_12+K42*P_22))+K10*K40*r_adab+K11*K41*r_adab+K12*K42*r_adab;
-    float P__42 = P_42-g0*(K20*P_40+K21*P_41+K22*P_42+K40*P_02+K41*P_12+K42*P_22)+g0_2*(K20*(K40*P_00+K41*P_10+K42*P_20)+K21*(K40*P_01+K41*P_11+K42*P_21)+K22*(K40*P_02+K41*P_12+K42*P_22))+K20*K40*r_adab+K21*K41*r_adab+K22*K42*r_adab;
-    float P__43 = P_43-g0*(K30*P_40+K31*P_41+K32*P_42+K40*P_03+K41*P_13+K42*P_23)+g0_2*(K30*(K40*P_00+K41*P_10+K42*P_20)+K31*(K40*P_01+K41*P_11+K42*P_21)+K32*(K40*P_02+K41*P_12+K42*P_22))+K30*K40*r_adab+K31*K41*r_adab+K32*K42*r_adab;
-    float P__44 = P_44-g0*(K40*P_04+K41*P_14+K40*P_40+K42*P_24+K41*P_41+K42*P_42)+(K40*K40)*r_adab+(K41*K41)*r_adab+(K42*K42)*r_adab+g0_2*(K40*(K40*P_00+K41*P_10+K42*P_20)+K41*(K40*P_01+K41*P_11+K42*P_21)+K42*(K40*P_02+K41*P_12+K42*P_22));
-    float P__45 = P_45-g0*(K40*P_05+K41*P_15+K42*P_25+K50*P_40+K51*P_41+K52*P_42)+g0_2*(K50*(K40*P_00+K41*P_10+K42*P_20)+K51*(K40*P_01+K41*P_11+K42*P_21)+K52*(K40*P_02+K41*P_12+K42*P_22))+K40*K50*r_adab+K41*K51*r_adab+K42*K52*r_adab;
-    float P__50 = P_50-g0*(K00*P_50+K01*P_51+K02*P_52+K50*P_00+K51*P_10+K52*P_20)+g0_2*(K00*(K50*P_00+K51*P_10+K52*P_20)+K01*(K50*P_01+K51*P_11+K52*P_21)+K02*(K50*P_02+K51*P_12+K52*P_22))+K00*K50*r_adab+K01*K51*r_adab+K02*K52*r_adab;
-    float P__51 = P_51-g0*(K10*P_50+K11*P_51+K12*P_52+K50*P_01+K51*P_11+K52*P_21)+g0_2*(K10*(K50*P_00+K51*P_10+K52*P_20)+K11*(K50*P_01+K51*P_11+K52*P_21)+K12*(K50*P_02+K51*P_12+K52*P_22))+K10*K50*r_adab+K11*K51*r_adab+K12*K52*r_adab;
-    float P__52 = P_52-g0*(K20*P_50+K21*P_51+K22*P_52+K50*P_02+K51*P_12+K52*P_22)+g0_2*(K20*(K50*P_00+K51*P_10+K52*P_20)+K21*(K50*P_01+K51*P_11+K52*P_21)+K22*(K50*P_02+K51*P_12+K52*P_22))+K20*K50*r_adab+K21*K51*r_adab+K22*K52*r_adab;
-    float P__53 = P_53-g0*(K30*P_50+K31*P_51+K32*P_52+K50*P_03+K51*P_13+K52*P_23)+g0_2*(K30*(K50*P_00+K51*P_10+K52*P_20)+K31*(K50*P_01+K51*P_11+K52*P_21)+K32*(K50*P_02+K51*P_12+K52*P_22))+K30*K50*r_adab+K31*K51*r_adab+K32*K52*r_adab;
-    float P__54 = P_54-g0*(K40*P_50+K41*P_51+K42*P_52+K50*P_04+K51*P_14+K52*P_24)+g0_2*(K40*(K50*P_00+K51*P_10+K52*P_20)+K41*(K50*P_01+K51*P_11+K52*P_21)+K42*(K50*P_02+K51*P_12+K52*P_22))+K40*K50*r_adab+K41*K51*r_adab+K42*K52*r_adab;
-    float P__55 = P_55-g0*(K50*P_05+K51*P_15+K52*P_25+K50*P_50+K51*P_51+K52*P_52)+(K50*K50)*r_adab+(K51*K51)*r_adab+(K52*K52)*r_adab+g0_2*(K50*(K50*P_00+K51*P_10+K52*P_20)+K51*(K50*P_01+K51*P_11+K52*P_21)+K52*(K50*P_02+K51*P_12+K52*P_22));
-
-    float xlen = sqrt(x[0]*x[0]+x[1]*x[1]+x[2]*x[2]);
-    float invlen3 = 1.0/(xlen*xlen*xlen);
-    float invlen32 = (invlen3*invlen3);
-
-    float x1_x2 = (x[1]*x[1]+x[2]*x[2]);
-    float x0_x2 = (x[0]*x[0]+x[2]*x[2]);
-    float x0_x1 = (x[0]*x[0]+x[1]*x[1]);
-
-    // normalized a posteriori covariance
-    P[0][0] = invlen32*(-x1_x2*(-P__00*x1_x2+P__10*x[0]*x[1]+P__20*x[0]*x[2])+x[0]*x[1]*(-P__01*x1_x2+P__11*x[0]*x[1]+P__21*x[0]*x[2])+x[0]*x[2]*(-P__02*x1_x2+P__12*x[0]*x[1]+P__22*x[0]*x[2]));
-    P[0][1] = invlen32*(-x0_x2*(-P__01*x1_x2+P__11*x[0]*x[1]+P__21*x[0]*x[2])+x[0]*x[1]*(-P__00*x1_x2+P__10*x[0]*x[1]+P__20*x[0]*x[2])+x[1]*x[2]*(-P__02*x1_x2+P__12*x[0]*x[1]+P__22*x[0]*x[2]));
-    P[0][2] = invlen32*(-x0_x1*(-P__02*x1_x2+P__12*x[0]*x[1]+P__22*x[0]*x[2])+x[0]*x[2]*(-P__00*x1_x2+P__10*x[0]*x[1]+P__20*x[0]*x[2])+x[1]*x[2]*(-P__01*x1_x2+P__11*x[0]*x[1]+P__21*x[0]*x[2]));
-    P[0][3] = -invlen3*(-P__03*x1_x2+P__13*x[0]*x[1]+P__23*x[0]*x[2]);
-    P[0][4] = -invlen3*(-P__04*x1_x2+P__14*x[0]*x[1]+P__24*x[0]*x[2]);
-    P[0][5] = -invlen3*(-P__05*x1_x2+P__15*x[0]*x[1]+P__25*x[0]*x[2]);
-    P[1][0] = invlen32*(-x1_x2*(-P__10*x0_x2+P__00*x[0]*x[1]+P__20*x[1]*x[2])+x[0]*x[1]*(-P__11*x0_x2+P__01*x[0]*x[1]+P__21*x[1]*x[2])+x[0]*x[2]*(-P__12*x0_x2+P__02*x[0]*x[1]+P__22*x[1]*x[2]));
-    P[1][1] = invlen32*(-x0_x2*(-P__11*x0_x2+P__01*x[0]*x[1]+P__21*x[1]*x[2])+x[0]*x[1]*(-P__10*x0_x2+P__00*x[0]*x[1]+P__20*x[1]*x[2])+x[1]*x[2]*(-P__12*x0_x2+P__02*x[0]*x[1]+P__22*x[1]*x[2]));
-    P[1][2] = invlen32*(-x0_x1*(-P__12*x0_x2+P__02*x[0]*x[1]+P__22*x[1]*x[2])+x[0]*x[2]*(-P__10*x0_x2+P__00*x[0]*x[1]+P__20*x[1]*x[2])+x[1]*x[2]*(-P__11*x0_x2+P__01*x[0]*x[1]+P__21*x[1]*x[2]));
-    P[1][3] = -invlen3*(-P__13*x0_x2+P__03*x[0]*x[1]+P__23*x[1]*x[2]);
-    P[1][4] = -invlen3*(-P__14*x0_x2+P__04*x[0]*x[1]+P__24*x[1]*x[2]);
-    P[1][5] = -invlen3*(-P__15*x0_x2+P__05*x[0]*x[1]+P__25*x[1]*x[2]);
-    P[2][0] = invlen32*(-x1_x2*(-P__20*x0_x1+P__00*x[0]*x[2]+P__10*x[1]*x[2])+x[0]*x[1]*(-P__21*x0_x1+P__01*x[0]*x[2]+P__11*x[1]*x[2])+x[0]*x[2]*(-P__22*x0_x1+P__02*x[0]*x[2]+P__12*x[1]*x[2]));
-    P[2][1] = invlen32*(-x0_x2*(-P__21*x0_x1+P__01*x[0]*x[2]+P__11*x[1]*x[2])+x[0]*x[1]*(-P__20*x0_x1+P__00*x[0]*x[2]+P__10*x[1]*x[2])+x[1]*x[2]*(-P__22*x0_x1+P__02*x[0]*x[2]+P__12*x[1]*x[2]));
-    P[2][2] = invlen32*(-x0_x1*(-P__22*x0_x1+P__02*x[0]*x[2]+P__12*x[1]*x[2])+x[0]*x[2]*(-P__20*x0_x1+P__00*x[0]*x[2]+P__10*x[1]*x[2])+x[1]*x[2]*(-P__21*x0_x1+P__01*x[0]*x[2]+P__11*x[1]*x[2]));
-    P[2][3] = -invlen3*(-P__23*x0_x1+P__03*x[0]*x[2]+P__13*x[1]*x[2]);
-    P[2][4] = -invlen3*(-P__24*x0_x1+P__04*x[0]*x[2]+P__14*x[1]*x[2]);
-    P[2][5] = -invlen3*(-P__25*x0_x1+P__05*x[0]*x[2]+P__15*x[1]*x[2]);
-    P[3][0] = -invlen3*(-P__30*x1_x2+P__31*x[0]*x[1]+P__32*x[0]*x[2]);
-    P[3][1] = -invlen3*(-P__31*x0_x2+P__30*x[0]*x[1]+P__32*x[1]*x[2]);
-    P[3][2] = -invlen3*(-P__32*x0_x1+P__30*x[0]*x[2]+P__31*x[1]*x[2]);
-    P[3][3] = P__33;
-    P[3][4] = P__34;
-    P[3][5] = P__35;
-    P[4][0] = -invlen3*(-P__40*x1_x2+P__41*x[0]*x[1]+P__42*x[0]*x[2]);
-    P[4][1] = -invlen3*(-P__41*x0_x2+P__40*x[0]*x[1]+P__42*x[1]*x[2]);
-    P[4][2] = -invlen3*(-P__42*x0_x1+P__40*x[0]*x[2]+P__41*x[1]*x[2]);
-    P[4][3] = P__43;
-    P[4][4] = P__44;
-    P[4][5] = P__45;
-    P[5][0] = -invlen3*(-P__50*x1_x2+P__51*x[0]*x[1]+P__52*x[0]*x[2]);
-    P[5][1] = -invlen3*(-P__51*x0_x2+P__50*x[0]*x[1]+P__52*x[1]*x[2]);
-    P[5][2] = -invlen3*(-P__52*x0_x1+P__50*x[0]*x[2]+P__51*x[1]*x[2]);
-    P[5][3] = P__53;
-    P[5][4] = P__54;
-    P[5][5] = P__55;
-
-    // normalized a posteriori state
-    x[0] = x[0]/xlen;
-    x[1] = x[1]/xlen;
-    x[2] = x[2]/xlen;
-
-    xGyroBias=x[3]*RADIANS_TO_DEGREES_MULTIPLIER; // get this for free!
-
-    // compute Euler angles (not exactly a part of the extended Kalman filter)
-    // yaw integration through full rotation matrix
-    float u_nb1 = u1 - x[4];
-    float u_nb2 = u2 - x[5];
-
-    float cy = cos(yaw * DEGREES_TO_RADIANS_MULTIPLIER); //old angles (last state before integration)
-    float sy = sin(yaw * DEGREES_TO_RADIANS_MULTIPLIER);
-    float d = sqrt(x_last[1]*x_last[1] + x_last[2]*x_last[2]);
-    float d_inv = 1.0 / d;
-
-    // compute needed parts of rotation matrix R (state and angle based version, equivalent with the commented version above)
-    float R11 = cy * d;
-    float R12 = -(x_last[2]*sy + x_last[0]*x_last[1]*cy) * d_inv;
-    float R13 = (x_last[1]*sy - x_last[0]*x_last[2]*cy) * d_inv;
-    float R21 = sy * d;
-    float R22 = (x_last[2]*cy - x_last[0]*x_last[1]*sy) * d_inv;
-    float R23 = -(x_last[1]*cy + x_last[0]*x_last[2]*sy) * d_inv;
-
-    // update needed parts of R for yaw computation
-    float R11_new = R11 + h*(u_nb2*R12 - u_nb1*R13);
-    float R21_new = R21 + h*(u_nb2*R22 - u_nb1*R23);
-    yaw = atan2(R21_new,R11_new) * RADIANS_TO_DEGREES_MULTIPLIER;
-
-    // compute new pitch and roll angles from a posteriori states
-    pitch = asin(-x[0]) * RADIANS_TO_DEGREES_MULTIPLIER;
-    roll = atan2(x[1],x[2]) * RADIANS_TO_DEGREES_MULTIPLIER;
-    
-    // save the estimated non-gravitational acceleration
-    a[0] = z0-x[0]*g0;
-    a[1] = z1-x[1]*g0;
-    a[2] = z2-x[2]*g0;
+    roll = RADIANS_TO_DEGREES_MULTIPLIER * atan2(q0*q1 + q2*q3, 0.5 - q1*q1 - q2*q2);
+    pitch = RADIANS_TO_DEGREES_MULTIPLIER * asin(-2.0 * (q1*q3 - q0*q2));
+    yaw = RADIANS_TO_DEGREES_MULTIPLIER * atan2(q1*q2 + q0*q3, 0.5 - q2*q2 - q3*q3);
 }
 
 void setup(void){	
@@ -911,9 +762,17 @@ void setup(void){
     writeRegister(BCM2835_SPI_CS0,ICM20689_USER_CTRL,0x15);
     writeRegister(BCM2835_SPI_CS1,ICM20689_USER_CTRL,0x15);
 
-	// load up calibration data from Arduino
+	// load up calibration data from Arduino.  Calibration data uses
+    // the method of D. Tedaldi, A. Pretto and E. Menegatti, 
+    // "A Robust and Easy to Implement Method for IMU Calibration 
+    // without External Equipments". In: Proceedings of the IEEE International 
+    // Conference on Robotics and Automation (ICRA 2014), May 31 - June 7, 2014
+    // Hong Kong, China, Page(s): 3042 - 3049
+    // Nee https://bitbucket.org/alberto_pretto/imu_tk
+    // notes on installing imu_tk and its dependencies and code to implement
+    // the
 /*
-    (registers 	10=samplePeriod, 11=accBiasX,
+    (Arduino "registers" 10=samplePeriod, 11=accBiasX,
     12=accBiasY, 13=accBiasZ, 14=accScale00, 15=accScale01, 16=accScale02,
     17=accScale10, 18=accScale11, 19=accScale12, 20=accScale20, 21=accScale21,
     22=accScale22, 23=gyroBiasX, 24=gyroBiasY, 25=gyroBiasZ, 26=gyroScale00,
@@ -948,7 +807,7 @@ void setup(void){
     if(!isnan(result)) calibrationData.accBiasZ = result/g0;
 	
     I2C_BUFFER[0]=201;
-    bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 201 (accScale0)
+    bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 201 (accTransform first row)
     bcm2835_i2c_read(I2C_BUFFER,12); usleep(100);
     result = extractFloat(0);
     if(!isnan(result)) calibrationData.accTransformMatrix[0] = result;
@@ -958,7 +817,7 @@ void setup(void){
     if(!isnan(result)) calibrationData.accTransformMatrix[2] = result;
 
     I2C_BUFFER[0]=202;
-    bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 201 (accScale1)
+    bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 201 (accTransform second row)
     bcm2835_i2c_read(I2C_BUFFER,12); usleep(100);
     result = extractFloat(0);
     if(!isnan(result)) calibrationData.accTransformMatrix[3] = result;
@@ -968,7 +827,7 @@ void setup(void){
     if(!isnan(result)) calibrationData.accTransformMatrix[5] = result;
 
     I2C_BUFFER[0]=203;
-    bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 203 (accScale2)
+    bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 203 (accTransform bottom row)
     bcm2835_i2c_read(I2C_BUFFER,12); usleep(100);
     result = extractFloat(0);
     if(!isnan(result)) calibrationData.accTransformMatrix[6] = result;
@@ -988,7 +847,7 @@ void setup(void){
     if(!isnan(result)) calibrationData.gyroBiasZ = result*RADIANS_TO_DEGREES_MULTIPLIER;
 
     I2C_BUFFER[0]=205;
-    bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 205 (gyroScale0)
+    bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 205 (gyroTransform first row)
     bcm2835_i2c_read(I2C_BUFFER,12); usleep(100);
     result = extractFloat(0);
     if(!isnan(result)) calibrationData.gyroTransformMatrix[0] = result;
@@ -998,7 +857,7 @@ void setup(void){
     if(!isnan(result)) calibrationData.gyroTransformMatrix[2] = result;
 
     I2C_BUFFER[0]=206;
-    bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 206 (gyroScale1)
+    bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 206 (gyroTransform second row)
     bcm2835_i2c_read(I2C_BUFFER,12); usleep(100);
     result = extractFloat(0);
     if(!isnan(result)) calibrationData.gyroTransformMatrix[3] = result;
@@ -1008,7 +867,7 @@ void setup(void){
     if(!isnan(result)) calibrationData.gyroTransformMatrix[5] = result;
 
     I2C_BUFFER[0]=207;
-    bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 207 (gyroScale2)
+    bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 207 (gyroTransform bottom row)
     bcm2835_i2c_read(I2C_BUFFER,12); usleep(100);
     result = extractFloat(0);
     if(!isnan(result)) calibrationData.gyroTransformMatrix[6] = result;
@@ -1016,7 +875,6 @@ void setup(void){
     if(!isnan(result)) calibrationData.gyroTransformMatrix[7] = result;
     result = extractFloat(8);
     if(!isnan(result)) calibrationData.gyroTransformMatrix[8] = result;
-
 
     //start FIFO - keep i2c disabled
     writeRegister(BCM2835_SPI_CS0,ICM20689_USER_CTRL,0x50);

@@ -21,22 +21,60 @@
 * bell rope.  The Bell-Boy uses rotational acceleration of the bell as a proxy for force applied.  The
 * hardware is currently a Pi Zero running Arch Linux.
 
-* This program executes an initial calibration of the ICM20689 devices, both in terms of sample rate and
-* accelerometer bias and scale.  It uses a rather good method of calibration disclosed in these papers
+* This program executes an initial calibration of the ICM20689 devices, in terms of sample rate and
+* gyro and accelerometer misalignment bias and scale.  It uses a rather good method of calibration disclosed in these papers
 * http://www.dis.uniroma1.it/~pretto/papers/tpm_icra2014.pdf
 * http://www.dis.uniroma1.it/~pretto/papers/pg_imeko2014.pdf
 
 * Code and installation instructions for the imu_tk calibration routines this program relies on are here:
 * https://bitbucket.org/alberto_pretto/imu_tk .  My own notes on installation are in the NotesOnInstallingimu_tk.docx
-* file in this directory.  My installation is performed on the full version of Raspbian.
+* file in this directory.  My installation is performed on the full version of Raspbian.  Pi Zero can be used but slow.
 * 
 * The general idea is that this program is run and a SAMP: command is executed a few times until you are happy
-* that the result is stable.  The CALI: command is then executed and this pushes a timestamp and accelerometer 
+* that the result is stable.  The CALI: command is then executed and this starts pushing a timestamp and accelerometer 
 * data to /data/samples/CALIBRATIONDATA.  The device is kept still (i.e. resting on a table) for no 
 * less than 50 seconds and is then put into around 30-40 different resting positions each lasting about 4 seconds.
-* After this process, issue the STCA: command.  This program will then calculate the calibrations.  Upon success
-* issue the SAVE: command and this will save the calibration dats to the Arduino EEPROM memory.  
-* From there it is accessed whenever the grabber file is started. 
+* After this process, issue the STCA: command.  This program will then calculate the calibrations.  
+* Takes about 5 minutes to crunch the numbers on a Pi Zero.  Look at the residuals, printed on screen
+* during calibration. They should all be much less than zero. Upon successful calibration issue the SAVE: command and 
+* this will save the calibration dats to the Arduino PROM memory.  From there it is accessed whenever the grabber
+* program is started. 
+* 
+* Notes on outputs of imu_tk
+* Triad model:
+*         
+* Misalignment matrix: 
+* general case:
+* 
+*     [    1     -mis_yz   mis_zy  ]
+* T = [  mis_xz     1     -mis_zx  ]
+*     [ -mis_xy   mis_yx     1     ]
+* 
+* "body" frame special case:
+* 
+*     [  1     -mis_yz   mis_zy  ]
+* T = [  0        1     -mis_zx  ]
+*     [  0        0        1     ]
+* 
+* Scale matrix:
+* 
+*     [  s_x      0        0  ]
+* K = [   0      s_y       0  ]
+*     [   0       0       s_z ]
+* 
+* Bias vector:
+* 
+*     [ b_x ]
+* B = [ b_y ]
+*     [ b_z ]
+* 
+* Given a raw sensor reading X (e.g., the acceleration ), the calibrated "unbiased" reading X' is obtained
+* 
+* X' = T*K*(X - B)
+* 
+* with B the bias (variable) + offset (constant, possibly 0).  From sensor reading, subtract bias and then
+* multiply T*K
+* This program multiplies T and K before saving to the Arduino (no need to keep them separate) 
 */
 
 #include <math.h>
@@ -190,6 +228,7 @@ int main(int argc, char const *argv[]){
 
 */
 void save(void){
+    // Load up calibration files made by imu_tk.  All units are SI.
     printf("Loading calibration...\n");
     FILE *fdCalib;
     unsigned char linein[100];
@@ -205,13 +244,15 @@ void save(void){
     sscanf(linein, "%f %f %f", &misalignMatrix[6], &misalignMatrix[7], &misalignMatrix[8]);
     if(fgets(linein, sizeof(linein), fdCalib) == NULL) return;
 
-    if(fgets(linein, sizeof(linein), fdCalib) == NULL) return;
+    if(fgets(linein, sizeof(linein), fdCalib) == NULL) return; // blank line in file
+
     sscanf(linein, "%f %f %f", &scaleMatrix[0], &scaleMatrix[1], &scaleMatrix[2]);
     if(fgets(linein, sizeof(linein), fdCalib) == NULL) return;
     sscanf(linein, "%f %f %f", &scaleMatrix[3], &scaleMatrix[4], &scaleMatrix[5]);
     if(fgets(linein, sizeof(linein), fdCalib) == NULL) return;
     sscanf(linein, "%f %f %f", &scaleMatrix[6], &scaleMatrix[7], &scaleMatrix[8]);
 
+    // create single transform matrix from scale and misalignment matrices
     for (int i = 0; i < 3; i++){
         for (int j = 0; j < 3; j++){
             calibrationData.accTransformMatrix[3*i+j] =  misalignMatrix[3*i+0]*scaleMatrix[j+0];
@@ -284,9 +325,10 @@ void save(void){
 
     char answer;
     printf("Do values look sane? (CTRL_C to exit in the next 20 secs) \n");
-    usleep(20000000);
-    if(sig_exit) exit(0);
-
+    for(int i = 0; i<20; ++i){
+        usleep(1000000);
+        if(sig_exit) exit(0);
+    }
 /*
     (registers 	10=samplePeriod, 11=accBiasX,
     12=accBiasY, 13=accBiasZ, 14=accScale00, 15=accScale01, 16=accScale02,
@@ -406,7 +448,7 @@ void arduinoWriteFloat(uint8_t reg,float value){
     I2C_BUFFER[3] = floatConv._bytes[2];
     I2C_BUFFER[4] = floatConv._bytes[3];
     bcm2835_i2c_write(I2C_BUFFER,5); 
-    usleep(750000); 
+    usleep(750000); // do a big delay as Arduino main loop has a 500ms sleep - I have not tested whether the sleep is interrupted by i2c activity as it should be, so this is really just a just in case
 }
 
 float extractFloat(uint8_t index){
@@ -417,6 +459,12 @@ float extractFloat(uint8_t index){
     return floatConv._float;
 }
 
+
+// This function works out how quickly samples are pushed out by the two ICM20689s
+// by counting how quickly samples are pushed out to the FIFOs.
+// Inevitably one device will be running faster than the other so only
+// report back the value of the slower device.  The extra samples pushed by the faster
+// device are periodically ditched by the pullData function.
 void fifoTimer(void){
     float result1 = 0.0, result2 = 0.0;
     float dummy[6];
@@ -455,7 +503,7 @@ float timer(uint8_t device){
         }
         usleep(5000);
     }
-    return (result/(200*loops))*4;
+    return (result/(200*loops))*4.0;
 }
 
 void pullData(void){
@@ -467,7 +515,7 @@ void pullData(void){
     int count_1 = readFIFOcount(BCM2835_SPI_CS0);
     int count_2 = readFIFOcount(BCM2835_SPI_CS1);
 
-    if (count_1 > 4000 || count_2 >= 4000){ // overflow (or nearly so)
+    if (count_1 > 4000 || count_2 >= 4000){ // overflow (or nearly so).  If you see this then stop the calibration ans start again
         printf("\nEOVF:\n");
         //clear data paths and reset FIFO (keep i2c disabled)
         writeRegister(BCM2835_SPI_CS0,ICM20689_USER_CTRL,0x15);
@@ -478,7 +526,7 @@ void pullData(void){
         writeRegister(BCM2835_SPI_CS0,ICM20689_USER_CTRL,0x50);
         writeRegister(BCM2835_SPI_CS1,ICM20689_USER_CTRL,0x50);
     }
-    // ditch a sample if one fifo is running faster then the other
+    // ditch a sample if one FIFO is running faster then the other
     if ((count_1 - count_2) >=24){
         readFIFO(BCM2835_SPI_CS0, fifo_data_1);
         count_1 -= 12;
