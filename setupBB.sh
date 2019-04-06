@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Copyright (c) 2017,2018 Peter Budd. All rights reserved
+# Copyright (c) 2017,2018,2019 Peter Budd. All rights reserved
 # Permission is hereby granted, free of charge, to any person obtaining a copy of this software and 
 # associated documentation files (the "Software"), to deal in the Software without restriction, 
 # including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, 
@@ -33,38 +33,13 @@ if [ $(id -u) -ne 0 ]; then
     exit 1
 fi
 
-#if [ $(cat /boot/config.txt | grep 'dtparam=i2c_arm=on' | wc -l) -eq 0 ]; then
-#  echo -e "\ndtparam=i2c_arm=on\ndtparam=i2c_arm_baudrate=400000\n" | tee -a /boot/config.txt
-#fi
-
-#if [ $(cat /boot/config.txt | grep 'dtoverlay=pi3-disable-wifi' | wc -l) -eq 0 ]; then
-#  echo -e "\ndtoverlay=pi3-disable-wifi\n" | tee -a /boot/config.txt
-#fi
-
 if [ $(cat /boot/config.txt | grep 'dtoverlay=pi3-disable-bt' | wc -l) -eq 0 ]; then
   echo -e "\ndtoverlay=pi3-disable-bt\n" | tee -a /boot/config.txt
 fi
 
-#if [ $(cat /boot/config.txt | grep 'dtoverlay=i2c-gpio' | wc -l) -eq 0 ]; then
-#  echo -e "\ndtoverlay=i2c-gpio,i2c_gpio_sda=2,i2c_gpio_scl=3,i2c_gpio_delay_us=0\n" | tee -a /boot/config.txt
-#fi
-
 if [ $(cat /boot/config.txt | grep 'dtoverlay=gpio-poweroff' | wc -l) -eq 0 ]; then
   echo -e "\ndtoverlay=gpio-poweroff,gpiopin=4\n" | tee -a /boot/config.txt
 fi
-
-#test to see if we should have BNO080 in reset
-#if [ $(cat /boot/config.txt | grep 'gpio=24=pd' | wc -l) -eq 0 ]; then
-#  echo -e "\ngpio=24=pd\n" | tee -a /boot/config.txt
-#fi
-
-#if [ $(cat /boot/config.txt | grep 'gpio=17=pd' | wc -l) -eq 0 ]; then
-#  echo -e "\ngpio=17=pd\n" | tee -a /boot/config.txt
-#fi
-
-#if [ $(cat /etc/modules-load.d/raspberrypi.conf | grep 'i2c-dev' | wc -l) -eq 0 ]; then
-#  echo -e "\ni2c-dev\n" | tee -a /etc/modules-load.d/raspberrypi.conf
-#fi
 
 #this may fail on more recent firmwares but does not affect script
 if [ $(cat /etc/modules-load.d/raspberrypi.conf | grep '\#snd-bcm2835' | wc -l) -eq 0 ]; then
@@ -220,11 +195,8 @@ Description= Bellboy websocket service file to start on boot
 After=network.target
 [Service]
 User=root
-Type=forking
-ExecStart=/usr/bin/screen -S wrad -d -m sh -c "/srv/http/websocketd --port=80 --staticdir=/srv/http/ /srv/http/grabber"
-ExecStop=/usr/bin/screen -S wrad -X wrad
-KillMode = control-group
-TimeoutStopSec=0
+Type=simple
+ExecStart=/srv/http/websocketd --port=80 --staticdir=/srv/http/ /srv/http/grabber
 Restart=always
 RestartSec=5
 [Install]

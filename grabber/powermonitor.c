@@ -1,7 +1,7 @@
 //gcc powermonitor.c -o pm -lbcm2835
 
 /*
- * Copyright (c) 2017,2018 Peter Budd. All rights reserved
+ * Copyright (c) 2018,2019 Peter Budd. All rights reserved
  * Permission is hereby granted, free of charge, to any person obtaining a copy of this software and
  * associated documentation files (the "Software"), to deal in the Software without restriction,
  * including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense,
@@ -56,7 +56,7 @@ void sig_handler(int signum) {
 int main(int argc, char const *argv[]){
     char i2cBuffer[4];
     struct sigaction sig_action;
-	int result = 0;
+    int result = 0;
 
     memset(&sig_action, 0, sizeof(struct sigaction));
     sig_action.sa_handler = sig_handler;
@@ -74,31 +74,31 @@ int main(int argc, char const *argv[]){
     bcm2835_i2c_set_baudrate(100000);
     bcm2835_i2c_setSlaveAddress(0x10);
 
-	i2cBuffer[0]=2;
-	bcm2835_i2c_write(i2cBuffer,1); usleep(100); // set register 2 (power)
+    i2cBuffer[0]=2;
+    bcm2835_i2c_write(i2cBuffer,1); usleep(100); // set register 2 (power)
 
-	while(!sig_exit){
-		if(access("/tmp/HAPDstart", F_OK) != -1 ){
-			i2cBuffer[0]=1;
-			bcm2835_i2c_write(i2cBuffer,1); usleep(100); // set register 1 - indicates sucessful boot to Arduino
-			break;	
-		}
-		bcm2835_i2c_read(i2cBuffer,2); usleep(100);
-		result = (i2cBuffer[0]<<8)+i2cBuffer[1];
-		if(result & 0x8000) system("/usr/bin/sync && /usr/bin/shutdown -P now");
-		usleep(500000);
-	}
+    while(!sig_exit){
+        if(0 == system("pidof -x hostapd > /dev/null") ){
+            i2cBuffer[0]=1;
+            bcm2835_i2c_write(i2cBuffer,1); usleep(100); // set register 1 - indicates sucessful boot to Arduino
+            break;	
+        }
+        bcm2835_i2c_read(i2cBuffer,2); usleep(100);
+        result = (i2cBuffer[0]<<8)+i2cBuffer[1];
+        if(result & 0x8000) system("/usr/bin/sync && /usr/bin/shutdown -P now");
+        usleep(500000);
+    }
   
     while(!sig_exit){
-		if (access("/tmp/BBlive", F_OK) == -1){
+        if (0 != system("pidof -x grabber > /dev/null")){ // don't run if grabber is running (it will do its own checks)
             i2cBuffer[0]=2;
             bcm2835_i2c_write(i2cBuffer,1); usleep(100); // set register 2 (power)
-			bcm2835_i2c_read(i2cBuffer,2); usleep(100);
-			result = (i2cBuffer[0]<<8)+i2cBuffer[1];
-			if(result & 0x8000){
-				system("/usr/bin/sync && /usr/bin/shutdown -P now");
-			}
-		}
+            bcm2835_i2c_read(i2cBuffer,2); usleep(100);
+            result = (i2cBuffer[0]<<8)+i2cBuffer[1];
+            if(result & 0x8000){
+                system("/usr/bin/sync && /usr/bin/shutdown -P now");
+            }
+        }
         usleep(5000000); // check every 5 seconds
     }
     bcm2835_i2c_end(); 

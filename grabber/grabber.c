@@ -16,7 +16,100 @@
       SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE. THE AUTHORS AND COPYRIGHT HOLDERS, HOWEVER,
       ACCEPT LIABILITY FOR DEATH OR PERSONAL INJURY CAUSED BY NEGLIGENCE AND FOR ALL MATTERS LIABILITY
       FOR WHICH MAY NOT BE LAWFULLY LIMITED OR EXCLUDED UNDER ENGLISH LAW
+*
+* This program forms part of the Bell-Boy project to measure the force applied by a bell ringer to a tower
+* bell rope.  The Bell-Boy uses rotational acceleration of the bell as a proxy for force applied.  The
+* hardware is currently a Pi Zero running Arch Linux.
+*
+* The results of the "engineering" and "experimentation" work on the bell system are described here.
+* In essence, although it will work straight from the command line, this program is intended to be started 
+* by Websocketd https://github.com/joewalnes/websocketd
+* On startup, it initialises the two IMUs (setup function) and starts pulling data
+* from them (pullData function).  This data is not pushed to the browser until the user signals that it is starting a run.
+* The data is always pulled as it allows for some gyro calibration (pullAndTransform function) and for the filters to settle down.
+*  
+* Two IMUs are used and their outputs are averaged.  Some time during the early development of this project, 
+* this seemed to produce better results but given other improvements here, it may not be needed any longer.
+* 
+* The main loop:
+*       *  checks the Arduino for battery life and reports this to the browser
+*       *  checks stdin for commends from the browser (see below) and processes these commands
+*       *  calls pushData to see if any data needs pushing to the browser (pushData calls pullData to pull data from the IMUs
+* setup:
+*       * configures the two IMU devices over SPI
+*       * pulls calibration data from the Arduino over I2C
+* pushData
+*       * calls pullData
+*       * if there is enough data in the circular buffer populated by pullData, it calculates angular acceleration using a Savitsky-Golay filter
+*       * pushes angle, rate and acceleration to the browser
+* savgol
+*       * processes angular rate data to create angular acceleration data
+* pullData is called by pushData
+*       * checks to see if enough data is in the two IMUs' FIFOs to be pulled and processed
+*       * checks to see if data from the two IMUs is aligned and if not ditches a sample from the faster IMU
+*       * calls pullAndTransform to actually pull the data and process it into angles
+*       * puts processed data (angle and angular rate) into a circular buffer
+* pullAndTransform
+*       * called by pullData, takes data from the IMUs (over SPI) averages the data from each of them and then adjusts for bias,scale and misalignment  
+*       * checks to see if the bell has been stationary for a while and if it has it takes the opportunity to recalculate the gyro biasses
+*       * calls calculate function to update rotation quaternion and Euler angles
+* calculate
+*       * called by pullAndTransform
+*       * straightforward Mahony complementary filter as wriiten in quaternion form by Madgwick
+* startRun
+*       * called when the user has indicated that a recording should be started
+*       * works out which way the bell went up (the device can be mounted either side of the headstock)
+*       * initialises the circular buffer
+*       * sets the RUNNING global to true (signals to pullData and pushData) 
+* 
+* There are the following possible command sent by the user's browser.  
+* Commands are received on stdin and output is on stdout (which is what Websocketd expects):
+* (a)   STRT:[filename] Start recording a session with a bell.  The bell
+*       must be at stand and (reasonably) stationary otherwise this
+*       will return ESTD: or EMOV: either of which signals the browser 
+*       to stop expecting data.  If Filename is not provided then a
+*       default filename of "CurrentRecording [date]" is used.
+* (b)   STOP: stops a recording in progress.  This also saves off the
+*       collected data into a file in /data/samples/
+* (c)   LDAT: a request for data from the browser, only works when there
+*       is a recording in progress - deprecated.  Does nothing.
+* (d)   FILE: get a listing of the previous recordings stored in
+*       /data/samples/ .  Used to display the selection box to the user.
+* (e)   LOAD:[filename] used to transmit a previous recording to the browser
+* (f)   DATE:[string] sets the date on the device to the date on the browser 
+*             string is unixtime (microsecs since 1/1/70)
+* (g)   SAMP: requests the current sample period
+* (h)   SHDN: tells the device to shutdown
+* (i)   TEST: returns the current basic orientation (for testing)
+* (j)   TARE: tares the bell (bell must be down and stable  - not confirmed by code)
+* (k)   EYEC: starts eye candy demo
+* (l)   STEC: stops eye candy demo
+*
+* There are the following responses back to the user's browser:
+* (i)    STPD: tells the browser that the device has sucessfully stopped sampling
+* (ii)   ESTP: signals an error in the stop process (an attempt to stopped when not started)
+* (iii)  LIVE:[string] the string contains the data recorded by the device in the format
+*             "A:[angle]R:[rate]C:[acceleration]".  Angle, rate and acceleration are 
+*             ordinary floating point numbers.  Angle is in degrees, rate is in degrees/sec
+*             and acceleration is in degrees/sec/sec.
+* (iv)   NDAT: indicates that there is no current data to send to the browser (deprecated)
+* (v)    SAMP: returns the sample period
+* (vi)   EIMU: IMU not detected or some IMU related failure
+* (vii)  ESTD: bell not at stand (aborts started session)
+* (viii) EMOV: bell moving when session started (the bell has to be stationary at start)
+* (ix)   ESAM: sample period needs to be measured first (deprecated)
+* (x)    ESTR: internal error related to data / filenames (shouldn't happen)!
+* (xi)   DATA:[string]  chunk of data from a previously stored file.  In same format as LIVE:
+* (xii)  EOVF: (sent by dcmimu) fifo overflow flagged.
+* (xiii) FILE:[filename] in response to FILE: a list of the previous recordings in /data/samples
+* (xiv)  STRT: in response to STRT: indicates a sucessful start.
+* (xv)   LFIN:[number] indicates the end of a file download and the number of samples sent
+* (xvi)  TEST:[number] current orientation
+* (xvii) BATT:[number] battery percentage
+* (xviii)EYEC:[roll],[pitch].[yaw],[qw],[qx],[qy],[qz] returns angles and quaternion for eye candy demo 
+*
 */
+
 
 #include <math.h>
 #include <sys/time.h>
@@ -95,64 +188,16 @@ struct {
                     .gyroTransformMatrix[1]=0, .gyroTransformMatrix[2]=0, .gyroTransformMatrix[3]=0, .gyroTransformMatrix[4]=1,
                     .gyroTransformMatrix[5]=0, .gyroTransformMatrix[6]=0, .gyroTransformMatrix[7]=0, .gyroTransformMatrix[8]=1 };
 
+// only really important when run from command line
 volatile sig_atomic_t sig_exit = 0;
 void sig_handler(int signum) {
     if (signum == SIGINT) fprintf(stderr, "received SIGINT\n");
     if (signum == SIGTERM) fprintf(stderr, "received SIGTERM\n");
     sig_exit = 1;
 }
-/*
-# There are fifteen possible command sent by the user's browser:
-# (a)   STRT:[filename] Start recording a session with a bell.  The bell
-#       must be at stand and (reasonably) stationary otherwise this
-#       will return ESTD: or EMOV: either of which signals the browser 
-#       to stop expecting data.  If Filename is not provided then a
-#       default filename of "CurrentRecording [date]" is used.
-# (b)   STOP: stops a recording in progress.  This also saves off the
-#       collected data into a file in /data/samples/
-# (c)   LDAT: a request for data from the browser, only works when there
-#       is a recording in progress - deprecated.  Does nothing.
-# (d)   FILE: get a listing of the previous recordings stored in
-#       /data/samples/ .  Used to display the selection box to the user.
-# (e)   LOAD:[filename] used to transmit a previous recording to the browser
-# (f)   DATE:[string] sets the date on the device to the date on the browser 
-#             string is unixtime (microsecs since 1/1/70)
-# (g)   SAMP: requests the current sample period
-# (h)   SHDN: tells the device to shutdown
-# (i)   TEST: returns the current basic orientation (for testing)
-# (j)   TARE: tares the bell (bell must be down and stable  - not confirmed by code)
-# (k)   EYEC: starts eye candy demo
-# (l)   STEC: stops eye candy demo
-#
-# There are the following responses back to the user's browser:
-# (i)   STPD: tells the browser that the device has sucessfully stopped sampling
-# (ii)  ESTP: signals an error in the stop process (an attempt to stopped when not started)
-# (iii) LIVE:[string] the string contains the data recorded by the device in the format
-#             "A:[angle]R:[rate]C:[acceleration]".  Angle, rate and acceleration are 
-#             ordinary floating point numbers.  Angle is in degrees, rate is in degrees/sec
-#             and acceleration is in degrees/sec/sec.
-# (iv)  NDAT: indicates that there is no current data to send to the browser (deprecated)
-# (v)   SAMP: returns the sample period
-# (vi)  EIMU: IMU not detected or some IMU related failure
-# (vii) ESTD: bell not at stand (aborts started session)
-# (viii)EMOV: bell moving when session started (the bell has to be stationary at start)
-# (ix)  ESAM: sample period needs to be measured first (deprecated)
-# (x)   ESTR: internal error related to data / filenames (shouldn't happen)!
-# (xi)  DATA:[string]  chunk of data from a previously stored file.  In same format as LIVE:
-# (xii) EOVF: (sent by dcmimu) fifo overflow flagged.
-# (xiii)FILE:[filename] in response to FILE: a list of the previous recordings in /data/samples
-# (xiv) STRT: in response to STRT: indicates a sucessful start.
-# (xv)  LFIN:[number] indicates the end of a file download and the number of samples sent
-# (xvi) TEST:[number] current orientation
-# (xvii)BATT:[number] battery percentage
-*
-* Commands are received on stdin and output is on stdout.
-* Will work standalone but intended to be interfaced with websocketd https://github.com/joewalnes/websocketd
-*/
 
+// used in relation to circular buffer
 #define PUSHBATCH 20 // number of samples taken before pushing out
-#define SAVGOLLENGTH  15
-#define SAVGOLHALF 7 // = math.floor(SAVGOLLENGTH/2.0)
 #define BUFFERSIZE 256 // must be bigger than PUSHBATCH + SAVGOLLENGTH
 unsigned int head;
 unsigned int tail;
@@ -170,6 +215,10 @@ float rateBuffer[BUFFERSIZE];
 //    2.01612903e-03,   2.41935484e-03,  2.82258065e-03,  3.22580645e-03,
 //    3.62903226e-03,   4.03225806e-03,  4.43548387e-03,  4.83870968e-03,
 //    5.24193548e-03,   5.64516129e-03,  6.04838710e-03};
+
+
+#define SAVGOLLENGTH  15
+#define SAVGOLHALF 7 // = math.floor(SAVGOLLENGTH/2.0)
 
 // savgol_coeffs(15,2,deriv=1,use="dot")
 const float savGolCoefficients[] = {
@@ -203,9 +252,6 @@ int main(int argc, char const *argv[]){
         }
         fclose(fdTare);
     }
-
-    system("/usr/bin/touch /tmp/BBlive");
-    usleep(1000); // need to ensure that powermonitor is not doing anything before we try to access i2C
 
     setup();
 
@@ -245,7 +291,7 @@ int main(int argc, char const *argv[]){
       
         pushData();
 
-        if(EYECANDY) printf("EYEC:%+07.1f, %+07.1f, %+07.1f, %+07.4f, %+07.4f, %+07.4f, %+07.4f\n", roll, pitch, yaw, q0, q1, q2, q3);
+        if(EYECANDY) printf("EYEC:%+06.1f, %+06.1f, %+06.1f, %+07.4f, %+07.4f, %+07.4f, %+07.4f\n", roll, pitch, yaw, q0, q1, q2, q3);
 
         while(fgets(linein, sizeof(linein), stdin ) != NULL) {
             entries = sscanf(linein, "%5s%[^\n]", command, details);
@@ -376,7 +422,6 @@ int main(int argc, char const *argv[]){
         }
     }
     system("/usr/bin/touch /var/lib/systemd/clock");
-    system("/usr/bin/rm /tmp/BBlive");
     return 0;
 }
 
@@ -547,11 +592,14 @@ float pullAndTransform(){
     // to push data samples out at 500Hz.  The angles and quaternion 
     // are computed at the higher rate as some filters operate better at
     // higher sample rates (although I have not tested whether the Mahony filter
-    // (see calculate function) is actually any better).  The browser will only
-    // see the last of these samples.
+    // (see calculate function) is actually any better, the higher sample rates also ensure
+    // that the two IMUs are better aligned so still worth keeping that way).  Four sets
+    // of samples are processed by this function at a time.  The browser will only see data
+    // derived from last of these samples.
     for(int i = 0; i < 4; ++i){ 
         readFIFO(BCM2835_SPI_CS0, fifoData1);
         readFIFO(BCM2835_SPI_CS1, fifoData2);
+        // combine data from the two IMUs - straight average
         combinedData[0] = (fifoData2[0] + fifoData1[0]) / 2.0; // Ax
         combinedData[1] = (fifoData2[1] + fifoData1[1]) / 2.0; // Ay
         combinedData[2] = (fifoData2[2] + fifoData1[2]) / 2.0; // Az
@@ -559,6 +607,7 @@ float pullAndTransform(){
         combinedData[4] = (fifoData2[4] + fifoData1[4]) / 2.0; // Gy
         combinedData[5] = (fifoData2[5] + fifoData1[5]) / 2.0; // Gz
 
+        // used for bias compensation calculation
         for(int i = 0; i < 3; ++i){
             averages[i] += combinedData[3+i];
         }
@@ -571,6 +620,7 @@ float pullAndTransform(){
         combinedData[4] -= calibrationData.gyroBiasY;
         combinedData[5] -= calibrationData.gyroBiasZ;
 
+        // used for bias compensation calculation
         for(int i = 0; i < 3; ++i){
             if(abs(combinedData[3+i]) > peaks[i]) peaks[i] = abs(combinedData[3+i]);
         }
@@ -600,18 +650,19 @@ float pullAndTransform(){
                             + combinedData[5]*calibrationData.gyroTransformMatrix[8];
 
         count +=1;
-        if((count % 5000) == 0){ // check once every 10 seconds
+        if((count % 5000) == 0){ // check bias once every 10 seconds
             for(int i = 0; i < 3; ++i) averages[i] /= 5000.0;
             if(peaks[0] < 1.4 && peaks[1] < 1.4 && peaks[2] < 1.4){  // no peaks in gyro rate so can take the last 10 seconds as stationary
-                calibrationData.gyroBiasX = averages[0];
+                calibrationData.gyroBiasX = averages[0];  // adjust biasses
                 calibrationData.gyroBiasY = averages[1];
                 calibrationData.gyroBiasZ = averages[2];
             }
             for(int i = 0; i < 3; ++i) { averages[i] = 0.0; peaks[i] = 0.0; }
         }
-        // This function is called 4x faster than the sample interval to the browser so adjust sample interval accordingly
-        // It calculates angles and a quaternion from the gyro and accelerometer measurement. The q0, q1,q2,q3, roll, pitch and yaw globals
+        
+        // This function calculates angles and a quaternion from the gyro and accelerometer measurements. The q0, q1,q2,q3, roll, pitch and yaw globals
         // are updated by this function (hence no return value)
+        // This function is called 4x faster than the sample interval to the browser hence samplePeriod/4.0
         calculate(combinedData[3],combinedData[4],combinedData[5], combinedData[0],combinedData[1],combinedData[2],calibrationData.samplePeriod/4.0);
     }
 
