@@ -1130,8 +1130,8 @@ void calculate(float u0, float u1, float u2, float z0, float z1,float z2, float 
     float u_nb1 = u1 - x[4];
     float u_nb2 = u2 - x[5];
 
-    float cy = cos(yaw); //old angles (last state before integration)
-    float sy = sin(yaw);
+    float cy = cos(yaw * DEGREES_TO_RADIANS_MULTIPLIER); //old angles (last state before integration)
+    float sy = sin(yaw * DEGREES_TO_RADIANS_MULTIPLIER);
     float d = sqrt(x_last[1]*x_last[1] + x_last[2]*x_last[2]);
     float d_inv = 1.0 / d;
 
