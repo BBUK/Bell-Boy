@@ -440,6 +440,9 @@ function playbackSample(){
     }
 }
 
+// This function calculates the effect of gravity on the bell by varying the amplitude of a sine wave
+// and minimising the difference between the sine wave and recorded acceleration profile of the bell.
+// Uses a straightforward 14 bit binary search method. Calls calculateError().
 function getWeighting(){
     var result = 0, guessLog;
     if ((currentStatus & SESSIONLOADED) == 0) return;
@@ -449,19 +452,17 @@ function getWeighting(){
     return result;
 }
 
+// This function calaculates the difference (error) between a sine wave of amplitude "guess" and the
+// acceleration profile of the bell.  Called by getWeighting().
 function calculateError(guess){
     var count = 0.0, error = 0.0;
     var i = 0;
     if(swingStarts.length > 1) i = swingStarts[1];
     for(; i < sample.length; i++){
-        if(sample[i][0] > 70 && sample[i][0] < 110 && sample[i][1] > 0){
-            count += 1;
-            error += guess*Math.sin(sample[i][0]*3.1416/180) - sample[i][2];
-        } else if(sample[i][0] < 290 && sample[i][0] > 250 && sample[i][1] < 0){
+        if(sample[i][0] < 320 && sample[i][0] > 280 && sample[i][1] < 0){ // only calculate gravity effect going down at backstroke because of fewer other effects such as vibration from ring and switch of direction caused by pulley/garter hole interaction
             count += 1;
             error += -guess*Math.sin(sample[i][0]*3.1416/180) + sample[i][2];
         }
-
         if(count > 4000) break; // should be enough
     }
     error /= count;
@@ -717,7 +718,6 @@ function drawSamples(position,iterations){
             var pixelHeight = (ctxBD.canvas.height - 14 - 25) * Math.min(dataEntryCurrent[2]/scaleValue,1);
             if (pixelHeight < 0) pixelHeight = 0;
 
-
             ctxBD.clearRect(posHS1 + pixelsFromROIU, 14, pixelWidth + 1, ctxBD.canvas.height - 14 - 25);
             ctxBD.fillStyle="white";
             ctxBD.fillRect(posHS1 + pixelsFromROIU, ctxBD.canvas.height - 25, pixelWidth, (0-pixelHeight));
@@ -791,7 +791,6 @@ function drawSamples(position,iterations){
             ctxBD.clearRect(posBS2 + pixelsFromROIL, 14, pixelWidth + 1, ctxBD.canvas.height - 14 - 25);
             ctxBD.fillStyle="white";
             ctxBD.fillRect(posBS2 + pixelsFromROIL, ctxBD.canvas.height - 25, pixelWidth, (0-pixelHeight));
-
         }
     }
 }

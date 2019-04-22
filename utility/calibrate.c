@@ -22,21 +22,20 @@
 * hardware is currently a Pi Zero running Arch Linux.
 
 * This program executes an initial calibration of the ICM20689 devices, in terms of sample rate and
-* gyro and accelerometer misalignment bias and scale.  It uses a rather good method of calibration disclosed in these papers
+* gyro and accelerometer misalignment, bias and scale.  It uses a rather good method of calibration disclosed in these papers
 * http://www.dis.uniroma1.it/~pretto/papers/tpm_icra2014.pdf
 * http://www.dis.uniroma1.it/~pretto/papers/pg_imeko2014.pdf
 
 * Code and installation instructions for the imu_tk calibration routines this program relies on are here:
-* https://bitbucket.org/alberto_pretto/imu_tk .  My own notes on installation are in the NotesOnInstallingimu_tk.docx
-* file in this directory.  My installation is performed on the full version of Raspbian.  Pi Zero can be used but slow.
+* https://bitbucket.org/alberto_pretto/imu_tk.  My own notes on installation are in the NotesOnInstallingimu_tk.docx
+* file in this directory.  My installation is performed on the full version of Raspbian.  Pi Zero can be used but is slow.
 * 
 * The general idea is that this program is run and a SAMP: command is executed a few times until you are happy
 * that the result is stable.  The CALI: command is then executed and this starts pushing a timestamp and accelerometer 
-* data to /data/samples/CALIBRATIONDATA.  The device is kept still (i.e. resting on a table) for no 
+* data to /tmp/CALIBRATIONDATA.  The device is kept still (i.e. resting on a table) for no 
 * less than 50 seconds and is then put into around 30-40 different resting positions each lasting about 4 seconds.
 * After this process, issue the STCA: command.  This program will then calculate the calibrations.  
-* Takes about 5 minutes to crunch the numbers on a Pi Zero.  Look at the residuals, printed on screen
-* during calibration. They should all be much less than zero. Upon successful calibration issue the SAVE: command and 
+* Takes about 5 minutes to crunch the numbers on a Pi Zero.  Upon successful calibration issue the SAVE: command and 
 * this will save the calibration dats to the Arduino PROM memory.  From there it is accessed whenever the grabber
 * program is started. 
 * 
@@ -112,7 +111,7 @@ unsigned char I2C_BUFFER[16];
 int local_count = 0;
 char local_outbuf[4000];
 
-const unsigned int LOOPSLEEP = 100000;  // main loop processes every 0.1 sec.  50 samples should be in FIFO.  Max number of samples in FIFO is 341.  Should be OK.
+const unsigned int LOOPSLEEP = 50000;  // main loop processes every 0.05 sec.  Max number of samples in FIFO is 341.  Should be OK.
 
 struct {
     float samplePeriod;
@@ -180,7 +179,7 @@ int main(int argc, char const *argv[]){
             }
             if(strcmp("CALI:", command) == 0) {
                 calibrationTimestamp = 0.0;
-                fdCalibrationData = fopen("\tmp\CALIBRATIONDATA","w");
+                fdCalibrationData = fopen("/tmp/CALIBRATIONDATA","w");
                 if(fdCalibrationData == NULL) {
                     fprintf(stderr, "Could not open calibration file for writing\n");
                     printf("ESTR:\n");
@@ -198,7 +197,7 @@ int main(int argc, char const *argv[]){
 				}
 				CALIBRATING = 0;
 				printf("Starting calibration (will take a while)...\n");
-				system("./BBimu_tk \tmp\CALIBRATIONDATA");
+				system("./BBimu_tk /tmp/CALIBRATIONDATA");
 				printf("Done calibrating\n");
                 continue;
             }
@@ -468,14 +467,11 @@ float extractFloat(uint8_t index){
 // report back the value of the slower device.  The extra samples pushed by the faster
 // device are periodically ditched by the pullData function.
 void fifoTimer(void){
-    float result1 = 0.0, result2 = 0.0;
+    float result1 = 0.0;
     float dummy[6];
     result1 = timer(BCM2835_SPI_CS0);
-    result2 = timer(BCM2835_SPI_CS1);
     while (readFIFOcount(BCM2835_SPI_CS0) != 0) readFIFO(BCM2835_SPI_CS0, dummy);
-    while (readFIFOcount(BCM2835_SPI_CS1) != 0) readFIFO(BCM2835_SPI_CS1, dummy);
-   
-    calibrationData.samplePeriod = (result1 > result2) ? result1 : result2;
+    calibrationData.samplePeriod = result1;
 }
 
 float timer(uint8_t device){
@@ -505,58 +501,32 @@ float timer(uint8_t device){
         }
         usleep(5000);
     }
-    return (result/(200*loops))*4.0;
+    return (result/(200*loops));
 }
 
 void pullData(void){
-    float fifo_data_1[6];
-    float fifo_data_2[6];
-    float combined_data[6] = {0};
+    float fifo_data[6];
     char local_outbuf_line[150];
 
     int count_1 = readFIFOcount(BCM2835_SPI_CS0);
-    int count_2 = readFIFOcount(BCM2835_SPI_CS1);
 
-    if (count_1 > 4000 || count_2 >= 4000){ // overflow (or nearly so).  If you see this then stop the calibration and start again
+    if (count_1 > 4000){ // overflow (or nearly so).  If you see this then stop the calibration and start again
         printf("\nEOVF:\n");
         //clear data paths and reset FIFO (keep i2c disabled)
         writeRegister(BCM2835_SPI_CS0,ICM20689_USER_CTRL,0x15);
-        writeRegister(BCM2835_SPI_CS1,ICM20689_USER_CTRL,0x15);
         usleep(1000);
  
         //start FIFO - keep i2c disabled
         writeRegister(BCM2835_SPI_CS0,ICM20689_USER_CTRL,0x50);
-        writeRegister(BCM2835_SPI_CS1,ICM20689_USER_CTRL,0x50);
     }
-    // ditch a sample if one FIFO is running faster then the other
-    if ((count_1 - count_2) >=24){
-        readFIFO(BCM2835_SPI_CS0, fifo_data_1);
-        count_1 -= 12;
-    } else if ((count_2 - count_1) >=24){
-        readFIFO(BCM2835_SPI_CS1, fifo_data_2);
-        count_2 -= 12;
-    }
-
-    if(count_1 < 48 || count_2 < 48) return;
+    if(count_1 < 48) return;
     
-    while(count_1 >=48 && count_2 >= 48){
+    while(count_1 >=48){
         count_1 -= 48;
-        count_2 -= 48;
 
-        for(int i = 0; i < 4; ++i){
-            readFIFO(BCM2835_SPI_CS0, fifo_data_1);
-            readFIFO(BCM2835_SPI_CS1, fifo_data_2);
-            combined_data[0] += (fifo_data_2[0] + fifo_data_1[0]) / 2.0; // Ax
-            combined_data[1] += (fifo_data_2[1] + fifo_data_1[1]) / 2.0; // Ay
-            combined_data[2] += (fifo_data_2[2] + fifo_data_1[2]) / 2.0; // Az
-            combined_data[3] += (fifo_data_2[3] + fifo_data_1[3]) / 2.0; // Gx
-            combined_data[4] += (fifo_data_2[4] + fifo_data_1[4]) / 2.0; // Gy
-            combined_data[5] += (fifo_data_2[5] + fifo_data_1[5]) / 2.0; // Gz
-        }
-        for(int i = 0; i < 6; ++i) combined_data[i] /= 4;
-
+        readFIFO(BCM2835_SPI_CS0, fifo_data);
         if(CALIBRATING){
-            sprintf(local_outbuf_line,"%+.8e %+.8e %+.8e %+.8e %+.8e %+.8e %+.8e\n", calibrationTimestamp, combined_data[3] * DEGREES_TO_RADIANS_MULTIPLIER,combined_data[4] * DEGREES_TO_RADIANS_MULTIPLIER,combined_data[5] * DEGREES_TO_RADIANS_MULTIPLIER, combined_data[0] * g0 ,combined_data[1] * g0,combined_data[2] * g0);
+            sprintf(local_outbuf_line,"%+.8e %+.8e %+.8e %+.8e %+.8e %+.8e %+.8e\n", calibrationTimestamp, fifo_data[3] * DEGREES_TO_RADIANS_MULTIPLIER,fifo_data[4] * DEGREES_TO_RADIANS_MULTIPLIER,fifo_data[5] * DEGREES_TO_RADIANS_MULTIPLIER, fifo_data[0] * g0 ,fifo_data[1] * g0,fifo_data[2] * g0);
             if (local_count + strlen(local_outbuf_line) > (sizeof local_outbuf -2)) {
                 fputs(local_outbuf, fdCalibrationData);
                 fflush(fdCalibrationData);
@@ -591,63 +561,46 @@ void setup(void){
     bcm2835_spi_setDataMode(BCM2835_SPI_MODE3);
     bcm2835_spi_set_speed_hz(8000000);
     bcm2835_spi_setChipSelectPolarity(BCM2835_SPI_CS0, LOW);
-    bcm2835_spi_setChipSelectPolarity(BCM2835_SPI_CS1, LOW);
 
-   //reset devices
+   //reset device
     writeRegisterBits(BCM2835_SPI_CS0,ICM20689_PWR_MGMT_1,0xFF,0x80);
-    writeRegisterBits(BCM2835_SPI_CS1,ICM20689_PWR_MGMT_1,0xFF,0x80);
     usleep(100000);
  
    //disable i2c
     writeRegisterBits(BCM2835_SPI_CS0,ICM20689_USER_CTRL,0xFF,0x10);
-    writeRegisterBits(BCM2835_SPI_CS1,ICM20689_USER_CTRL,0xFF,0x10);
 
     if(readRegister(BCM2835_SPI_CS0,ICM20689_WHO_AM_I) != 0x98){
       printf("Unable to read from device 0. \n");
       exit(1);        
     }
-    if(readRegister(BCM2835_SPI_CS1,ICM20689_WHO_AM_I) != 0x98){
-      printf("Unable to read from device 1. \n");
-      exit(1);        
-    }
     // bring out of sleep, set clksel (to PLL) and disable temperature sensor
     writeRegister(BCM2835_SPI_CS0,ICM20689_PWR_MGMT_1,0x09);
-    writeRegister(BCM2835_SPI_CS1,ICM20689_PWR_MGMT_1,0x09);
     usleep(30000); 
 
     //configure DLPF
     writeRegister(BCM2835_SPI_CS0,ICM20689_CONFIG,0x01);
-    writeRegister(BCM2835_SPI_CS1,ICM20689_CONFIG,0x01);
 
     //full scale accelerometer range to 4g
     writeRegister(BCM2835_SPI_CS0,ICM20689_ACCEL_CONFIG,0x08);
-    writeRegister(BCM2835_SPI_CS1,ICM20689_ACCEL_CONFIG,0x08);
 
     //full scale gyro range to 500deg/s
     writeRegister(BCM2835_SPI_CS0,ICM20689_GYRO_CONFIG,0x08);
-    writeRegister(BCM2835_SPI_CS1,ICM20689_GYRO_CONFIG,0x08);
 
     //set sample rate divider we want 500Hz assuming base clock is 1KHz
     writeRegister(BCM2835_SPI_CS0,ICM20689_SMPLRT_DIV,0x01);
-    writeRegister(BCM2835_SPI_CS1,ICM20689_SMPLRT_DIV,0x01);
 
     //set FIFO size to 4K (this setting does not appear in the V1 datasheet!)
     writeRegister(BCM2835_SPI_CS0,ICM20689_ACCEL_CONFIG_2,0xC0);
-    writeRegister(BCM2835_SPI_CS1,ICM20689_ACCEL_CONFIG_2,0xC0);
     
     //clear data paths and reset FIFO (keep i2c disabled)
     writeRegister(BCM2835_SPI_CS0,ICM20689_USER_CTRL,0x15);
-    writeRegister(BCM2835_SPI_CS1,ICM20689_USER_CTRL,0x15);
     usleep(1000);
 
     //select registers for FIFO
     writeRegister(BCM2835_SPI_CS0,ICM20689_FIFO_EN,0x78);
-    writeRegister(BCM2835_SPI_CS1,ICM20689_FIFO_EN,0x78);
     
     //start FIFO - keep i2c disabled
     writeRegister(BCM2835_SPI_CS0,ICM20689_USER_CTRL,0x50);
-    writeRegister(BCM2835_SPI_CS1,ICM20689_USER_CTRL,0x50);
-    
 }
 
 uint16_t readFIFOcount(uint8_t device){

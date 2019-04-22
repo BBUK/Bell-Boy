@@ -74,6 +74,7 @@ void start(uint32_t dataRate);
 void saveCalibration(void);
 void setCalibration(char accel, char gyro, char mag);
 void calculate(float gx, float gy, float gz, float ax, float ay, float az, float h);
+void DCMcalculate(float gx, float gy, float gz, float ax, float ay, float az, float h);
 void pushData(void);
 float savGol(unsigned int startPosition);
 void startRun(void);
