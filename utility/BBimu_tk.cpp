@@ -23,8 +23,8 @@ int main(int argc, char** argv)
   
   CalibratedTriad init_acc_calib, init_gyro_calib;
   init_acc_calib.setBias( Vector3d(0, 0, 0) );
-  init_gyro_calib.setScale( Vector3d(1.0/2047.96, 1.0/2047.96, 1.0/2047.96) );
-  
+  init_gyro_calib.setScale( Vector3d(1.0/3754.87, 1.0/3754.87, 1.0/3754.87) );
+
   MultiPosCalibration mp_calib;
     
   mp_calib.setInitStaticIntervalDuration(50.0);

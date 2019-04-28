@@ -70,12 +70,12 @@ void loop() {
   }
 
   loopCount += 1;
-  if ((state == 1) && (loopCount == 550)) {
+  if ((state == 1) && (loopCount == 600)) {
     loopCount = 0;
     state = 2;
     moveEm(state);
   }
-  if ((state > 1) && (loopCount == 40)) {
+  if ((state > 1) && (loopCount == 50)) {
     state += 1;
     loopCount = 0;
     if (state == 72) {

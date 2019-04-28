@@ -21,7 +21,7 @@
 * bell rope.  The Bell-Boy uses rotational acceleration of the bell as a proxy for force applied.  The
 * hardware is currently a Pi Zero running Arch Linux.
 
-* This program executes an initial calibration of the ICM20689 devices, in terms of sample rate and
+* This program executes an initial calibration of the ICM20689 device, in terms of sample rate and
 * gyro and accelerometer misalignment, bias and scale.  It uses a rather good method of calibration disclosed in these papers
 * http://www.dis.uniroma1.it/~pretto/papers/tpm_icra2014.pdf
 * http://www.dis.uniroma1.it/~pretto/papers/pg_imeko2014.pdf
@@ -314,15 +314,15 @@ void save(void){
     printf("accBiasX: %f\n", calibrationData.accBiasX);
     printf("accBiasY: %f\n", calibrationData.accBiasY);
     printf("accBiasZ: %f\n", calibrationData.accBiasZ);
-    printf("accTranform: %f %f %f\n", calibrationData.accTransformMatrix[0],calibrationData.accTransformMatrix[1],calibrationData.accTransformMatrix[2]);
-    printf("             %f %f %f\n", calibrationData.accTransformMatrix[3],calibrationData.accTransformMatrix[4],calibrationData.accTransformMatrix[5]);
-    printf("             %f %f %f\n", calibrationData.accTransformMatrix[6],calibrationData.accTransformMatrix[7],calibrationData.accTransformMatrix[8]);
+    printf("accTransform: %f %f %f\n", calibrationData.accTransformMatrix[0],calibrationData.accTransformMatrix[1],calibrationData.accTransformMatrix[2]);
+    printf("              %f %f %f\n", calibrationData.accTransformMatrix[3],calibrationData.accTransformMatrix[4],calibrationData.accTransformMatrix[5]);
+    printf("              %f %f %f\n", calibrationData.accTransformMatrix[6],calibrationData.accTransformMatrix[7],calibrationData.accTransformMatrix[8]);
     printf("gyroBiasX: %f\n", calibrationData.gyroBiasX);
     printf("gyroBiasY: %f\n", calibrationData.gyroBiasY);
     printf("gyroBiasZ: %f\n", calibrationData.gyroBiasZ);
-    printf("gyroTranform: %f %f %f\n", calibrationData.gyroTransformMatrix[0],calibrationData.gyroTransformMatrix[1],calibrationData.gyroTransformMatrix[2]);
-    printf("              %f %f %f\n", calibrationData.gyroTransformMatrix[3],calibrationData.gyroTransformMatrix[4],calibrationData.gyroTransformMatrix[5]);
-    printf("              %f %f %f\n", calibrationData.gyroTransformMatrix[6],calibrationData.gyroTransformMatrix[7],calibrationData.gyroTransformMatrix[8]);
+    printf("gyroTransform: %f %f %f\n", calibrationData.gyroTransformMatrix[0],calibrationData.gyroTransformMatrix[1],calibrationData.gyroTransformMatrix[2]);
+    printf("               %f %f %f\n", calibrationData.gyroTransformMatrix[3],calibrationData.gyroTransformMatrix[4],calibrationData.gyroTransformMatrix[5]);
+    printf("               %f %f %f\n", calibrationData.gyroTransformMatrix[6],calibrationData.gyroTransformMatrix[7],calibrationData.gyroTransformMatrix[8]);
 
     char answer;
     printf("Do values look sane? (CTRL_C to exit in the next 20 secs) \n");
@@ -390,21 +390,21 @@ void save(void){
     if(calibrationData.accBiasZ != extractFloat(8)) printf("accBiasZ: sent %f received %f \n", calibrationData.accBiasZ, extractFloat(8));
 
     I2C_BUFFER[0]=201;
-    bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 201 (accScale0)
+    bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 201 (accTransform0)
     bcm2835_i2c_read(I2C_BUFFER,12); usleep(100);
     if(calibrationData.accTransformMatrix[0] != extractFloat(0)) printf("accScale00: sent %f received %f \n", calibrationData.accTransformMatrix[0], extractFloat(0));
     if(calibrationData.accTransformMatrix[1] != extractFloat(4)) printf("accScale01: sent %f received %f \n", calibrationData.accTransformMatrix[1], extractFloat(4));
     if(calibrationData.accTransformMatrix[2] != extractFloat(8)) printf("accScale02: sent %f received %f \n", calibrationData.accTransformMatrix[2], extractFloat(8));
 
     I2C_BUFFER[0]=202;
-    bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 202 (accScale1)
+    bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 202 (accTransform1)
     bcm2835_i2c_read(I2C_BUFFER,12); usleep(100);
     if(calibrationData.accTransformMatrix[3] != extractFloat(0)) printf("accScale10: sent %f received %f \n", calibrationData.accTransformMatrix[3], extractFloat(0));
     if(calibrationData.accTransformMatrix[4] != extractFloat(4)) printf("accScale11: sent %f received %f \n", calibrationData.accTransformMatrix[4], extractFloat(4));
     if(calibrationData.accTransformMatrix[5] != extractFloat(8)) printf("accScale12: sent %f received %f \n", calibrationData.accTransformMatrix[5], extractFloat(8));
 
     I2C_BUFFER[0]=203;
-    bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 203 (accScale2)
+    bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 203 (accTransform2)
     bcm2835_i2c_read(I2C_BUFFER,12); usleep(100);
     if(calibrationData.accTransformMatrix[6] != extractFloat(0)) printf("accScale20: sent %f received %f \n", calibrationData.accTransformMatrix[6], extractFloat(0));
     if(calibrationData.accTransformMatrix[7] != extractFloat(4)) printf("accScale21: sent %f received %f \n", calibrationData.accTransformMatrix[7], extractFloat(4));
@@ -418,21 +418,21 @@ void save(void){
     if(calibrationData.gyroBiasZ != extractFloat(8)) printf("gyroBiasZ: sent %f received %f \n", calibrationData.gyroBiasZ, extractFloat(8));
 
     I2C_BUFFER[0]=205;
-    bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 205 (gyroScale0)
+    bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 205 (gyroTransform0)
     bcm2835_i2c_read(I2C_BUFFER,12); usleep(100);
     if(calibrationData.gyroTransformMatrix[0] != extractFloat(0)) printf("gyroScale00: sent %f received %f \n", calibrationData.gyroTransformMatrix[0], extractFloat(0));
     if(calibrationData.gyroTransformMatrix[1] != extractFloat(4)) printf("gyroScale01: sent %f received %f \n", calibrationData.gyroTransformMatrix[1], extractFloat(4));
     if(calibrationData.gyroTransformMatrix[2] != extractFloat(8)) printf("gyroScale02: sent %f received %f \n", calibrationData.gyroTransformMatrix[2], extractFloat(8));
 
     I2C_BUFFER[0]=206;
-    bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 206 (gyroScale1)
+    bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 206 (gyroTransform1)
     bcm2835_i2c_read(I2C_BUFFER,12); usleep(100);
     if(calibrationData.gyroTransformMatrix[3] != extractFloat(0)) printf("gyroScale10: sent %f received %f \n", calibrationData.gyroTransformMatrix[3], extractFloat(0));
     if(calibrationData.gyroTransformMatrix[4] != extractFloat(4)) printf("gyroScale11: sent %f received %f \n", calibrationData.gyroTransformMatrix[4], extractFloat(4));
     if(calibrationData.gyroTransformMatrix[5] != extractFloat(8)) printf("gyroScale12: sent %f received %f \n", calibrationData.gyroTransformMatrix[5], extractFloat(8));
 
     I2C_BUFFER[0]=207;
-    bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 207 (gyroScale2)
+    bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 207 (gyroTransforme2)
     bcm2835_i2c_read(I2C_BUFFER,12); usleep(100);
     if(calibrationData.gyroTransformMatrix[6] != extractFloat(0)) printf("gyroScale20: sent %f received %f \n", calibrationData.gyroTransformMatrix[6], extractFloat(0));
     if(calibrationData.gyroTransformMatrix[7] != extractFloat(4)) printf("gyroScale21: sent %f received %f \n", calibrationData.gyroTransformMatrix[7], extractFloat(4));
@@ -461,34 +461,29 @@ float extractFloat(uint8_t index){
 }
 
 
-// This function works out how quickly samples are pushed out by the two ICM20689s
+// This function works out how quickly samples are pushed out by the ICM20689s
 // by counting how quickly samples are pushed out to the FIFOs.
-// Inevitably one device will be running faster than the other so only
-// report back the value of the slower device.  The extra samples pushed by the faster
-// device are periodically ditched by the pullData function.
 void fifoTimer(void){
-    float result1 = 0.0;
     float dummy[6];
-    result1 = timer(BCM2835_SPI_CS0);
-    while (readFIFOcount(BCM2835_SPI_CS0) != 0) readFIFO(BCM2835_SPI_CS0, dummy);
-    calibrationData.samplePeriod = result1;
+    calibrationData.samplePeriod = timer();
+    while (readFIFOcount() != 0) readFIFO(dummy);
 }
 
-float timer(uint8_t device){
+float timer(void){
     struct timeval start, stop;
     int cco, loops;
     float dummy[6];
     float result = 0.0;
     loops = 4;
     for(int i = 0; i < loops; ++i){
-        while (readFIFOcount(device) != 0) readFIFO(device, dummy);
-        while (readFIFOcount(device) == 0);
+        while (readFIFOcount() != 0) readFIFO(dummy);
+        while (readFIFOcount() == 0);
         gettimeofday(&start, NULL);
-        readFIFO(device, dummy);
-        while (readFIFOcount(device) < (196 * 12)) usleep(4000);  // sleep for about 2 periods
+        readFIFO(dummy);
+        while (readFIFOcount() < (196 * 12)) usleep(4000);  // sleep for about 2 periods
         while(1){
             usleep(100);
-            cco = readFIFOcount(device);
+            cco = readFIFOcount();
             if(cco == (200 * 12)) {
                 gettimeofday(&stop, NULL);
                 result += (float)((stop.tv_sec-start.tv_sec)+(float)((stop.tv_usec-start.tv_usec)-50)/1000000.0);
@@ -505,28 +500,28 @@ float timer(uint8_t device){
 }
 
 void pullData(void){
-    float fifo_data[6];
+    float fifoData[6];
     char local_outbuf_line[150];
 
-    int count_1 = readFIFOcount(BCM2835_SPI_CS0);
+    int count = readFIFOcount();
 
-    if (count_1 > 4000){ // overflow (or nearly so).  If you see this then stop the calibration and start again
+    if (count > 4000){ // overflow (or nearly so).  If you see this then stop the calibration and start again
         printf("\nEOVF:\n");
         //clear data paths and reset FIFO (keep i2c disabled)
-        writeRegister(BCM2835_SPI_CS0,ICM20689_USER_CTRL,0x15);
+        writeRegister(ICM20689_USER_CTRL,0x15);
         usleep(1000);
  
         //start FIFO - keep i2c disabled
-        writeRegister(BCM2835_SPI_CS0,ICM20689_USER_CTRL,0x50);
+        writeRegister(ICM20689_USER_CTRL,0x50);
     }
     if(count_1 < 48) return;
     
-    while(count_1 >=48){
-        count_1 -= 48;
+    while(count >= 48){
+        count -= 48;
 
-        readFIFO(BCM2835_SPI_CS0, fifo_data);
+        readFIFO(fifoData);
         if(CALIBRATING){
-            sprintf(local_outbuf_line,"%+.8e %+.8e %+.8e %+.8e %+.8e %+.8e %+.8e\n", calibrationTimestamp, fifo_data[3] * DEGREES_TO_RADIANS_MULTIPLIER,fifo_data[4] * DEGREES_TO_RADIANS_MULTIPLIER,fifo_data[5] * DEGREES_TO_RADIANS_MULTIPLIER, fifo_data[0] * g0 ,fifo_data[1] * g0,fifo_data[2] * g0);
+            sprintf(local_outbuf_line,"%+.8e %+.8e %+.8e %+.8e %+.8e %+.8e %+.8e\n", calibrationTimestamp, fifoData[3] * DEGREES_TO_RADIANS_MULTIPLIER,fifoData[4] * DEGREES_TO_RADIANS_MULTIPLIER,fifoData[5] * DEGREES_TO_RADIANS_MULTIPLIER, fifoData[0] * g0 ,fifoData[1] * g0,fifoData[2] * g0);
             if (local_count + strlen(local_outbuf_line) > (sizeof local_outbuf -2)) {
                 fputs(local_outbuf, fdCalibrationData);
                 fflush(fdCalibrationData);
@@ -539,7 +534,6 @@ void pullData(void){
 }
 
 void setup(void){
-	
     if (!bcm2835_init()){
         printf("Unable to inititalise bcm2835\n");
         exit(1);
@@ -561,55 +555,55 @@ void setup(void){
     bcm2835_spi_setDataMode(BCM2835_SPI_MODE3);
     bcm2835_spi_set_speed_hz(8000000);
     bcm2835_spi_setChipSelectPolarity(BCM2835_SPI_CS0, LOW);
+    bcm2835_spi_chipSelect(BCM2835_SPI_CS0);
 
    //reset device
-    writeRegisterBits(BCM2835_SPI_CS0,ICM20689_PWR_MGMT_1,0xFF,0x80);
+    writeRegisterBits(ICM20689_PWR_MGMT_1,0xFF,0x80);
     usleep(100000);
  
    //disable i2c
-    writeRegisterBits(BCM2835_SPI_CS0,ICM20689_USER_CTRL,0xFF,0x10);
+    writeRegisterBits(ICM20689_USER_CTRL,0xFF,0x10);
 
-    if(readRegister(BCM2835_SPI_CS0,ICM20689_WHO_AM_I) != 0x98){
-      printf("Unable to read from device 0. \n");
+    if(readRegister(ICM20689_WHO_AM_I) != 0x98){
+      printf("Unable to read from device. \n");
       exit(1);        
     }
     // bring out of sleep, set clksel (to PLL) and disable temperature sensor
-    writeRegister(BCM2835_SPI_CS0,ICM20689_PWR_MGMT_1,0x09);
+    writeRegister(ICM20689_PWR_MGMT_1,0x09);
     usleep(30000); 
 
     //configure DLPF
-    writeRegister(BCM2835_SPI_CS0,ICM20689_CONFIG,0x01);
+    writeRegister(ICM20689_CONFIG,0x01);
 
     //full scale accelerometer range to 4g
-    writeRegister(BCM2835_SPI_CS0,ICM20689_ACCEL_CONFIG,0x08);
+    writeRegister(ICM20689_ACCEL_CONFIG,0x08);
 
     //full scale gyro range to 500deg/s
-    writeRegister(BCM2835_SPI_CS0,ICM20689_GYRO_CONFIG,0x08);
+    writeRegister(ICM20689_GYRO_CONFIG,0x08);
 
     //set sample rate divider we want 500Hz assuming base clock is 1KHz
-    writeRegister(BCM2835_SPI_CS0,ICM20689_SMPLRT_DIV,0x01);
+    writeRegister(ICM20689_SMPLRT_DIV,0x01);
 
     //set FIFO size to 4K (this setting does not appear in the V1 datasheet!)
-    writeRegister(BCM2835_SPI_CS0,ICM20689_ACCEL_CONFIG_2,0xC0);
+    writeRegister(ICM20689_ACCEL_CONFIG_2,0xC0);
     
     //clear data paths and reset FIFO (keep i2c disabled)
-    writeRegister(BCM2835_SPI_CS0,ICM20689_USER_CTRL,0x15);
+    writeRegister(ICM20689_USER_CTRL,0x15);
     usleep(1000);
 
     //select registers for FIFO
-    writeRegister(BCM2835_SPI_CS0,ICM20689_FIFO_EN,0x78);
+    writeRegister(ICM20689_FIFO_EN,0x78);
     
     //start FIFO - keep i2c disabled
-    writeRegister(BCM2835_SPI_CS0,ICM20689_USER_CTRL,0x50);
+    writeRegister(ICM20689_USER_CTRL,0x50);
 }
 
-uint16_t readFIFOcount(uint8_t device){
-    return ((uint16_t)readRegister(device,ICM20689_FIFO_COUNTH) << 8) + readRegister(device,ICM20689_FIFO_COUNTL); 
+uint16_t readFIFOcount(){
+    return ((uint16_t)readRegister(ICM20689_FIFO_COUNTH) << 8) + readRegister(ICM20689_FIFO_COUNTL); 
 }
 
-void readFIFO(uint8_t device, float* values){
+void readFIFO(float* values){
     float temp0;
-    bcm2835_spi_chipSelect(device);
     SPI_BUFFER[0] = ICM20689_FIFO_R_W | 0x80;
     for(uint8_t i = 1; i<13; ++i){
         SPI_BUFFER[i] = 0;  
@@ -644,24 +638,21 @@ void readFIFO(uint8_t device, float* values){
     }
 }
 
-void writeRegister(uint8_t device, uint8_t reg, uint8_t value){
-    bcm2835_spi_chipSelect(device);
-    SPI_BUFFER[0] = reg; //& 0x7F;  // set high bit for a write
+void writeRegister(uint8_t reg, uint8_t value){
+    SPI_BUFFER[0] = reg;
     SPI_BUFFER[1] = value;
     bcm2835_spi_transfern(SPI_BUFFER,2);
 }
 
-void writeRegisterBits(uint8_t device, uint8_t reg, uint8_t mask, uint8_t value){
+void writeRegisterBits(uint8_t reg, uint8_t mask, uint8_t value){
     uint8_t readValue;
-    readValue = readRegister(device,reg);
-    bcm2835_spi_chipSelect(device);
+    readValue = readRegister(reg);
     SPI_BUFFER[0] = reg; // & 0x7F;  // clear high bit for a write
     SPI_BUFFER[1] = (readValue & mask) | value;
     bcm2835_spi_transfern(SPI_BUFFER,2);
 }
 
-uint8_t readRegister(uint8_t device, uint8_t reg){
-    bcm2835_spi_chipSelect(device);
+uint8_t readRegister(uint8_t reg){
     SPI_BUFFER[0] = reg | 0x80;  //set high bit for a read
     SPI_BUFFER[1] = 0;
     bcm2835_spi_transfern(SPI_BUFFER,2);

@@ -146,10 +146,18 @@ for (var i=0; i < targets.length; i++) {
 document.getElementById("zoomSelect").options.length = 0;
 for (var i=0; i < ROIRanges.length; i++) {
     var option = document.createElement("option");
-    option.text=ROIRanges[i][0].toString() + " to " + ROIRanges[i][1].toString()
+    option.text=ROIRanges[i][0].toString() + " to " + ROIRanges[i][1].toString();
     document.getElementById("zoomSelect").add(option);
 }
 document.getElementById("zoomSelect").selectedIndex = currentROI.toString();
+
+document.getElementById("bellsSelect").options.length = 0;
+for (var i=2; i<13; i++) {
+    var option = document.createElement("option");
+    option.text=i.toString()
+    document.getElementById("bellsSelect").add(option);
+}
+document.getElementById("bellsSelect").selectedIndex = 4;
 
 document.getElementById("speedSelect").options.length = 0;
 for (var i=0; i < playbackRanges.length; i++) {
@@ -343,7 +351,12 @@ function parseResult(dataBack) {
 		}
         return;
     }
-    	
+
+    if (dataBack.slice(0,5) == "EWAI:"){
+        setStatus("Now calibrating. Please keep bell down and at rest ...");
+        return;
+    }
+
     if (dataBack.slice(0,5) == "EYEC:"){
         var entries = dataBack.split(",");
 
@@ -459,7 +472,7 @@ function calculateError(guess){
     var i = 0;
     if(swingStarts.length > 1) i = swingStarts[1];
     for(; i < sample.length; i++){
-        if(sample[i][0] < 320 && sample[i][0] > 280 && sample[i][1] < 0){ // only calculate gravity effect going down at backstroke because of fewer other effects such as vibration from ring and switch of direction caused by pulley/garter hole interaction
+        if(sample[i][0] < 310 && sample[i][0] > 260 && sample[i][1] < 0){ // only calculate gravity effect going down at backstroke because of fewer other effects such as vibration from ring and switch of direction caused by pulley/garter hole interaction
             count += 1;
             error += -guess*Math.sin(sample[i][0]*3.1416/180) + sample[i][2];
         }
@@ -961,18 +974,6 @@ fileOpenButton.onclick = function() {
     updateIcons();
 }
 
-tareButton.onclick = function() {
-    if (nonLive){
-        alert("Not implemented for this demo");
-        return;
-    }
-    if ((currentStatus & DOWNLOADINGFILE) != 0) return;
-    if ((currentStatus & PLAYBACK) != 0) return;
-    if ((currentStatus & HELPDISPLAYED) != 0) return;
-    if ((currentStatus & RECORDINGSESSION) != 0) return;
-    ws.send("TARE:");
-};
-
 calibButton.onclick = function() {
     if (nonLive){
         alert("Not implemented for this demo");
@@ -990,18 +991,6 @@ calibButton.onclick = function() {
         elem.innerText = "Start";
         ws.send("STEC:");
     }
-};
-
-clearTareButton.onclick = function() {
-    if (nonLive){
-        alert("Not implemented for this demo");
-        return;
-    }
-    if ((currentStatus & DOWNLOADINGFILE) != 0) return;
-    if ((currentStatus & PLAYBACK) != 0) return;
-    if ((currentStatus & HELPDISPLAYED) != 0) return;
-    if ((currentStatus & RECORDINGSESSION) != 0) return;
-    ws.send("CLTA:");
 };
 
 targetSelectHand.onchange = function() {

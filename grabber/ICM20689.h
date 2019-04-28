@@ -78,11 +78,11 @@ void DCMcalculate(float gx, float gy, float gz, float ax, float ay, float az, fl
 void pushData(void);
 float savGol(unsigned int startPosition);
 void startRun(void);
-void readFIFO(uint8_t device, float* values);
-void writeRegister(uint8_t device, uint8_t reg, uint8_t value);
-uint8_t readRegister(uint8_t device, uint8_t reg);
-void writeRegisterBits(uint8_t device, uint8_t reg, uint8_t mask, uint8_t value);
-uint16_t readFIFOcount(uint8_t device);
+void readFIFO(float* values);
+void writeRegister(uint8_t reg, uint8_t value);
+uint8_t readRegister(uint8_t reg);
+void writeRegisterBits(uint8_t reg, uint8_t mask, uint8_t value);
+uint16_t readFIFOcount();
 void pullData(void);
 float extractFloat(uint8_t index);
 float pullAndTransform(void);

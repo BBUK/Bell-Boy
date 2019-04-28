@@ -36,7 +36,7 @@
 *       *  checks stdin for commends from the browser (see below) and processes these commands
 *       *  calls pushData to see if any data needs pushing to the browser (pushData calls pullData to pull data from the IMUs
 * setup:
-*       * configures the two IMU devices over SPI
+*       * configures the IMU device over SPI
 *       * pulls calibration data from the Arduino over I2C
 * pushData
 *       * calls pullData
@@ -81,9 +81,8 @@
 * (g)   SAMP: requests the current sample period
 * (h)   SHDN: tells the device to shutdown
 * (i)   TEST: returns the current basic orientation (for testing)
-* (j)   TARE: tares the bell (bell must be down and stable  - not confirmed by code)
-* (k)   EYEC: starts eye candy demo
-* (l)   STEC: stops eye candy demo
+* (j)   EYEC: starts eye candy demo
+* (k)   STEC: stops eye candy demo
 *
 * There are the following responses back to the user's browser:
 * (i)    STPD: tells the browser that the device has sucessfully stopped sampling
@@ -97,17 +96,16 @@
 * (vi)   EIMU: IMU not detected or some IMU related failure
 * (vii)  ESTD: bell not at stand (aborts started session)
 * (viii) EMOV: bell moving when session started (the bell has to be stationary at start)
-* (ix)   ESAM: sample period needs to be measured first (deprecated)
-* (x)    ESTR: internal error related to data / filenames (shouldn't happen)!
-* (xi)   DATA:[string]  chunk of data from a previously stored file.  In same format as LIVE:
-* (xii)  EOVF: (sent by dcmimu) fifo overflow flagged.
-* (xiii) FILE:[filename] in response to FILE: a list of the previous recordings in /data/samples
-* (xiv)  STRT: in response to STRT: indicates a sucessful start.
-* (xv)   LFIN:[number] indicates the end of a file download and the number of samples sent
-* (xvi)  TEST:[number] current orientation
-* (xvii) BATT:[number] battery percentage
-* (xviii)EYEC:[roll],[pitch].[yaw],[qw],[qx],[qy],[qz] returns angles and quaternion for eye candy demo 
-*
+* (ix)   ESTR: internal error related to data / filenames (shouldn't happen)!
+* (x)    DATA:[string]  chunk of data from a previously stored file.  In same format as LIVE:
+* (xi)   EOVF: fifo overflow flagged.
+* (xii)  FILE:[filename] in response to FILE: a list of the previous recordings in /data/samples
+* (xiii) STRT: in response to STRT: indicates a sucessful start.
+* (xiv)  LFIN:[number] indicates the end of a file download and the number of samples sent
+* (xv)   TEST:[number] current orientation
+* (xvi)  BATT:[number] battery percentage
+* (xvii) EYEC:[roll],[pitch].[yaw],[qw],[qx],[qy],[qz] returns angles and quaternion for eye candy demo 
+* (xviii)EWAI: Wait for initial calibration.
 */
 
 
@@ -135,6 +133,15 @@
 // Manchester estimation.  Use gcalculator.xlsx to work out for your latitude.
 #define g0 9.8137   
 
+// these are used by the dcm_imu extended Kalman filter
+#define g0_2 (g0*g0)
+#define q_dcm2 (0.1*0.1)
+#define q_gyro_bias2 (0.0001*0.0001)
+#define r_acc2 (0.5*0.5)
+#define r_a2 (10*10)
+#define q_dcm2_init (1*1)
+#define q_gyro_bias2_init (0.1*0.1)
+
 #define DEGREES_TO_RADIANS_MULTIPLIER 0.017453 
 #define RADIANS_TO_DEGREES_MULTIPLIER 57.29578 
 
@@ -150,7 +157,6 @@ float pitch = 0.0;
 float roll = 0.0;
 
 float direction = 0;
-float tareValue = 0.0;
 
 int ODR = 125;
 int RUNNING = 0;
@@ -181,12 +187,15 @@ struct {
     float gyroBiasY;
     float gyroBiasZ;
     float gyroTransformMatrix[9];
+    float tareValue;
+    unsigned int torn;
 } calibrationData = {.samplePeriod = 0.002, .accBiasX=0, .accBiasY=0, .accBiasZ = 0,
                     .accTransformMatrix[0]=1, .accTransformMatrix[1]=0, .accTransformMatrix[2]=0, .accTransformMatrix[3]=0,
                     .accTransformMatrix[4]=1, .accTransformMatrix[5]=0, .accTransformMatrix[6]=0, .accTransformMatrix[7]=0,
                     .accTransformMatrix[8]=1, .gyroBiasX=0, .gyroBiasY=0, .gyroBiasZ=0, .gyroTransformMatrix[0]=1, 
                     .gyroTransformMatrix[1]=0, .gyroTransformMatrix[2]=0, .gyroTransformMatrix[3]=0, .gyroTransformMatrix[4]=1,
-                    .gyroTransformMatrix[5]=0, .gyroTransformMatrix[6]=0, .gyroTransformMatrix[7]=0, .gyroTransformMatrix[8]=1 };
+                    .gyroTransformMatrix[5]=0, .gyroTransformMatrix[6]=0, .gyroTransformMatrix[7]=0, .gyroTransformMatrix[8]=1,
+                    .tareValue = 0.0 , .torn = 0 };
 
 // only really important when run from command line
 volatile sig_atomic_t sig_exit = 0;
@@ -248,7 +257,8 @@ int main(int argc, char const *argv[]){
     fdTare = fopen("/tmp/BBtare","r");
     if(fdTare != NULL) {
         if (fgets(linein, sizeof(linein), fdTare) != NULL) {
-            tareValue = atof(linein);
+            calibrationData.tareValue = atof(linein);
+            calibrationData.torn = 2;
         }
         fclose(fdTare);
     }
@@ -333,23 +343,12 @@ int main(int argc, char const *argv[]){
 				EYECANDY = 0;
                 continue;
             }
-            if(strcmp("TARE:", command) == 0) {
-                tareValue = roll;
-                fdTare = fopen("/tmp/BBtare","w");
-                if(fdTare == NULL) {
-                    printf("EIMU: Could not open tare file for writing\n");
-                    continue;
-                } else {
-                    fprintf(fdTare,"%+07.4f\n", tareValue);
-                    fclose(fdTare);
-                }
-                continue;
-            }
-            if(strcmp("CLTA:", command) == 0) {
-                tareValue = 0.0;
-                continue;
-            }
             if(strcmp("STRT:", command) == 0) {
+                if(calibrationData.torn < 2){
+                    fprintf(stderr, "Still calibrating...\n");
+                    printf("ESTR:\n");
+                    printf("STPD:\n");                    
+                }
                 if(entries == 2  && strlen(details) < 34){
                     sprintf(FILENAME, "/data/samples/%s", details);
                 } else {
@@ -426,8 +425,8 @@ int main(int argc, char const *argv[]){
 }
 
 void startRun(void){
-    if(abs(roll-tareValue) < 160 || abs(roll-tareValue) > 178){
-        printf("ESTD:%+07.1f\n",roll-tareValue); // bell not at stand
+    if(abs(roll-calibrationData.tareValue) < 160 || abs(roll-calibrationData.tareValue) > 178){
+        printf("ESTD:%+07.1f\n",roll-calibrationData.tareValue); // bell not at stand
         return;
     }
 
@@ -439,7 +438,7 @@ void startRun(void){
 
     for(int i = 0; i< BUFFERSIZE; ++i){ // initialise with dummy data for savgol alignment
         rateBuffer[i] = 0;
-        angleBuffer[i] = direction*(roll-tareValue)-180.0;
+        angleBuffer[i] = direction*(roll-calibrationData.tareValue)-180.0;
     }
     head = SAVGOLHALF;
     tail = 0;
@@ -456,7 +455,7 @@ void pushData(void){
     static char remote_outbuf[4000]; // not necessary to be static as this buffer is cleared before function exits
     int remote_count = 0;
     static float accn = 0;
-    static float nudgeAngle=0;  // delete this and code below if not needed
+//    static float nudgeAngle=0;  // delete this and code below if not needed
     static int nudgeCount =0;
     float taccn;
 
@@ -475,11 +474,11 @@ void pushData(void){
     if(available < PUSHBATCH + SAVGOLLENGTH) return;
 
     for(int counter = available; counter > SAVGOLLENGTH; --counter){
+        // This bit allowed for slight angle drift.  It does this knowing that BDC = 180 degrees.
+        // and that is the point when the bell's angular acceleration is zero.  Drift is so low
+        // that this is more trouble than it's worth.
+/*
         taccn = savGol(tail);
-        // This bit probably not needed.  It counteracted angle drift knowing that BDC = 180 degrees.
-        // and that is the point when the bell's angular acceleration is zero.  Drift is really low
-        // even without this but there might be some really long methods or a peal or something so monitor this
-        // for the time being.
         if(taccn * accn < 0.0 && angleBuffer[tail] > 170.0 && angleBuffer[tail] < 190.0  && nudgeCount == 0) {
             unsigned int lastTail = (tail == 0) ? BUFFERSIZE-1 : tail -1;
             float nudgeFactor = accn /(accn - taccn);
@@ -491,8 +490,8 @@ void pushData(void){
             }
             nudgeCount = 5;
         } 
-        if(nudgeCount != 0) nudgeCount -= 1; // don't do this twice in one half stroke
-        accn = taccn;
+        if(nudgeCount != 0) nudgeCount -= 1; // don't do this twice in one half stroke */
+        accn = savGol(tail);
 
         sprintf(remote_outbuf_line, "LIVE:A:%+07.1f,R:%+07.1f,C:%+07.1f\n", angleBuffer[tail], rateBuffer[tail], accn);
         if (remote_count + strlen(remote_outbuf_line) > (sizeof remote_outbuf -2)) {
@@ -501,7 +500,7 @@ void pushData(void){
         }
         remote_count += sprintf(&remote_outbuf[remote_count],remote_outbuf_line);
  
-        sprintf(local_outbuf_line,"A:%+07.1f,R:%+07.1f,C:%+07.1f,N:%+07.1f\n", angleBuffer[tail], rateBuffer[tail], accn, nudgeAngle);
+        sprintf(local_outbuf_line,"A:%+07.1f,R:%+07.1f,C:%+07.1f\n", angleBuffer[tail], rateBuffer[tail], accn);
         if (local_count + strlen(local_outbuf_line) > (sizeof local_outbuf -2)) {
             fputs(local_outbuf, fd_write_out);
             fflush(fd_write_out);
@@ -520,34 +519,33 @@ void pullData(void){
     float dummy[6];
     static unsigned int angleCorrection = 0;
 
-    int count_1 = readFIFOcount(BCM2835_SPI_CS0);
+    int count = readFIFOcount();
 
-    if (count_1 > 4000){ // overflow (or nearly so)
+    if (count > 4000){ // overflow (or nearly so)
         printf("\nEOVF:\n"); //shouldn't happen
         //clear data paths and reset FIFO (keep i2c disabled)
-        writeRegister(BCM2835_SPI_CS0,ICM20689_USER_CTRL,0x15);
+        writeRegister(ICM20689_USER_CTRL,0x15);
         usleep(1000);
  
         //restart FIFO - keep i2c disabled
-        writeRegister(BCM2835_SPI_CS0,ICM20689_USER_CTRL,0x50);
+        writeRegister(ICM20689_USER_CTRL,0x50);
     }
-    // ditch a sample if one fifo is running faster then the other
 
-    if(count_1 < 48) return;
+    if(count < 48) return;
     
-    if(RUNNING) OUT_COUNT += count_1/48;
-    while(count_1 >=48){
-        count_1 -= 48;
+    if(RUNNING) OUT_COUNT += count/48;
+    while(count >=48){
+        count -= 48;
         angularVelocity = pullAndTransform();
 
         if(!RUNNING) continue;
 
-    // need to correct reported angles to match the system we are 
-    // using 0 degrees = bell at balance at handstroke, 
-    // 360 degrees = bell at balance at backstroke. 180 degrees = BDC. 
+        // need to correct reported angles to match the system we are 
+        // using 0 degrees = bell at balance at handstroke, 
+        // 360 degrees = bell at balance at backstroke. 180 degrees = BDC. 
 
         unsigned int lastHead = (head == 0) ? BUFFERSIZE-1 : head -1;
-        float angle = direction*(roll-tareValue)-180.0;
+        float angle = direction*(roll-calibrationData.tareValue)-180.0;
         angle += angleCorrection;
         if((angleBuffer[lastHead] - angle) > 270){
             if(angleCorrection < 720 ) { // should always be true
@@ -573,8 +571,7 @@ float pullAndTransform(){
     static float peaks[3] = {0};
     static float averages[3] = {0};
     static unsigned int count = 0;
-    float fifoData1[6];
-    float combinedData[6];
+    float fifoData[6];
 
     // Although the browser get samples at 125Hz, the ICM20689s are set up 
     // to push data samples out at 500Hz.  The angles and quaternion 
@@ -585,74 +582,79 @@ float pullAndTransform(){
     // of samples are processed by this function at a time.  The browser will only see data
     // derived from last of these samples.
     for(int i = 0; i < 4; ++i){ 
-        readFIFO(BCM2835_SPI_CS0, fifoData1);
-        // combine data from the two IMUs - straight average
-        combinedData[0] = fifoData1[0]; // Ax
-        combinedData[1] = fifoData1[1]; // Ay
-        combinedData[2] = fifoData1[2]; // Az
-        combinedData[3] = fifoData1[3]; // Gx
-        combinedData[4] = fifoData1[4]; // Gy
-        combinedData[5] = fifoData1[5]; // Gz
+        readFIFO(fifoData);
+        // used for bias compensation calculation
+        for(int i = 0; i < 3; ++i){
+            averages[i] += fifoData[3+i];
+        }
+
+        fifoData[0] -= calibrationData.accBiasX;
+        fifoData[1] -= calibrationData.accBiasY;
+        fifoData[2] -= calibrationData.accBiasZ;
+
+        fifoData[3] -= calibrationData.gyroBiasX;
+        fifoData[4] -= calibrationData.gyroBiasY;
+        fifoData[5] -= calibrationData.gyroBiasZ;
 
         // used for bias compensation calculation
         for(int i = 0; i < 3; ++i){
-            averages[i] += combinedData[3+i];
+            if(abs(fifoData[3+i]) > peaks[i]) peaks[i] = abs(fifoData[3+i]);
         }
 
-        combinedData[0] -= calibrationData.accBiasX;
-        combinedData[1] -= calibrationData.accBiasY;
-        combinedData[2] -= calibrationData.accBiasZ;
+        // transform data using transform matrix
+        fifoData[0] = fifoData[0]*calibrationData.accTransformMatrix[0]
+                            + fifoData[1]*calibrationData.accTransformMatrix[1]
+                            + fifoData[2]*calibrationData.accTransformMatrix[2];
 
-        combinedData[3] -= calibrationData.gyroBiasX;
-        combinedData[4] -= calibrationData.gyroBiasY;
-        combinedData[5] -= calibrationData.gyroBiasZ;
+        fifoData[1] = fifoData[0]*calibrationData.accTransformMatrix[3]
+                            + fifoData[1]*calibrationData.accTransformMatrix[4]
+                            + fifoData[2]*calibrationData.accTransformMatrix[5];
 
-        // used for bias compensation calculation
-        for(int i = 0; i < 3; ++i){
-            if(abs(combinedData[3+i]) > peaks[i]) peaks[i] = abs(combinedData[3+i]);
-        }
+        fifoData[2] = fifoData[0]*calibrationData.accTransformMatrix[6]
+                            + fifoData[1]*calibrationData.accTransformMatrix[7]
+                            + fifoData[2]*calibrationData.accTransformMatrix[8];
 
-        combinedData[0] = combinedData[0]*calibrationData.accTransformMatrix[0]
-                            + combinedData[1]*calibrationData.accTransformMatrix[1]
-                            + combinedData[2]*calibrationData.accTransformMatrix[2];
+        fifoData[3] = fifoData[3]*calibrationData.gyroTransformMatrix[0]
+                            + fifoData[4]*calibrationData.gyroTransformMatrix[1]
+                            + fifoData[5]*calibrationData.gyroTransformMatrix[2];
 
-        combinedData[1] = combinedData[0]*calibrationData.accTransformMatrix[3]
-                            + combinedData[1]*calibrationData.accTransformMatrix[4]
-                            + combinedData[2]*calibrationData.accTransformMatrix[5];
+        fifoData[4] = fifoData[3]*calibrationData.gyroTransformMatrix[3]
+                            + fifoData[4]*calibrationData.gyroTransformMatrix[4]
+                            + fifoData[5]*calibrationData.gyroTransformMatrix[5];
 
-        combinedData[2] = combinedData[0]*calibrationData.accTransformMatrix[6]
-                            + combinedData[1]*calibrationData.accTransformMatrix[7]
-                            + combinedData[2]*calibrationData.accTransformMatrix[8];
-
-        combinedData[3] = combinedData[3]*calibrationData.gyroTransformMatrix[0]
-                            + combinedData[4]*calibrationData.gyroTransformMatrix[1]
-                            + combinedData[5]*calibrationData.gyroTransformMatrix[2];
-
-        combinedData[4] = combinedData[3]*calibrationData.gyroTransformMatrix[3]
-                            + combinedData[4]*calibrationData.gyroTransformMatrix[4]
-                            + combinedData[5]*calibrationData.gyroTransformMatrix[5];
-
-        combinedData[5] = combinedData[3]*calibrationData.gyroTransformMatrix[6]
-                            + combinedData[4]*calibrationData.gyroTransformMatrix[7]
-                            + combinedData[5]*calibrationData.gyroTransformMatrix[8];
+        fifoData[5] = fifoData[3]*calibrationData.gyroTransformMatrix[6]
+                            + fifoData[4]*calibrationData.gyroTransformMatrix[7]
+                            + fifoData[5]*calibrationData.gyroTransformMatrix[8];
 
         count +=1;
+        if((count % 2500) == 0 && calibrationData.torn < 2) printf("EWAI:\n");
         if((count % 5000) == 0){ // check bias once every 10 seconds
             for(int i = 0; i < 3; ++i) averages[i] /= 5000.0;
             if(peaks[0] < 1.4 && peaks[1] < 1.4 && peaks[2] < 1.4){  // no peaks in gyro rate so can take the last 10 seconds as stationary
                 calibrationData.gyroBiasX = averages[0];  // adjust biasses
                 calibrationData.gyroBiasY = averages[1];
                 calibrationData.gyroBiasZ = averages[2];
+                if (calibrationData.torn < 2 && abs(roll) < 20.0) { // if bell is down (or within 20 degrees of vertical) take that as the tare value
+                    calibrationData.torn +=1;
+                    if (calibrationData.torn == 2) {
+                        calibrationData.tareValue = roll;
+                        FILE *fdTare;
+                        fdTare = fopen("/tmp/BBtare","w");
+                        if(fdTare != NULL) {
+                            fprintf(fdTare,"%+07.4f\n", calibrationData.tareValue);
+                            fclose(fdTare);
+                        }
+                    }
+                }
             }
             for(int i = 0; i < 3; ++i) { averages[i] = 0.0; peaks[i] = 0.0; }
         }
-        
         // This function calculates angles and a quaternion from the gyro and accelerometer measurements. The q0, q1,q2,q3, roll, pitch and yaw globals
         // are updated by this function (hence no return value)
-        calculate(combinedData[3],combinedData[4],combinedData[5], combinedData[0],combinedData[1],combinedData[2],calibrationData.samplePeriod);
+        calculate(fifoData[3],fifoData[4],fifoData[5], fifoData[0],fifoData[1],fifoData[2],calibrationData.samplePeriod);
     }
 
-    return(combinedData[3]);  // Just "x" gyro rate needed by the calling function (pullData).
+    return(fifoData[3]);  // Just "x" gyro rate needed by the calling function (pullData).
 }
 
 float savGol(unsigned int startPosition){
@@ -882,8 +884,6 @@ void DCMcalculate(float u0, float u1, float u2, float z0, float z1,float z2, flo
     x[1] = x[1]/xlen;
     x[2] = x[2]/xlen;
 
-    xGyroBias=x[3]*RADIANS_TO_DEGREES_MULTIPLIER; // get this for free!
-
     // compute Euler angles (not exactly a part of the extended Kalman filter)
     // yaw integration through full rotation matrix
     float u_nb1 = u1 - x[4];
@@ -1004,57 +1004,43 @@ void setup(void){
     bcm2835_spi_setDataMode(BCM2835_SPI_MODE3);
     bcm2835_spi_set_speed_hz(8000000);
     bcm2835_spi_setChipSelectPolarity(BCM2835_SPI_CS0, LOW);
-    bcm2835_spi_setChipSelectPolarity(BCM2835_SPI_CS1, LOW);
+    bcm2835_spi_chipSelect(BCM2835_SPI_CS0);
 
-   //reset devices
-    writeRegisterBits(BCM2835_SPI_CS0,ICM20689_PWR_MGMT_1,0xFF,0x80);
-    writeRegisterBits(BCM2835_SPI_CS1,ICM20689_PWR_MGMT_1,0xFF,0x80);
+   //reset device
+    writeRegisterBits(ICM20689_PWR_MGMT_1,0xFF,0x80);
     usleep(100000);
  
    //disable i2c
-    writeRegisterBits(BCM2835_SPI_CS0,ICM20689_USER_CTRL,0xFF,0x10);
-    writeRegisterBits(BCM2835_SPI_CS1,ICM20689_USER_CTRL,0xFF,0x10);
+    writeRegisterBits(ICM20689_USER_CTRL,0xFF,0x10);
 
-    if(readRegister(BCM2835_SPI_CS0,ICM20689_WHO_AM_I) != 0x98){
-      printf("Unable to read from device 0. \n");
-      exit(1);        
-    }
-    if(readRegister(BCM2835_SPI_CS1,ICM20689_WHO_AM_I) != 0x98){
-      printf("Unable to read from device 1. \n");
+    if(readRegister(ICM20689_WHO_AM_I) != 0x98){
+      printf("Unable to read from IMU device. \n");
       exit(1);        
     }
     // bring out of sleep, set clksel (to PLL) and disable temperature sensor
-    writeRegister(BCM2835_SPI_CS0,ICM20689_PWR_MGMT_1,0x09);
-    writeRegister(BCM2835_SPI_CS1,ICM20689_PWR_MGMT_1,0x09);
+    writeRegister(ICM20689_PWR_MGMT_1,0x09);
     usleep(30000); 
 
     //configure DLPF
-    writeRegister(BCM2835_SPI_CS0,ICM20689_CONFIG,0x01);
-    writeRegister(BCM2835_SPI_CS1,ICM20689_CONFIG,0x01);
+    writeRegister(ICM20689_CONFIG,0x01);
 
     //full scale accelerometer range to 4g
-    writeRegister(BCM2835_SPI_CS0,ICM20689_ACCEL_CONFIG,0x08);
-    writeRegister(BCM2835_SPI_CS1,ICM20689_ACCEL_CONFIG,0x08);
+    writeRegister(ICM20689_ACCEL_CONFIG,0x08);
 
     //full scale gyro range to 500deg/s
-    writeRegister(BCM2835_SPI_CS0,ICM20689_GYRO_CONFIG,0x08);
-    writeRegister(BCM2835_SPI_CS1,ICM20689_GYRO_CONFIG,0x08);
+    writeRegister(ICM20689_GYRO_CONFIG,0x08);
 
     //set sample rate divider we want 500Hz assuming base clock is 1KHz
-    writeRegister(BCM2835_SPI_CS0,ICM20689_SMPLRT_DIV,0x01);
-    writeRegister(BCM2835_SPI_CS1,ICM20689_SMPLRT_DIV,0x01);
+    writeRegister(ICM20689_SMPLRT_DIV,0x01);
 
     //set FIFO size to 4K (this setting does not appear in the V1 datasheet!)
-    writeRegister(BCM2835_SPI_CS0,ICM20689_ACCEL_CONFIG_2,0xC0);
-    writeRegister(BCM2835_SPI_CS1,ICM20689_ACCEL_CONFIG_2,0xC0);
+    writeRegister(ICM20689_ACCEL_CONFIG_2,0xC0);
     
     //select registers for FIFO
-    writeRegister(BCM2835_SPI_CS0,ICM20689_FIFO_EN,0x78);
-    writeRegister(BCM2835_SPI_CS1,ICM20689_FIFO_EN,0x78);
+    writeRegister(ICM20689_FIFO_EN,0x78);
 
     //clear data paths and reset FIFO (keep i2c disabled)
-    writeRegister(BCM2835_SPI_CS0,ICM20689_USER_CTRL,0x15);
-    writeRegister(BCM2835_SPI_CS1,ICM20689_USER_CTRL,0x15);
+    writeRegister(ICM20689_USER_CTRL,0x15);
 
 	// load up calibration data from Arduino.  Calibration data uses
     // the method of D. Tedaldi, A. Pretto and E. Menegatti, 
@@ -1062,9 +1048,9 @@ void setup(void){
     // without External Equipments". In: Proceedings of the IEEE International 
     // Conference on Robotics and Automation (ICRA 2014), May 31 - June 7, 2014
     // Hong Kong, China, Page(s): 3042 - 3049
-    // Nee https://bitbucket.org/alberto_pretto/imu_tk
+    // See https://bitbucket.org/alberto_pretto/imu_tk
     // notes on installing imu_tk and its dependencies and code to implement
-    // the
+    // the method are in this repository's utilities directory
 /*
     (Arduino "registers" 10=samplePeriod, 11=accBiasX,
     12=accBiasY, 13=accBiasZ, 14=accScale00, 15=accScale01, 16=accScale02,
@@ -1080,7 +1066,6 @@ void setup(void){
     205=gyroScale0(all in one go 12 bytes, three floats),
     206=gyroScale1 (all in one go 12 bytes, three floats),
     207=gyroScale2 (all in one go 12 bytes, three floats).
-
 */
 
     I2C_BUFFER[0]=10;
@@ -1171,8 +1156,7 @@ void setup(void){
     if(!isnan(result)) calibrationData.gyroTransformMatrix[8] = result;
 
     //start FIFO - keep i2c disabled
-    writeRegister(BCM2835_SPI_CS0,ICM20689_USER_CTRL,0x50);
-//    writeRegister(BCM2835_SPI_CS1,ICM20689_USER_CTRL,0x50);
+    writeRegister(ICM20689_USER_CTRL,0x50);
 }
 
 float extractFloat(uint8_t index){
@@ -1187,13 +1171,12 @@ float extractFloat(uint8_t index){
     return floatConv._float;
 }
 
-uint16_t readFIFOcount(uint8_t device){
-    return ((uint16_t)readRegister(device,ICM20689_FIFO_COUNTH) << 8) + readRegister(device,ICM20689_FIFO_COUNTL); 
+uint16_t readFIFOcount(){
+    return ((uint16_t)readRegister(ICM20689_FIFO_COUNTH) << 8) + readRegister(ICM20689_FIFO_COUNTL); 
 }
 
-void readFIFO(uint8_t device, float* values){
+void readFIFO(float* values){
     float temp0;
-    bcm2835_spi_chipSelect(device);
     SPI_BUFFER[0] = ICM20689_FIFO_R_W | 0x80;
     for(uint8_t i = 1; i<13; ++i){
         SPI_BUFFER[i] = 0;  
@@ -1228,24 +1211,21 @@ void readFIFO(uint8_t device, float* values){
     }
 }
 
-void writeRegister(uint8_t device, uint8_t reg, uint8_t value){
-    bcm2835_spi_chipSelect(device);
-    SPI_BUFFER[0] = reg; //& 0x7F;  // set high bit for a write
+void writeRegister(uint8_t reg, uint8_t value){
+    SPI_BUFFER[0] = reg;
     SPI_BUFFER[1] = value;
     bcm2835_spi_transfern(SPI_BUFFER,2);
 }
 
-void writeRegisterBits(uint8_t device, uint8_t reg, uint8_t mask, uint8_t value){
+void writeRegisterBits(uint8_t reg, uint8_t mask, uint8_t value){
     uint8_t readValue;
-    readValue = readRegister(device,reg);
-    bcm2835_spi_chipSelect(device);
+    readValue = readRegister(reg);
     SPI_BUFFER[0] = reg; // & 0x7F;  // clear high bit for a write
     SPI_BUFFER[1] = (readValue & mask) | value;
     bcm2835_spi_transfern(SPI_BUFFER,2);
 }
 
-uint8_t readRegister(uint8_t device, uint8_t reg){
-    bcm2835_spi_chipSelect(device);
+uint8_t readRegister(uint8_t reg){
     SPI_BUFFER[0] = reg | 0x80;  //set high bit for a read
     SPI_BUFFER[1] = 0;
     bcm2835_spi_transfern(SPI_BUFFER,2);

@@ -36,7 +36,7 @@ make
 #install bcm2835 library
 #compile calibrate.c needs ICM20689.h
 gcc calibrate.c -o calibrate -lbcm2835
-# put BBimu_tk (in alberto_pretto-imu_tk-7780270fb9a2/bin) into same directory as BBcalibrate
+# put BBimu_tk (in alberto_pretto-imu_tk-7780270fb9a2/bin) into same directory as calibrate program
 
 # with bellboy PCB installed on header (no battery attached)
 # run calibrate
@@ -46,8 +46,8 @@ gcc calibrate.c -o calibrate -lbcm2835
 # enter STCA:
 # (will now run imu_tk calibration)
 # enter SAVE:
-# check numbers are sane near to 0.008 for sample period
+# check numbers are sane near to 0.002 for sample period
 # all bias numbers close to 0
-# all scale numbers close to 1
+# all transform numbers close to 1 on diagonal and close to zero otherwise
 # then saved to arduino on bellboy device
 
