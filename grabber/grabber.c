@@ -105,7 +105,9 @@
 * (xv)   TEST:[number] current orientation
 * (xvi)  BATT:[number] battery percentage
 * (xvii) EYEC:[roll],[pitch].[yaw],[qw],[qx],[qy],[qz] returns angles and quaternion for eye candy demo 
-* (xviii)EWAI: Wait for initial calibration.
+* (xviii)EWAI: Wait for initial calibration (zeroing)
+* (xix)  EPUL: Wait for bell to be rung up
+* (xx)   ECAL: Bell being pulled up - recording for gravity calibration
 */
 
 
@@ -189,13 +191,20 @@ struct {
     float gyroTransformMatrix[9];
     float tareValue;
     unsigned int torn;
+    float *gravityData;
+    unsigned int gravityDataCount;
+    float gravityValue;
+    unsigned int gravityCalibrationState;
+    unsigned int stable;
+    unsigned int wayUp; //////////////////////////////////////////////////////////////////
 } calibrationData = {.samplePeriod = 0.002, .accBiasX=0, .accBiasY=0, .accBiasZ = 0,
                     .accTransformMatrix[0]=1, .accTransformMatrix[1]=0, .accTransformMatrix[2]=0, .accTransformMatrix[3]=0,
                     .accTransformMatrix[4]=1, .accTransformMatrix[5]=0, .accTransformMatrix[6]=0, .accTransformMatrix[7]=0,
                     .accTransformMatrix[8]=1, .gyroBiasX=0, .gyroBiasY=0, .gyroBiasZ=0, .gyroTransformMatrix[0]=1, 
                     .gyroTransformMatrix[1]=0, .gyroTransformMatrix[2]=0, .gyroTransformMatrix[3]=0, .gyroTransformMatrix[4]=1,
                     .gyroTransformMatrix[5]=0, .gyroTransformMatrix[6]=0, .gyroTransformMatrix[7]=0, .gyroTransformMatrix[8]=1,
-                    .tareValue = 0.0 , .torn = 0 };
+                    .tareValue = 0.0 , .torn = 0, .gravityValue = 0.0, .gravityCalibrationState = 0, .gravityDataCount = 0, 
+                    .stable = 0, .wayUp = 1};
 
 // only really important when run from command line
 volatile sig_atomic_t sig_exit = 0;
@@ -263,6 +272,18 @@ int main(int argc, char const *argv[]){
         fclose(fdTare);
     }
 
+    FILE *fdGravity;
+    fdGravity = fopen("/tmp/BBgravity","r");
+    if(fdGravity != NULL) {
+        if (fgets(linein, sizeof(linein), fdGravity) != NULL) {
+            calibrationData.gravityValue = atof(linein);
+            calibrationData.gravityCalibrationState = 4;
+        }
+        fclose(fdGravity);
+    } else {
+        calibrationData.gravityData = (float *)malloc(sizeof(float) * 8000 * 3);
+    }
+
     setup();
 
     while(!sig_exit){
@@ -299,7 +320,11 @@ int main(int argc, char const *argv[]){
 			}
 		}
       
-        pushData();
+        if(calibrationData.gravityCalibrationState == 4){
+            pushData();
+        } else {
+            doCalibration();
+        }
 
         if(EYECANDY) printf("EYEC:%+06.1f, %+06.1f, %+06.1f, %+07.4f, %+07.4f, %+07.4f, %+07.4f\n", roll, pitch, yaw, q0, q1, q2, q3);
 
@@ -343,15 +368,28 @@ int main(int argc, char const *argv[]){
 				EYECANDY = 0;
                 continue;
             }
+            if(strcmp("CLTA:", command) == 0) {
+                FILE *fdDump;
+                fdDump = fopen("/data/samples/dump","w");
+                if(fdDump != NULL) {
+                    fprintf(fdDump,"GV:%+09.1f, COUNT:%+08.1f WAYUP:%+07.1f\n", calibrationData.gravityValue, (float)calibrationData.gravityDataCount, (float)calibrationData.wayUp);
+                    for(int i = 0; i<calibrationData.gravityDataCount; ++i){
+                        fprintf(fdDump,"A:%+09.1f,R:%+09.1f,C:%+07.1f\n", calibrationData.gravityData[(i*3)], calibrationData.gravityData[(i*3)+1], calibrationData.gravityData[(i*3)+2]);
+                    }
+                    fclose(fdDump);
+                }
+                continue;
+            }
+
             if(strcmp("STRT:", command) == 0) {
-                if(calibrationData.torn < 2){
+                if((calibrationData.torn < 2) || (calibrationData.gravityCalibrationState != 4)){
                     fprintf(stderr, "Still calibrating...\n");
                     printf("ESTR:\n");
                     printf("STPD:\n");                    
                 }
-                if(entries == 2  && strlen(details) < 34){
+                if(entries == 2  && strlen(details) < 34){  // use chosen filename
                     sprintf(FILENAME, "/data/samples/%s", details);
-                } else {
+                } else {                                    // otherwise make a filename up
                     struct tm *timenow;
                     time_t now = time(NULL);
                     timenow = gmtime(&now);
@@ -424,6 +462,92 @@ int main(int argc, char const *argv[]){
     return 0;
 }
 
+void doCalibration(void){
+    float angularVelocity;
+    
+    int FIFOcount = readFIFOcount();
+    if (FIFOcount > 4000){
+        printf("\nEOVF:\n");
+        writeRegister(ICM20689_USER_CTRL,0x15); // reset FIFO
+        usleep(1000);
+        writeRegister(ICM20689_USER_CTRL,0x50);
+    }
+
+    if(FIFOcount < 48) return;
+   
+    while(FIFOcount >=48){
+        FIFOcount -= 48;
+        angularVelocity = pullAndTransform();
+        switch (calibrationData.gravityCalibrationState) {
+            case 0:
+                if(calibrationData.stable == 1 && calibrationData.torn == 2){ // bell is stable and zeroed
+                    calibrationData.gravityCalibrationState = 1;
+                    for(int i = 0; i< BUFFERSIZE; ++i){ // initialise with dummy data for savgol alignment
+                        rateBuffer[i] = 0;
+                        angleBuffer[i] = 180.0+(roll-calibrationData.tareValue);
+                    }
+                    head = SAVGOLHALF;
+                    tail = 0;
+                    available = SAVGOLHALF;
+                }
+                break;
+            case 1:
+                if(roll < -140.0 || roll > +140.0){ // bell now high enough to start accumulating gravity calibration data
+                    calibrationData.gravityCalibrationState = 2;
+                }
+                rateBuffer[head] = angularVelocity;
+                angleBuffer[head] = 180.0+(roll-calibrationData.tareValue);
+                head = (head + 1) % BUFFERSIZE;
+                tail = (tail + 1) % BUFFERSIZE; // just ditch old data for the time being
+                break;
+            case 2:
+                if(calibrationData.stable == 1 && abs(roll-calibrationData.tareValue) > 160 && abs(roll-calibrationData.tareValue) < 178) {
+                    calibrationData.gravityCalibrationState = 3; // bell now rung up proceed to calibration calculations
+                }
+                rateBuffer[head] = angularVelocity;
+                angleBuffer[head] = 180.0+(roll-calibrationData.tareValue);
+                head = (head + 1) % BUFFERSIZE;
+                available += 1;
+                if(available < PUSHBATCH + SAVGOLLENGTH) break;
+                for(int pushcounter = available; pushcounter > SAVGOLLENGTH; --pushcounter){
+                    if((angleBuffer[tail] < 300 && angleBuffer[tail] > 270) ||
+                        (angleBuffer[tail] < 90 && angleBuffer[tail] > 60)){
+                        if(calibrationData.gravityDataCount < 8000){
+                            calibrationData.gravityData[calibrationData.gravityDataCount*3] = angleBuffer[tail];
+                            calibrationData.gravityData[(calibrationData.gravityDataCount*3)+1] = rateBuffer[tail];
+                            calibrationData.gravityData[(calibrationData.gravityDataCount*3)+2] = savGol(tail);
+                            calibrationData.gravityDataCount += 1;
+                        }
+                    }
+                    tail = (tail + 1) % BUFFERSIZE;
+                    available -= 1;
+                }
+                break;
+            case 3:
+                if(roll < 0) {  // work out which way the bell rose and adjust accordingly
+                    for (unsigned int j = 0; j < calibrationData.gravityDataCount; ++j){ // now we know which way the bell was rung up, adjust data.
+                        calibrationData.gravityData[j*3] = 360.0-calibrationData.gravityData[j*3]; // swap angle
+                        calibrationData.gravityData[(j*3)+1] *= -1; // swap rate
+                        calibrationData.gravityData[(j*3)+2] *= -1; // flip accn
+                        calibrationData.wayUp = -1;
+                    }
+                }
+                calibrationData.gravityValue = 0;
+                for(int guessLog = 14; guessLog >= 0; --guessLog){
+                    if(calculateError(calibrationData.gravityValue + pow(2,guessLog)) < 0) calibrationData.gravityValue += pow(2,guessLog);
+                }
+                calibrationData.gravityCalibrationState = 4;
+//////////////////////////////////                free(calibrationData.gravityData);
+                FILE *fdGravity;
+                fdGravity = fopen("/tmp/BBgravity","w");
+                if(fdGravity != NULL) {
+                    fprintf(fdGravity,"%+08.1f\n", calibrationData.gravityValue);
+                    fclose(fdGravity);
+                }
+        }
+    }
+}
+
 void startRun(void){
     if(abs(roll-calibrationData.tareValue) < 160 || abs(roll-calibrationData.tareValue) > 178){
         printf("ESTD:%+07.1f\n",roll-calibrationData.tareValue); // bell not at stand
@@ -445,7 +569,7 @@ void startRun(void){
     available = SAVGOLHALF;
 
     RUNNING = 1;
-	EYECANDY=0;
+	EYECANDY = 0;
     return;
 }
 
@@ -455,7 +579,7 @@ void pushData(void){
     static char remote_outbuf[4000]; // not necessary to be static as this buffer is cleared before function exits
     int remote_count = 0;
     static float accn = 0;
-//    static float nudgeAngle=0;  // delete this and code below if not needed
+    static float nudgeAngle=0;  // delete this and code below if not needed
     static int nudgeCount =0;
     float taccn;
 
@@ -476,31 +600,32 @@ void pushData(void){
     for(int counter = available; counter > SAVGOLLENGTH; --counter){
         // This bit allowed for slight angle drift.  It does this knowing that BDC = 180 degrees.
         // and that is the point when the bell's angular acceleration is zero.  Drift is so low
-        // that this is more trouble than it's worth.
-/*
+        // that this is more trouble than it's worth.  Left in and reported in 
+
         taccn = savGol(tail);
         if(taccn * accn < 0.0 && angleBuffer[tail] > 170.0 && angleBuffer[tail] < 190.0  && nudgeCount == 0) {
             unsigned int lastTail = (tail == 0) ? BUFFERSIZE-1 : tail -1;
             float nudgeFactor = accn /(accn - taccn);
             float angleDiffFrom180 = (angleBuffer[lastTail] + nudgeFactor*(angleBuffer[tail]-angleBuffer[lastTail])) - 180.0;
-            if(nudgeAngle != 0.0){
-                nudgeAngle = 0.5*nudgeAngle + 0.5*angleDiffFrom180; // apply a bit of smoothing 
-            } else {
-                nudgeAngle = angleDiffFrom180;
-            }
+            nudgeAngle = angleDiffFrom180;
             nudgeCount = 5;
         } 
         if(nudgeCount != 0) nudgeCount -= 1; // don't do this twice in one half stroke */
-        accn = savGol(tail);
+        accn = taccn - calibrationData.gravityValue*sin(angleBuffer[tail]*DEGREES_TO_RADIANS_MULTIPLIER);
 
-        sprintf(remote_outbuf_line, "LIVE:A:%+07.1f,R:%+07.1f,C:%+07.1f\n", angleBuffer[tail], rateBuffer[tail], accn);
+        unsigned int strike = dingDong(tail); // check to see if there has been a bell strike 1=ding(HS), 2=dong(BS) 0=nowt
+
+        sprintf(remote_outbuf_line, "LIVE:A:%+07.1f,R:%+07.1f,C:%+07.1f,D:%d\n", angleBuffer[tail], rateBuffer[tail], accn, strike);
         if (remote_count + strlen(remote_outbuf_line) > (sizeof remote_outbuf -2)) {
             printf("%s",remote_outbuf);
             remote_count = 0;
         }
-        remote_count += sprintf(&remote_outbuf[remote_count],remote_outbuf_line);
- 
-        sprintf(local_outbuf_line,"A:%+07.1f,R:%+07.1f,C:%+07.1f\n", angleBuffer[tail], rateBuffer[tail], accn);
+        remote_count += sprintf(&remote_outbuf[remote_count],remote_outbuf_line);     
+        if(OUT_COUNT == 0){
+            sprintf(local_outbuf_line,"A:%+07.1f,R:%+07.1f,C:%+07.1f,D:%d,N:%+07.1f,H:%+07.1f\n", angleBuffer[tail], rateBuffer[tail], accn, strike, nudgeAngle, calibrationData.gravityValue);
+        } else {
+            sprintf(local_outbuf_line,"A:%+07.1f,R:%+07.1f,C:%+07.1f,D:%d,N:%+07.1f\n", angleBuffer[tail], rateBuffer[tail], accn, strike, nudgeAngle);
+        }
         if (local_count + strlen(local_outbuf_line) > (sizeof local_outbuf -2)) {
             fputs(local_outbuf, fd_write_out);
             fflush(fd_write_out);
@@ -509,6 +634,8 @@ void pushData(void){
         local_count += sprintf(&local_outbuf[local_count],local_outbuf_line);
         tail = (tail + 1) % BUFFERSIZE;
         available -= 1;
+        OUT_COUNT += 1;
+
 //        fprintf(fd_write_out,"A:%+07.1f,R:%+07.1f,C:%+07.1f,P:%+07.1f,Y:%+07.1f,AX:%+06.3f,AY:%+06.3f,AZ:%+06.3f,GX:%+07.1f,GY:%+07.1f,GZ:%+07.1f,X:%+06.3f,Y:%+06.3f,Z:%+06.3f\n", roll, (gyro_data[0] + last_x_gyro)/2.0, accTang, pitch, yaw, accel_data[0], accel_data[1], accel_data[2], gyro_data[0], gyro_data[1], gyro_data[2],a[0],a[1],a[2]);
     }
     if(remote_count != 0) {printf("%s",remote_outbuf); remote_count = 0;}
@@ -532,8 +659,7 @@ void pullData(void){
     }
 
     if(count < 48) return;
-    
-    if(RUNNING) OUT_COUNT += count/48;
+
     while(count >=48){
         count -= 48;
         angularVelocity = pullAndTransform();
@@ -558,12 +684,15 @@ void pullData(void){
             angle -= 360;
             }
         }
-        
+
         rateBuffer[head] = angularVelocity * direction;
         angleBuffer[head] = angle;
         head = (head + 1) % BUFFERSIZE;
         available += 1;
-        if(available >= BUFFERSIZE) {printf("EOVF:\n"); available -= 1;} // circular buffer full - should never happen
+        if(available >= BUFFERSIZE) {
+            printf("EOVF:\n");  // circular buffer full - should never happen
+            available -= 1;
+        }
     }
 }
 
@@ -577,8 +706,7 @@ float pullAndTransform(){
     // to push data samples out at 500Hz.  The angles and quaternion 
     // are computed at the higher rate as some filters operate better at
     // higher sample rates (although I have not tested whether the Mahony filter
-    // (see calculate function) is actually any better, the higher sample rates also ensure
-    // that the two IMUs are better aligned so still worth keeping that way).  Four sets
+    // (see calculate function) is actually any better).  Four sets
     // of samples are processed by this function at a time.  The browser will only see data
     // derived from last of these samples.
     for(int i = 0; i < 4; ++i){ 
@@ -596,44 +724,49 @@ float pullAndTransform(){
         fifoData[4] -= calibrationData.gyroBiasY;
         fifoData[5] -= calibrationData.gyroBiasZ;
 
-        // used for bias compensation calculation
+        // used for bias compensation calculation, checks to see if bell is at rest
+        // by recording a peak gyro movement over the measurement period (5000 samples = 10 secs)
         for(int i = 0; i < 3; ++i){
             if(abs(fifoData[3+i]) > peaks[i]) peaks[i] = abs(fifoData[3+i]);
         }
 
         // transform data using transform matrix
         fifoData[0] = fifoData[0]*calibrationData.accTransformMatrix[0]
-                            + fifoData[1]*calibrationData.accTransformMatrix[1]
-                            + fifoData[2]*calibrationData.accTransformMatrix[2];
+                    + fifoData[1]*calibrationData.accTransformMatrix[1]
+                    + fifoData[2]*calibrationData.accTransformMatrix[2];
 
         fifoData[1] = fifoData[0]*calibrationData.accTransformMatrix[3]
-                            + fifoData[1]*calibrationData.accTransformMatrix[4]
-                            + fifoData[2]*calibrationData.accTransformMatrix[5];
+                    + fifoData[1]*calibrationData.accTransformMatrix[4]
+                    + fifoData[2]*calibrationData.accTransformMatrix[5];
 
         fifoData[2] = fifoData[0]*calibrationData.accTransformMatrix[6]
-                            + fifoData[1]*calibrationData.accTransformMatrix[7]
-                            + fifoData[2]*calibrationData.accTransformMatrix[8];
+                    + fifoData[1]*calibrationData.accTransformMatrix[7]
+                    + fifoData[2]*calibrationData.accTransformMatrix[8];
 
         fifoData[3] = fifoData[3]*calibrationData.gyroTransformMatrix[0]
-                            + fifoData[4]*calibrationData.gyroTransformMatrix[1]
-                            + fifoData[5]*calibrationData.gyroTransformMatrix[2];
+                    + fifoData[4]*calibrationData.gyroTransformMatrix[1]
+                    + fifoData[5]*calibrationData.gyroTransformMatrix[2];
 
         fifoData[4] = fifoData[3]*calibrationData.gyroTransformMatrix[3]
-                            + fifoData[4]*calibrationData.gyroTransformMatrix[4]
-                            + fifoData[5]*calibrationData.gyroTransformMatrix[5];
+                    + fifoData[4]*calibrationData.gyroTransformMatrix[4]
+                    + fifoData[5]*calibrationData.gyroTransformMatrix[5];
 
         fifoData[5] = fifoData[3]*calibrationData.gyroTransformMatrix[6]
-                            + fifoData[4]*calibrationData.gyroTransformMatrix[7]
-                            + fifoData[5]*calibrationData.gyroTransformMatrix[8];
+                    + fifoData[4]*calibrationData.gyroTransformMatrix[7]
+                    + fifoData[5]*calibrationData.gyroTransformMatrix[8];
 
         count +=1;
-        if((count % 2500) == 0 && calibrationData.torn < 2) printf("EWAI:\n");
+        if((count % 2500) == 0 && calibrationData.torn < 2) printf("EWAI:\n");  // sends signal to browser to indicate that the sensor is still calibrating zero
+        if((count % 2500) == 0 && calibrationData.gravityCalibrationState == 1) printf("EPUL:\n");  // sends signal to browser to indicate that bell needs to be pulled up
+        if((count % 2500) == 0 && calibrationData.gravityCalibrationState == 2) printf("ECAL:\n");  // sends signal to browser to indicate that the bell is high enough to start gravity calibration
+
         if((count % 5000) == 0){ // check bias once every 10 seconds
             for(int i = 0; i < 3; ++i) averages[i] /= 5000.0;
             if(peaks[0] < 1.4 && peaks[1] < 1.4 && peaks[2] < 1.4){  // no peaks in gyro rate so can take the last 10 seconds as stationary
                 calibrationData.gyroBiasX = averages[0];  // adjust biasses
                 calibrationData.gyroBiasY = averages[1];
                 calibrationData.gyroBiasZ = averages[2];
+                calibrationData.stable = 1; // flag that bell is stable
                 if (calibrationData.torn < 2 && abs(roll) < 20.0) { // if bell is down (or within 20 degrees of vertical) take that as the tare value
                     calibrationData.torn +=1;
                     if (calibrationData.torn == 2) {
@@ -646,279 +779,91 @@ float pullAndTransform(){
                         }
                     }
                 }
+            } else {
+                calibrationData.stable = 0;
             }
             for(int i = 0; i < 3; ++i) { averages[i] = 0.0; peaks[i] = 0.0; }
         }
+        
         // This function calculates angles and a quaternion from the gyro and accelerometer measurements. The q0, q1,q2,q3, roll, pitch and yaw globals
         // are updated by this function (hence no return value)
         calculate(fifoData[3],fifoData[4],fifoData[5], fifoData[0],fifoData[1],fifoData[2],calibrationData.samplePeriod);
     }
-
     return(fifoData[3]);  // Just "x" gyro rate needed by the calling function (pullData).
 }
 
-float savGol(unsigned int startPosition){
-    unsigned int windowStartPosition = (startPosition < SAVGOLHALF) ? (startPosition + BUFFERSIZE) - SAVGOLHALF: startPosition - SAVGOLHALF;
+float savGol(unsigned int currentPosition){
+    unsigned int windowStartPosition = (currentPosition < SAVGOLHALF) ? (currentPosition + BUFFERSIZE) - SAVGOLHALF: currentPosition - SAVGOLHALF;
     float savGolResult=0;
     for(int i = 0; i < SAVGOLLENGTH; ++i){
-        savGolResult += ODR*(savGolCoefficients[i] * rateBuffer[(windowStartPosition +i) % BUFFERSIZE]);
+        savGolResult += savGolCoefficients[i] * rateBuffer[(windowStartPosition +i) % BUFFERSIZE];
     }
+    savGolResult *= ODR;
     return(savGolResult);
 }
 
-/* 
-This function does some magic with an Extended Kalman Filter to produce roll
-pitch and yaw measurements from accelerometer/gyro data.  Of the filters tested,
-it produced the best results.
-Github is here: https://github.com/hhyyti/dcm-imu 
-MIT licence but the readme includes this line:
-    If you use the algorithm in any scientific context, please cite: Heikki Hyyti and Arto Visala, 
-    "A DCM Based Attitude Estimation Algorithm for Low-Cost MEMS IMUs," International Journal 
-    of Navigation and Observation, vol. 2015, Article ID 503814, 18 pages, 2015. http://dx.doi.org/10.1155/2015/503814
-function inputs are 
-Xgyro (u0 - in degrees/sec), Ygyro (u1 - in degrees/sec), Zgyro (u2 - in degrees/sec), 
-Xaccel (z0 - in g), Yaccel (z1 - in g), Zaccel (z2 - in g),
-interval (h - in seconds from the last time the function was called)
-*/
+// This function calculates the difference (error) between a sine wave of amplitude "guess" and the
+// acceleration profile of the bell.
+float calculateError(float guess){
+    float count = 0.0;
+    float error = 0.0;
+    for(unsigned int i = 0; i < calibrationData.gravityDataCount; ++i){
+        if(calibrationData.gravityData[(i*3)] < 300 && calibrationData.gravityData[(i*3)] > 260 && calibrationData.gravityData[(i*3)+1] < 0){ // only calculate gravity effect going down at backstroke because of fewer other effects such as vibration from ring and switch of direction caused by pulley/garter hole interaction
+            count += 1;
+            error += -guess*sin(calibrationData.gravityData[(i*3)]*DEGREES_TO_RADIANS_MULTIPLIER) + calibrationData.gravityData[(i*3)+2];
+        }
+        if(count > 4000) break; // should be enough
+    }
+    if(count != 0){
+        error /= count;
+    } else {
+        error = 0;
+    }
+    return error;
+}
 
-void DCMcalculate(float u0, float u1, float u2, float z0, float z1,float z2, float h){
+unsigned int dingDong(unsigned int currentPosition){
+    static int lastStrike = 2; // 2 = last chime was at backstroke, 1= last chime at handstroke 
+    static float rollingValues[5] = {8,8,8,8,8};
+    static unsigned int rollingPosition = 0;
+    static float baseSD = 0.0; 
+ 
+// savgol_coeffs(5,2,deriv=2,use="dot")
+    static float dingDongCoefficients[] = { 0.28571429, -0.14285714, -0.28571429, -0.14285714,  0.28571429 };
 
-    static double x[] = {0.0, 0.0, 1.0, 0.0, 0.0, 0.0};
-
-    static double P[6][6] = {    {q_dcm2_init, 0.0, 0.0, 0.0, 0.0, 0.0},
-                                {0.0, q_dcm2_init, 0.0, 0.0, 0.0, 0.0},
-                                {0.0, 0.0, q_dcm2_init, 0.0, 0.0, 0.0},
-                                {0.0, 0.0, 0.0, q_gyro_bias2_init, 0.0, 0.0},
-                                {0.0, 0.0, 0.0, 0.0, q_gyro_bias2_init, 0.0},
-                                {0.0, 0.0, 0.0, 0.0, 0.0, q_gyro_bias2_init}};
-    float a[3];
-
-// convert units
-    u0 = u0 * DEGREES_TO_RADIANS_MULTIPLIER;
-    u1 = u1 * DEGREES_TO_RADIANS_MULTIPLIER;
-    u2 = u2 * DEGREES_TO_RADIANS_MULTIPLIER;
-
-    z0 = z0 * g0;
-    z1 = z1 * g0;
-    z2 = z2 * g0;
-
-    float x_last[] = {x[0], x[1], x[2]};
-    float x_0 = x[0]-h*(u1*x[2]-u2*x[1]+x[1]*x[5]-x[2]*x[4]);
-    float x_1 = x[1]+h*(u0*x[2]-u2*x[0]+x[0]*x[5]-x[2]*x[3]);
-    float x_2 = x[2]-h*(u0*x[1]-u1*x[0]+x[0]*x[4]-x[1]*x[3]);
-    float x_3 = x[3];
-    float x_4 = x[4];
-    float x_5 = x[5];
-
-    float hh = h*h;
-    float P_00 = P[0][0]-h*(P[0][5]*x[1]-P[0][4]*x[2]-P[4][0]*x[2]+P[5][0]*x[1]+P[0][2]*(u1-x[4])+P[2][0]*(u1-x[4])-P[0][1]*(u2-x[5])-P[1][0]*(u2-x[5]))+hh*(q_dcm2-x[1]*(P[4][5]*x[2]-P[5][5]*x[1]-P[2][5]*(u1-x[4])+P[1][5]*(u2-x[5]))+x[2]*(P[4][4]*x[2]-P[5][4]*x[1]-P[2][4]*(u1-x[4])+P[1][4]*(u2-x[5]))-(u1-x[4])*(P[4][2]*x[2]-P[5][2]*x[1]-P[2][2]*(u1-x[4])+P[1][2]*(u2-x[5]))+(u2-x[5])*(P[4][1]*x[2]-P[5][1]*x[1]-P[2][1]*(u1-x[4])+P[1][1]*(u2-x[5])));
-    float P_01 = P[0][1]+h*(P[0][5]*x[0]-P[0][3]*x[2]+P[4][1]*x[2]-P[5][1]*x[1]+P[0][2]*(u0-x[3])-P[0][0]*(u2-x[5])-P[2][1]*(u1-x[4])+P[1][1]*(u2-x[5]))+hh*(x[0]*(P[4][5]*x[2]-P[5][5]*x[1]-P[2][5]*(u1-x[4])+P[1][5]*(u2-x[5]))-x[2]*(P[4][3]*x[2]-P[5][3]*x[1]-P[2][3]*(u1-x[4])+P[1][3]*(u2-x[5]))+(u0-x[3])*(P[4][2]*x[2]-P[5][2]*x[1]-P[2][2]*(u1-x[4])+P[1][2]*(u2-x[5]))-(u2-x[5])*(P[4][0]*x[2]-P[5][0]*x[1]-P[2][0]*(u1-x[4])+P[1][0]*(u2-x[5])));
-    float P_02 = P[0][2]-h*(P[0][4]*x[0]-P[0][3]*x[1]-P[4][2]*x[2]+P[5][2]*x[1]+P[0][1]*(u0-x[3])-P[0][0]*(u1-x[4])+P[2][2]*(u1-x[4])-P[1][2]*(u2-x[5]))-hh*(x[0]*(P[4][4]*x[2]-P[5][4]*x[1]-P[2][4]*(u1-x[4])+P[1][4]*(u2-x[5]))-x[1]*(P[4][3]*x[2]-P[5][3]*x[1]-P[2][3]*(u1-x[4])+P[1][3]*(u2-x[5]))+(u0-x[3])*(P[4][1]*x[2]-P[5][1]*x[1]-P[2][1]*(u1-x[4])+P[1][1]*(u2-x[5]))-(u1-x[4])*(P[4][0]*x[2]-P[5][0]*x[1]-P[2][0]*(u1-x[4])+P[1][0]*(u2-x[5])));
-    float P_03 = P[0][3]+h*(P[4][3]*x[2]-P[5][3]*x[1]-P[2][3]*(u1-x[4])+P[1][3]*(u2-x[5]));
-    float P_04 = P[0][4]+h*(P[4][4]*x[2]-P[5][4]*x[1]-P[2][4]*(u1-x[4])+P[1][4]*(u2-x[5]));
-    float P_05 = P[0][5]+h*(P[4][5]*x[2]-P[5][5]*x[1]-P[2][5]*(u1-x[4])+P[1][5]*(u2-x[5]));
-    float P_10 = P[1][0]-h*(P[1][5]*x[1]-P[1][4]*x[2]+P[3][0]*x[2]-P[5][0]*x[0]-P[2][0]*(u0-x[3])+P[1][2]*(u1-x[4])+P[0][0]*(u2-x[5])-P[1][1]*(u2-x[5]))+hh*(x[1]*(P[3][5]*x[2]-P[5][5]*x[0]-P[2][5]*(u0-x[3])+P[0][5]*(u2-x[5]))-x[2]*(P[3][4]*x[2]-P[5][4]*x[0]-P[2][4]*(u0-x[3])+P[0][4]*(u2-x[5]))+(u1-x[4])*(P[3][2]*x[2]-P[5][2]*x[0]-P[2][2]*(u0-x[3])+P[0][2]*(u2-x[5]))-(u2-x[5])*(P[3][1]*x[2]-P[5][1]*x[0]-P[2][1]*(u0-x[3])+P[0][1]*(u2-x[5])));
-    float P_11 = P[1][1]+h*(P[1][5]*x[0]-P[1][3]*x[2]-P[3][1]*x[2]+P[5][1]*x[0]+P[1][2]*(u0-x[3])+P[2][1]*(u0-x[3])-P[0][1]*(u2-x[5])-P[1][0]*(u2-x[5]))+hh*(q_dcm2-x[0]*(P[3][5]*x[2]-P[5][5]*x[0]-P[2][5]*(u0-x[3])+P[0][5]*(u2-x[5]))+x[2]*(P[3][3]*x[2]-P[5][3]*x[0]-P[2][3]*(u0-x[3])+P[0][3]*(u2-x[5]))-(u0-x[3])*(P[3][2]*x[2]-P[5][2]*x[0]-P[2][2]*(u0-x[3])+P[0][2]*(u2-x[5]))+(u2-x[5])*(P[3][0]*x[2]-P[5][0]*x[0]-P[2][0]*(u0-x[3])+P[0][0]*(u2-x[5])));
-    float P_12 = P[1][2]-h*(P[1][4]*x[0]-P[1][3]*x[1]+P[3][2]*x[2]-P[5][2]*x[0]+P[1][1]*(u0-x[3])-P[2][2]*(u0-x[3])-P[1][0]*(u1-x[4])+P[0][2]*(u2-x[5]))+hh*(x[0]*(P[3][4]*x[2]-P[5][4]*x[0]-P[2][4]*(u0-x[3])+P[0][4]*(u2-x[5]))-x[1]*(P[3][3]*x[2]-P[5][3]*x[0]-P[2][3]*(u0-x[3])+P[0][3]*(u2-x[5]))+(u0-x[3])*(P[3][1]*x[2]-P[5][1]*x[0]-P[2][1]*(u0-x[3])+P[0][1]*(u2-x[5]))-(u1-x[4])*(P[3][0]*x[2]-P[5][0]*x[0]-P[2][0]*(u0-x[3])+P[0][0]*(u2-x[5])));
-    float P_13 = P[1][3]-h*(P[3][3]*x[2]-P[5][3]*x[0]-P[2][3]*(u0-x[3])+P[0][3]*(u2-x[5]));
-    float P_14 = P[1][4]-h*(P[3][4]*x[2]-P[5][4]*x[0]-P[2][4]*(u0-x[3])+P[0][4]*(u2-x[5]));
-    float P_15 = P[1][5]-h*(P[3][5]*x[2]-P[5][5]*x[0]-P[2][5]*(u0-x[3])+P[0][5]*(u2-x[5]));
-    float P_20 = P[2][0]-h*(P[2][5]*x[1]-P[3][0]*x[1]+P[4][0]*x[0]-P[2][4]*x[2]+P[1][0]*(u0-x[3])-P[0][0]*(u1-x[4])+P[2][2]*(u1-x[4])-P[2][1]*(u2-x[5]))-hh*(x[1]*(P[3][5]*x[1]-P[4][5]*x[0]-P[1][5]*(u0-x[3])+P[0][5]*(u1-x[4]))-x[2]*(P[3][4]*x[1]-P[4][4]*x[0]-P[1][4]*(u0-x[3])+P[0][4]*(u1-x[4]))+(u1-x[4])*(P[3][2]*x[1]-P[4][2]*x[0]-P[1][2]*(u0-x[3])+P[0][2]*(u1-x[4]))-(u2-x[5])*(P[3][1]*x[1]-P[4][1]*x[0]-P[1][1]*(u0-x[3])+P[0][1]*(u1-x[4])));
-    float P_21 = P[2][1]+h*(P[2][5]*x[0]+P[3][1]*x[1]-P[4][1]*x[0]-P[2][3]*x[2]-P[1][1]*(u0-x[3])+P[0][1]*(u1-x[4])+P[2][2]*(u0-x[3])-P[2][0]*(u2-x[5]))+hh*(x[0]*(P[3][5]*x[1]-P[4][5]*x[0]-P[1][5]*(u0-x[3])+P[0][5]*(u1-x[4]))-x[2]*(P[3][3]*x[1]-P[4][3]*x[0]-P[1][3]*(u0-x[3])+P[0][3]*(u1-x[4]))+(u0-x[3])*(P[3][2]*x[1]-P[4][2]*x[0]-P[1][2]*(u0-x[3])+P[0][2]*(u1-x[4]))-(u2-x[5])*(P[3][0]*x[1]-P[4][0]*x[0]-P[1][0]*(u0-x[3])+P[0][0]*(u1-x[4])));
-    float P_22 = P[2][2]-h*(P[2][4]*x[0]-P[2][3]*x[1]-P[3][2]*x[1]+P[4][2]*x[0]+P[1][2]*(u0-x[3])+P[2][1]*(u0-x[3])-P[0][2]*(u1-x[4])-P[2][0]*(u1-x[4]))+hh*(q_dcm2-x[0]*(P[3][4]*x[1]-P[4][4]*x[0]-P[1][4]*(u0-x[3])+P[0][4]*(u1-x[4]))+x[1]*(P[3][3]*x[1]-P[4][3]*x[0]-P[1][3]*(u0-x[3])+P[0][3]*(u1-x[4]))-(u0-x[3])*(P[3][1]*x[1]-P[4][1]*x[0]-P[1][1]*(u0-x[3])+P[0][1]*(u1-x[4]))+(u1-x[4])*(P[3][0]*x[1]-P[4][0]*x[0]-P[1][0]*(u0-x[3])+P[0][0]*(u1-x[4])));
-    float P_23 = P[2][3]+h*(P[3][3]*x[1]-P[4][3]*x[0]-P[1][3]*(u0-x[3])+P[0][3]*(u1-x[4]));
-    float P_24 = P[2][4]+h*(P[3][4]*x[1]-P[4][4]*x[0]-P[1][4]*(u0-x[3])+P[0][4]*(u1-x[4]));
-    float P_25 = P[2][5]+h*(P[3][5]*x[1]-P[4][5]*x[0]-P[1][5]*(u0-x[3])+P[0][5]*(u1-x[4]));
-    float P_30 = P[3][0]-h*(P[3][5]*x[1]-P[3][4]*x[2]+P[3][2]*(u1-x[4])-P[3][1]*(u2-x[5]));
-    float P_31 = P[3][1]+h*(P[3][5]*x[0]-P[3][3]*x[2]+P[3][2]*(u0-x[3])-P[3][0]*(u2-x[5]));
-    float P_32 = P[3][2]-h*(P[3][4]*x[0]-P[3][3]*x[1]+P[3][1]*(u0-x[3])-P[3][0]*(u1-x[4]));
-    float P_33 = P[3][3]+hh*q_gyro_bias2;
-    float P_34 = P[3][4];
-    float P_35 = P[3][5];
-    float P_40 = P[4][0]-h*(P[4][5]*x[1]-P[4][4]*x[2]+P[4][2]*(u1-x[4])-P[4][1]*(u2-x[5]));
-    float P_41 = P[4][1]+h*(P[4][5]*x[0]-P[4][3]*x[2]+P[4][2]*(u0-x[3])-P[4][0]*(u2-x[5]));
-    float P_42 = P[4][2]-h*(P[4][4]*x[0]-P[4][3]*x[1]+P[4][1]*(u0-x[3])-P[4][0]*(u1-x[4]));
-    float P_43 = P[4][3];
-    float P_44 = P[4][4]+hh*q_gyro_bias2;
-    float P_45 = P[4][5];
-    float P_50 = P[5][0]-h*(P[5][5]*x[1]-P[5][4]*x[2]+P[5][2]*(u1-x[4])-P[5][1]*(u2-x[5]));
-    float P_51 = P[5][1]+h*(P[5][5]*x[0]-P[5][3]*x[2]+P[5][2]*(u0-x[3])-P[5][0]*(u2-x[5]));
-    float P_52 = P[5][2]-h*(P[5][4]*x[0]-P[5][3]*x[1]+P[5][1]*(u0-x[3])-P[5][0]*(u1-x[4]));
-    float P_53 = P[5][3];
-    float P_54 = P[5][4];
-    float P_55 = P[5][5]+hh*q_gyro_bias2;
-
-    // kalman innovation
-    float y0 = z0-g0*x_0;
-    float y1 = z1-g0*x_1;
-    float y2 = z2-g0*x_2;
-
-    float a_len = sqrt(y0*y0+y1*y1+y2*y2);
-
-    float S00 = r_acc2+a_len*r_a2+P_00*g0_2;
-    float S01 = P_01*g0_2;
-    float S02 = P_02*g0_2;
-    float S10 = P_10*g0_2;
-    float S11 = r_acc2+a_len*r_a2+P_11*g0_2;
-    float S12 = P_12*g0_2;
-    float S20 = P_20*g0_2;
-    float S21 = P_21*g0_2;
-    float S22 = r_acc2+a_len*r_a2+P_22*g0_2;
-
-    // Kalman gain
-    float invPart = 1.0 / (S00*S11*S22-S00*S12*S21-S01*S10*S22+S01*S12*S20+S02*S10*S21-S02*S11*S20);
-    float K00 = (g0*(P_02*S10*S21-P_02*S11*S20-P_01*S10*S22+P_01*S12*S20+P_00*S11*S22-P_00*S12*S21))*invPart;
-    float K01 = -(g0*(P_02*S00*S21-P_02*S01*S20-P_01*S00*S22+P_01*S02*S20+P_00*S01*S22-P_00*S02*S21))*invPart;
-    float K02 = (g0*(P_02*S00*S11-P_02*S01*S10-P_01*S00*S12+P_01*S02*S10+P_00*S01*S12-P_00*S02*S11))*invPart;
-    float K10 = (g0*(P_12*S10*S21-P_12*S11*S20-P_11*S10*S22+P_11*S12*S20+P_10*S11*S22-P_10*S12*S21))*invPart;
-    float K11 = -(g0*(P_12*S00*S21-P_12*S01*S20-P_11*S00*S22+P_11*S02*S20+P_10*S01*S22-P_10*S02*S21))*invPart;
-    float K12 = (g0*(P_12*S00*S11-P_12*S01*S10-P_11*S00*S12+P_11*S02*S10+P_10*S01*S12-P_10*S02*S11))*invPart;
-    float K20 = (g0*(P_22*S10*S21-P_22*S11*S20-P_21*S10*S22+P_21*S12*S20+P_20*S11*S22-P_20*S12*S21))*invPart;
-    float K21 = -(g0*(P_22*S00*S21-P_22*S01*S20-P_21*S00*S22+P_21*S02*S20+P_20*S01*S22-P_20*S02*S21))*invPart;
-    float K22 = (g0*(P_22*S00*S11-P_22*S01*S10-P_21*S00*S12+P_21*S02*S10+P_20*S01*S12-P_20*S02*S11))*invPart;
-    float K30 = (g0*(P_32*S10*S21-P_32*S11*S20-P_31*S10*S22+P_31*S12*S20+P_30*S11*S22-P_30*S12*S21))*invPart;
-    float K31 = -(g0*(P_32*S00*S21-P_32*S01*S20-P_31*S00*S22+P_31*S02*S20+P_30*S01*S22-P_30*S02*S21))*invPart;
-    float K32 = (g0*(P_32*S00*S11-P_32*S01*S10-P_31*S00*S12+P_31*S02*S10+P_30*S01*S12-P_30*S02*S11))*invPart;
-    float K40 = (g0*(P_42*S10*S21-P_42*S11*S20-P_41*S10*S22+P_41*S12*S20+P_40*S11*S22-P_40*S12*S21))*invPart;
-    float K41 = -(g0*(P_42*S00*S21-P_42*S01*S20-P_41*S00*S22+P_41*S02*S20+P_40*S01*S22-P_40*S02*S21))*invPart;
-    float K42 = (g0*(P_42*S00*S11-P_42*S01*S10-P_41*S00*S12+P_41*S02*S10+P_40*S01*S12-P_40*S02*S11))*invPart;
-    float K50 = (g0*(P_52*S10*S21-P_52*S11*S20-P_51*S10*S22+P_51*S12*S20+P_50*S11*S22-P_50*S12*S21))*invPart;
-    float K51 = -(g0*(P_52*S00*S21-P_52*S01*S20-P_51*S00*S22+P_51*S02*S20+P_50*S01*S22-P_50*S02*S21))*invPart;
-    float K52 = (g0*(P_52*S00*S11-P_52*S01*S10-P_51*S00*S12+P_51*S02*S10+P_50*S01*S12-P_50*S02*S11))*invPart;
-
-    // update a posteriori
-    x[0] = x_0+K00*y0+K01*y1+K02*y2;
-    x[1] = x_1+K10*y0+K11*y1+K12*y2;
-    x[2] = x_2+K20*y0+K21*y1+K22*y2;
-    x[3] = x_3+K30*y0+K31*y1+K32*y2;
-    x[4] = x_4+K40*y0+K41*y1+K42*y2;
-    x[5] = x_5+K50*y0+K51*y1+K52*y2;
-
-    //  update a posteriori covariance
-    float r_adab = (r_acc2+a_len*r_a2);
-    float P__00 = P_00-g0*(K00*P_00*2.0+K01*P_01+K01*P_10+K02*P_02+K02*P_20)+(K00*K00)*r_adab+(K01*K01)*r_adab+(K02*K02)*r_adab+g0_2*(K00*(K00*P_00+K01*P_10+K02*P_20)+K01*(K00*P_01+K01*P_11+K02*P_21)+K02*(K00*P_02+K01*P_12+K02*P_22));
-    float P__01 = P_01-g0*(K00*P_01+K01*P_11+K02*P_21+K10*P_00+K11*P_01+K12*P_02)+g0_2*(K10*(K00*P_00+K01*P_10+K02*P_20)+K11*(K00*P_01+K01*P_11+K02*P_21)+K12*(K00*P_02+K01*P_12+K02*P_22))+K00*K10*r_adab+K01*K11*r_adab+K02*K12*r_adab;
-    float P__02 = P_02-g0*(K00*P_02+K01*P_12+K02*P_22+K20*P_00+K21*P_01+K22*P_02)+g0_2*(K20*(K00*P_00+K01*P_10+K02*P_20)+K21*(K00*P_01+K01*P_11+K02*P_21)+K22*(K00*P_02+K01*P_12+K02*P_22))+K00*K20*r_adab+K01*K21*r_adab+K02*K22*r_adab;
-    float P__03 = P_03-g0*(K00*P_03+K01*P_13+K02*P_23+K30*P_00+K31*P_01+K32*P_02)+g0_2*(K30*(K00*P_00+K01*P_10+K02*P_20)+K31*(K00*P_01+K01*P_11+K02*P_21)+K32*(K00*P_02+K01*P_12+K02*P_22))+K00*K30*r_adab+K01*K31*r_adab+K02*K32*r_adab;
-    float P__04 = P_04-g0*(K00*P_04+K01*P_14+K02*P_24+K40*P_00+K41*P_01+K42*P_02)+g0_2*(K40*(K00*P_00+K01*P_10+K02*P_20)+K41*(K00*P_01+K01*P_11+K02*P_21)+K42*(K00*P_02+K01*P_12+K02*P_22))+K00*K40*r_adab+K01*K41*r_adab+K02*K42*r_adab;
-    float P__05 = P_05-g0*(K00*P_05+K01*P_15+K02*P_25+K50*P_00+K51*P_01+K52*P_02)+g0_2*(K50*(K00*P_00+K01*P_10+K02*P_20)+K51*(K00*P_01+K01*P_11+K02*P_21)+K52*(K00*P_02+K01*P_12+K02*P_22))+K00*K50*r_adab+K01*K51*r_adab+K02*K52*r_adab;
-    float P__10 = P_10-g0*(K00*P_10+K01*P_11+K02*P_12+K10*P_00+K11*P_10+K12*P_20)+g0_2*(K00*(K10*P_00+K11*P_10+K12*P_20)+K01*(K10*P_01+K11*P_11+K12*P_21)+K02*(K10*P_02+K11*P_12+K12*P_22))+K00*K10*r_adab+K01*K11*r_adab+K02*K12*r_adab;
-    float P__11 = P_11-g0*(K10*P_01+K10*P_10+K11*P_11*2.0+K12*P_12+K12*P_21)+(K10*K10)*r_adab+(K11*K11)*r_adab+(K12*K12)*r_adab+g0_2*(K10*(K10*P_00+K11*P_10+K12*P_20)+K11*(K10*P_01+K11*P_11+K12*P_21)+K12*(K10*P_02+K11*P_12+K12*P_22));
-    float P__12 = P_12-g0*(K10*P_02+K11*P_12+K12*P_22+K20*P_10+K21*P_11+K22*P_12)+g0_2*(K20*(K10*P_00+K11*P_10+K12*P_20)+K21*(K10*P_01+K11*P_11+K12*P_21)+K22*(K10*P_02+K11*P_12+K12*P_22))+K10*K20*r_adab+K11*K21*r_adab+K12*K22*r_adab;
-    float P__13 = P_13-g0*(K10*P_03+K11*P_13+K12*P_23+K30*P_10+K31*P_11+K32*P_12)+g0_2*(K30*(K10*P_00+K11*P_10+K12*P_20)+K31*(K10*P_01+K11*P_11+K12*P_21)+K32*(K10*P_02+K11*P_12+K12*P_22))+K10*K30*r_adab+K11*K31*r_adab+K12*K32*r_adab;
-    float P__14 = P_14-g0*(K10*P_04+K11*P_14+K12*P_24+K40*P_10+K41*P_11+K42*P_12)+g0_2*(K40*(K10*P_00+K11*P_10+K12*P_20)+K41*(K10*P_01+K11*P_11+K12*P_21)+K42*(K10*P_02+K11*P_12+K12*P_22))+K10*K40*r_adab+K11*K41*r_adab+K12*K42*r_adab;
-    float P__15 = P_15-g0*(K10*P_05+K11*P_15+K12*P_25+K50*P_10+K51*P_11+K52*P_12)+g0_2*(K50*(K10*P_00+K11*P_10+K12*P_20)+K51*(K10*P_01+K11*P_11+K12*P_21)+K52*(K10*P_02+K11*P_12+K12*P_22))+K10*K50*r_adab+K11*K51*r_adab+K12*K52*r_adab;
-    float P__20 = P_20-g0*(K00*P_20+K01*P_21+K02*P_22+K20*P_00+K21*P_10+K22*P_20)+g0_2*(K00*(K20*P_00+K21*P_10+K22*P_20)+K01*(K20*P_01+K21*P_11+K22*P_21)+K02*(K20*P_02+K21*P_12+K22*P_22))+K00*K20*r_adab+K01*K21*r_adab+K02*K22*r_adab;
-    float P__21 = P_21-g0*(K10*P_20+K11*P_21+K12*P_22+K20*P_01+K21*P_11+K22*P_21)+g0_2*(K10*(K20*P_00+K21*P_10+K22*P_20)+K11*(K20*P_01+K21*P_11+K22*P_21)+K12*(K20*P_02+K21*P_12+K22*P_22))+K10*K20*r_adab+K11*K21*r_adab+K12*K22*r_adab;
-    float P__22 = P_22-g0*(K20*P_02+K20*P_20+K21*P_12+K21*P_21+K22*P_22*2.0)+(K20*K20)*r_adab+(K21*K21)*r_adab+(K22*K22)*r_adab+g0_2*(K20*(K20*P_00+K21*P_10+K22*P_20)+K21*(K20*P_01+K21*P_11+K22*P_21)+K22*(K20*P_02+K21*P_12+K22*P_22));
-    float P__23 = P_23-g0*(K20*P_03+K21*P_13+K22*P_23+K30*P_20+K31*P_21+K32*P_22)+g0_2*(K30*(K20*P_00+K21*P_10+K22*P_20)+K31*(K20*P_01+K21*P_11+K22*P_21)+K32*(K20*P_02+K21*P_12+K22*P_22))+K20*K30*r_adab+K21*K31*r_adab+K22*K32*r_adab;
-    float P__24 = P_24-g0*(K20*P_04+K21*P_14+K22*P_24+K40*P_20+K41*P_21+K42*P_22)+g0_2*(K40*(K20*P_00+K21*P_10+K22*P_20)+K41*(K20*P_01+K21*P_11+K22*P_21)+K42*(K20*P_02+K21*P_12+K22*P_22))+K20*K40*r_adab+K21*K41*r_adab+K22*K42*r_adab;
-    float P__25 = P_25-g0*(K20*P_05+K21*P_15+K22*P_25+K50*P_20+K51*P_21+K52*P_22)+g0_2*(K50*(K20*P_00+K21*P_10+K22*P_20)+K51*(K20*P_01+K21*P_11+K22*P_21)+K52*(K20*P_02+K21*P_12+K22*P_22))+K20*K50*r_adab+K21*K51*r_adab+K22*K52*r_adab;
-    float P__30 = P_30-g0*(K00*P_30+K01*P_31+K02*P_32+K30*P_00+K31*P_10+K32*P_20)+g0_2*(K00*(K30*P_00+K31*P_10+K32*P_20)+K01*(K30*P_01+K31*P_11+K32*P_21)+K02*(K30*P_02+K31*P_12+K32*P_22))+K00*K30*r_adab+K01*K31*r_adab+K02*K32*r_adab;
-    float P__31 = P_31-g0*(K10*P_30+K11*P_31+K12*P_32+K30*P_01+K31*P_11+K32*P_21)+g0_2*(K10*(K30*P_00+K31*P_10+K32*P_20)+K11*(K30*P_01+K31*P_11+K32*P_21)+K12*(K30*P_02+K31*P_12+K32*P_22))+K10*K30*r_adab+K11*K31*r_adab+K12*K32*r_adab;
-    float P__32 = P_32-g0*(K20*P_30+K21*P_31+K22*P_32+K30*P_02+K31*P_12+K32*P_22)+g0_2*(K20*(K30*P_00+K31*P_10+K32*P_20)+K21*(K30*P_01+K31*P_11+K32*P_21)+K22*(K30*P_02+K31*P_12+K32*P_22))+K20*K30*r_adab+K21*K31*r_adab+K22*K32*r_adab;
-    float P__33 = P_33-g0*(K30*P_03+K31*P_13+K30*P_30+K31*P_31+K32*P_23+K32*P_32)+(K30*K30)*r_adab+(K31*K31)*r_adab+(K32*K32)*r_adab+g0_2*(K30*(K30*P_00+K31*P_10+K32*P_20)+K31*(K30*P_01+K31*P_11+K32*P_21)+K32*(K30*P_02+K31*P_12+K32*P_22));
-    float P__34 = P_34-g0*(K30*P_04+K31*P_14+K32*P_24+K40*P_30+K41*P_31+K42*P_32)+g0_2*(K40*(K30*P_00+K31*P_10+K32*P_20)+K41*(K30*P_01+K31*P_11+K32*P_21)+K42*(K30*P_02+K31*P_12+K32*P_22))+K30*K40*r_adab+K31*K41*r_adab+K32*K42*r_adab;
-    float P__35 = P_35-g0*(K30*P_05+K31*P_15+K32*P_25+K50*P_30+K51*P_31+K52*P_32)+g0_2*(K50*(K30*P_00+K31*P_10+K32*P_20)+K51*(K30*P_01+K31*P_11+K32*P_21)+K52*(K30*P_02+K31*P_12+K32*P_22))+K30*K50*r_adab+K31*K51*r_adab+K32*K52*r_adab;
-    float P__40 = P_40-g0*(K00*P_40+K01*P_41+K02*P_42+K40*P_00+K41*P_10+K42*P_20)+g0_2*(K00*(K40*P_00+K41*P_10+K42*P_20)+K01*(K40*P_01+K41*P_11+K42*P_21)+K02*(K40*P_02+K41*P_12+K42*P_22))+K00*K40*r_adab+K01*K41*r_adab+K02*K42*r_adab;
-    float P__41 = P_41-g0*(K10*P_40+K11*P_41+K12*P_42+K40*P_01+K41*P_11+K42*P_21)+g0_2*(K10*(K40*P_00+K41*P_10+K42*P_20)+K11*(K40*P_01+K41*P_11+K42*P_21)+K12*(K40*P_02+K41*P_12+K42*P_22))+K10*K40*r_adab+K11*K41*r_adab+K12*K42*r_adab;
-    float P__42 = P_42-g0*(K20*P_40+K21*P_41+K22*P_42+K40*P_02+K41*P_12+K42*P_22)+g0_2*(K20*(K40*P_00+K41*P_10+K42*P_20)+K21*(K40*P_01+K41*P_11+K42*P_21)+K22*(K40*P_02+K41*P_12+K42*P_22))+K20*K40*r_adab+K21*K41*r_adab+K22*K42*r_adab;
-    float P__43 = P_43-g0*(K30*P_40+K31*P_41+K32*P_42+K40*P_03+K41*P_13+K42*P_23)+g0_2*(K30*(K40*P_00+K41*P_10+K42*P_20)+K31*(K40*P_01+K41*P_11+K42*P_21)+K32*(K40*P_02+K41*P_12+K42*P_22))+K30*K40*r_adab+K31*K41*r_adab+K32*K42*r_adab;
-    float P__44 = P_44-g0*(K40*P_04+K41*P_14+K40*P_40+K42*P_24+K41*P_41+K42*P_42)+(K40*K40)*r_adab+(K41*K41)*r_adab+(K42*K42)*r_adab+g0_2*(K40*(K40*P_00+K41*P_10+K42*P_20)+K41*(K40*P_01+K41*P_11+K42*P_21)+K42*(K40*P_02+K41*P_12+K42*P_22));
-    float P__45 = P_45-g0*(K40*P_05+K41*P_15+K42*P_25+K50*P_40+K51*P_41+K52*P_42)+g0_2*(K50*(K40*P_00+K41*P_10+K42*P_20)+K51*(K40*P_01+K41*P_11+K42*P_21)+K52*(K40*P_02+K41*P_12+K42*P_22))+K40*K50*r_adab+K41*K51*r_adab+K42*K52*r_adab;
-    float P__50 = P_50-g0*(K00*P_50+K01*P_51+K02*P_52+K50*P_00+K51*P_10+K52*P_20)+g0_2*(K00*(K50*P_00+K51*P_10+K52*P_20)+K01*(K50*P_01+K51*P_11+K52*P_21)+K02*(K50*P_02+K51*P_12+K52*P_22))+K00*K50*r_adab+K01*K51*r_adab+K02*K52*r_adab;
-    float P__51 = P_51-g0*(K10*P_50+K11*P_51+K12*P_52+K50*P_01+K51*P_11+K52*P_21)+g0_2*(K10*(K50*P_00+K51*P_10+K52*P_20)+K11*(K50*P_01+K51*P_11+K52*P_21)+K12*(K50*P_02+K51*P_12+K52*P_22))+K10*K50*r_adab+K11*K51*r_adab+K12*K52*r_adab;
-    float P__52 = P_52-g0*(K20*P_50+K21*P_51+K22*P_52+K50*P_02+K51*P_12+K52*P_22)+g0_2*(K20*(K50*P_00+K51*P_10+K52*P_20)+K21*(K50*P_01+K51*P_11+K52*P_21)+K22*(K50*P_02+K51*P_12+K52*P_22))+K20*K50*r_adab+K21*K51*r_adab+K22*K52*r_adab;
-    float P__53 = P_53-g0*(K30*P_50+K31*P_51+K32*P_52+K50*P_03+K51*P_13+K52*P_23)+g0_2*(K30*(K50*P_00+K51*P_10+K52*P_20)+K31*(K50*P_01+K51*P_11+K52*P_21)+K32*(K50*P_02+K51*P_12+K52*P_22))+K30*K50*r_adab+K31*K51*r_adab+K32*K52*r_adab;
-    float P__54 = P_54-g0*(K40*P_50+K41*P_51+K42*P_52+K50*P_04+K51*P_14+K52*P_24)+g0_2*(K40*(K50*P_00+K51*P_10+K52*P_20)+K41*(K50*P_01+K51*P_11+K52*P_21)+K42*(K50*P_02+K51*P_12+K52*P_22))+K40*K50*r_adab+K41*K51*r_adab+K42*K52*r_adab;
-    float P__55 = P_55-g0*(K50*P_05+K51*P_15+K52*P_25+K50*P_50+K51*P_51+K52*P_52)+(K50*K50)*r_adab+(K51*K51)*r_adab+(K52*K52)*r_adab+g0_2*(K50*(K50*P_00+K51*P_10+K52*P_20)+K51*(K50*P_01+K51*P_11+K52*P_21)+K52*(K50*P_02+K51*P_12+K52*P_22));
-
-    float xlen = sqrt(x[0]*x[0]+x[1]*x[1]+x[2]*x[2]);
-    float invlen3 = 1.0/(xlen*xlen*xlen);
-    float invlen32 = (invlen3*invlen3);
-
-    float x1_x2 = (x[1]*x[1]+x[2]*x[2]);
-    float x0_x2 = (x[0]*x[0]+x[2]*x[2]);
-    float x0_x1 = (x[0]*x[0]+x[1]*x[1]);
-
-    // normalized a posteriori covariance
-    P[0][0] = invlen32*(-x1_x2*(-P__00*x1_x2+P__10*x[0]*x[1]+P__20*x[0]*x[2])+x[0]*x[1]*(-P__01*x1_x2+P__11*x[0]*x[1]+P__21*x[0]*x[2])+x[0]*x[2]*(-P__02*x1_x2+P__12*x[0]*x[1]+P__22*x[0]*x[2]));
-    P[0][1] = invlen32*(-x0_x2*(-P__01*x1_x2+P__11*x[0]*x[1]+P__21*x[0]*x[2])+x[0]*x[1]*(-P__00*x1_x2+P__10*x[0]*x[1]+P__20*x[0]*x[2])+x[1]*x[2]*(-P__02*x1_x2+P__12*x[0]*x[1]+P__22*x[0]*x[2]));
-    P[0][2] = invlen32*(-x0_x1*(-P__02*x1_x2+P__12*x[0]*x[1]+P__22*x[0]*x[2])+x[0]*x[2]*(-P__00*x1_x2+P__10*x[0]*x[1]+P__20*x[0]*x[2])+x[1]*x[2]*(-P__01*x1_x2+P__11*x[0]*x[1]+P__21*x[0]*x[2]));
-    P[0][3] = -invlen3*(-P__03*x1_x2+P__13*x[0]*x[1]+P__23*x[0]*x[2]);
-    P[0][4] = -invlen3*(-P__04*x1_x2+P__14*x[0]*x[1]+P__24*x[0]*x[2]);
-    P[0][5] = -invlen3*(-P__05*x1_x2+P__15*x[0]*x[1]+P__25*x[0]*x[2]);
-    P[1][0] = invlen32*(-x1_x2*(-P__10*x0_x2+P__00*x[0]*x[1]+P__20*x[1]*x[2])+x[0]*x[1]*(-P__11*x0_x2+P__01*x[0]*x[1]+P__21*x[1]*x[2])+x[0]*x[2]*(-P__12*x0_x2+P__02*x[0]*x[1]+P__22*x[1]*x[2]));
-    P[1][1] = invlen32*(-x0_x2*(-P__11*x0_x2+P__01*x[0]*x[1]+P__21*x[1]*x[2])+x[0]*x[1]*(-P__10*x0_x2+P__00*x[0]*x[1]+P__20*x[1]*x[2])+x[1]*x[2]*(-P__12*x0_x2+P__02*x[0]*x[1]+P__22*x[1]*x[2]));
-    P[1][2] = invlen32*(-x0_x1*(-P__12*x0_x2+P__02*x[0]*x[1]+P__22*x[1]*x[2])+x[0]*x[2]*(-P__10*x0_x2+P__00*x[0]*x[1]+P__20*x[1]*x[2])+x[1]*x[2]*(-P__11*x0_x2+P__01*x[0]*x[1]+P__21*x[1]*x[2]));
-    P[1][3] = -invlen3*(-P__13*x0_x2+P__03*x[0]*x[1]+P__23*x[1]*x[2]);
-    P[1][4] = -invlen3*(-P__14*x0_x2+P__04*x[0]*x[1]+P__24*x[1]*x[2]);
-    P[1][5] = -invlen3*(-P__15*x0_x2+P__05*x[0]*x[1]+P__25*x[1]*x[2]);
-    P[2][0] = invlen32*(-x1_x2*(-P__20*x0_x1+P__00*x[0]*x[2]+P__10*x[1]*x[2])+x[0]*x[1]*(-P__21*x0_x1+P__01*x[0]*x[2]+P__11*x[1]*x[2])+x[0]*x[2]*(-P__22*x0_x1+P__02*x[0]*x[2]+P__12*x[1]*x[2]));
-    P[2][1] = invlen32*(-x0_x2*(-P__21*x0_x1+P__01*x[0]*x[2]+P__11*x[1]*x[2])+x[0]*x[1]*(-P__20*x0_x1+P__00*x[0]*x[2]+P__10*x[1]*x[2])+x[1]*x[2]*(-P__22*x0_x1+P__02*x[0]*x[2]+P__12*x[1]*x[2]));
-    P[2][2] = invlen32*(-x0_x1*(-P__22*x0_x1+P__02*x[0]*x[2]+P__12*x[1]*x[2])+x[0]*x[2]*(-P__20*x0_x1+P__00*x[0]*x[2]+P__10*x[1]*x[2])+x[1]*x[2]*(-P__21*x0_x1+P__01*x[0]*x[2]+P__11*x[1]*x[2]));
-    P[2][3] = -invlen3*(-P__23*x0_x1+P__03*x[0]*x[2]+P__13*x[1]*x[2]);
-    P[2][4] = -invlen3*(-P__24*x0_x1+P__04*x[0]*x[2]+P__14*x[1]*x[2]);
-    P[2][5] = -invlen3*(-P__25*x0_x1+P__05*x[0]*x[2]+P__15*x[1]*x[2]);
-    P[3][0] = -invlen3*(-P__30*x1_x2+P__31*x[0]*x[1]+P__32*x[0]*x[2]);
-    P[3][1] = -invlen3*(-P__31*x0_x2+P__30*x[0]*x[1]+P__32*x[1]*x[2]);
-    P[3][2] = -invlen3*(-P__32*x0_x1+P__30*x[0]*x[2]+P__31*x[1]*x[2]);
-    P[3][3] = P__33;
-    P[3][4] = P__34;
-    P[3][5] = P__35;
-    P[4][0] = -invlen3*(-P__40*x1_x2+P__41*x[0]*x[1]+P__42*x[0]*x[2]);
-    P[4][1] = -invlen3*(-P__41*x0_x2+P__40*x[0]*x[1]+P__42*x[1]*x[2]);
-    P[4][2] = -invlen3*(-P__42*x0_x1+P__40*x[0]*x[2]+P__41*x[1]*x[2]);
-    P[4][3] = P__43;
-    P[4][4] = P__44;
-    P[4][5] = P__45;
-    P[5][0] = -invlen3*(-P__50*x1_x2+P__51*x[0]*x[1]+P__52*x[0]*x[2]);
-    P[5][1] = -invlen3*(-P__51*x0_x2+P__50*x[0]*x[1]+P__52*x[1]*x[2]);
-    P[5][2] = -invlen3*(-P__52*x0_x1+P__50*x[0]*x[2]+P__51*x[1]*x[2]);
-    P[5][3] = P__53;
-    P[5][4] = P__54;
-    P[5][5] = P__55;
-
-    // normalized a posteriori state
-    x[0] = x[0]/xlen;
-    x[1] = x[1]/xlen;
-    x[2] = x[2]/xlen;
-
-    // compute Euler angles (not exactly a part of the extended Kalman filter)
-    // yaw integration through full rotation matrix
-    float u_nb1 = u1 - x[4];
-    float u_nb2 = u2 - x[5];
-
-    float cy = cos(yaw * DEGREES_TO_RADIANS_MULTIPLIER); //old angles (last state before integration)
-    float sy = sin(yaw * DEGREES_TO_RADIANS_MULTIPLIER);
-    float d = sqrt(x_last[1]*x_last[1] + x_last[2]*x_last[2]);
-    float d_inv = 1.0 / d;
-
-    // compute needed parts of rotation matrix R (state and angle based version, equivalent with the commented version above)
-    float R11 = cy * d;
-    float R12 = -(x_last[2]*sy + x_last[0]*x_last[1]*cy) * d_inv;
-    float R13 = (x_last[1]*sy - x_last[0]*x_last[2]*cy) * d_inv;
-    float R21 = sy * d;
-    float R22 = (x_last[2]*cy - x_last[0]*x_last[1]*sy) * d_inv;
-    float R23 = -(x_last[1]*cy + x_last[0]*x_last[2]*sy) * d_inv;
-
-//    float R31 = -sin(pitch * DEGREES_TO_RADIANS_MULTIPLIER);
-//    float R32 = sin(roll * DEGREES_TO_RADIANS_MULTIPLIER) * cos(pitch * DEGREES_TO_RADIANS_MULTIPLIER);
-//    float R33 = cos(roll * DEGREES_TO_RADIANS_MULTIPLIER) * cos(pitch * DEGREES_TO_RADIANS_MULTIPLIER);
+    unsigned int windowStartPosition = (currentPosition < 2) ? (currentPosition + BUFFERSIZE) - 2 : currentPosition - 2;
     
-    // update needed parts of R for yaw computation
-    float R11_new = R11 + h*(u_nb2*R12 - u_nb1*R13);
-    float R21_new = R21 + h*(u_nb2*R22 - u_nb1*R23);
-    yaw = atan2(R21_new,R11_new) * RADIANS_TO_DEGREES_MULTIPLIER;
-
-    // compute new pitch and roll angles from a posteriori states
-    pitch = asin(-x[0]) * RADIANS_TO_DEGREES_MULTIPLIER;
-    roll = atan2(x[1],x[2]) * RADIANS_TO_DEGREES_MULTIPLIER;
-
-    // save the estimated non-gravitational acceleration
-    a[0] = z0-x[0]*g0;
-    a[1] = z1-x[1]*g0;
-    a[2] = z2-x[2]*g0;
+    float savGolResult = 0;
+    
+    for(int i = 0; i < 5; ++i){
+        savGolResult += dingDongCoefficients[i] * rateBuffer[(windowStartPosition +i) % BUFFERSIZE];
+    }
+    savGolResult *= 50;
+    
+    rollingValues[rollingPosition] = savGolResult;
+    rollingPosition = (rollingPosition + 1) % 5;
+    
+    float SD = sqrt(rollingValues[0]*rollingValues[0] + rollingValues[1]*rollingValues[1] + rollingValues[2]*rollingValues[2] + rollingValues[3]*rollingValues[3] + rollingValues[4]*rollingValues[4]);
+    
+    // calculate base level of volatility and apply a bit of smoothing
+    if(angleBuffer[currentPosition] > 100 && angleBuffer[currentPosition] < 260) baseSD = 0.8*baseSD + 0.2*SD;
+    
+    if((lastStrike == 1) && (SD > 1.7*baseSD) && (angleBuffer[currentPosition] < 70) && (rateBuffer[currentPosition] < 0)){
+        lastStrike = 2;
+//        printf("DONG\n");
+        return(2);
+    } else if((lastStrike == 2) && (SD > 1.7*baseSD) && (angleBuffer[currentPosition] > 290) && (rateBuffer[currentPosition] > 0)) {
+        lastStrike = 1;
+//        printf("DING\n");
+        return(1);
+    } else if ((lastStrike == 1) && (angleBuffer[currentPosition] < 40) && (rateBuffer[currentPosition] < 0)){
+        lastStrike = 2;
+        return(4); // fake a strike
+    } else if ((lastStrike == 2) && (angleBuffer[currentPosition] > 320) && (rateBuffer[currentPosition] > 0)){
+        lastStrike = 1;
+        return(3); // fake a strike
+    } 
+    return(0);
 }
 
 // Madgwick's implementation of the Mahony filter.

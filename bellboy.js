@@ -29,8 +29,8 @@ var BGCOLOUR="#686888";
 var nonLive=false;
 var wsHost="10.0.0.1"
 
-var sampleInterval = 5.0;  // milliseconds for each sample (default 200 times/sec).  Updated by SAMP: command
-var collectInterval = 50.0; // update display in ms - here 20 times/sec
+var sampleInterval = 0.008;  // seconds for each sample (default 125 times/sec).  Updated by SAMP: command
+var collectInterval = 0.08; // update display in ms - here 10 times/sec
 var batteryLevel = 100;
 
 var canvasBD = document.getElementById("canvasBD");
@@ -57,8 +57,8 @@ var ctxATt=canvasATt.getContext("2d");
 
 var currentATmargin = 0;
 var currentATpixels = 1;
-var ATbottomMargin=25; // pixels at bottom of AT canvas for indexes
-var ATtopMargin = 0; // pixels at top for force guide
+var ATbottomMargin=25; // pixels at bottom of AT canvas
+var ATtopMargin = 25; // pixels at top of AT canvas
 //var forceColours = [ "#0000FF","#0A0AFF","#1414FF","#1F1FFF","#2929FF","#3333FF","#3D3DFF","#4747FF","#5252FF","#5C5CFF","#6666FF","#7070FF","#7A7AFF","#8585FF","#8F8FFF","#9999FF","#A3A3FF"];
 var angleColours = [ "#E01F1F","#E22C2C","#E43A3A","#E64747","#E85454","#EA6262","#EB6F6F","#ED7D7D","#EF8A8A","#F19898","#9898F1","#8A8AEF","#7D7DED","#6F6FEB","#6262EA","#5454E8","#4747E6","#3A3AE4","#2c2cE2","#1F1FE0"];
 var ATstepWidth = 80;
@@ -117,14 +117,14 @@ var sample = [];
 var template = [];
 
 var swingStarts = [];
-var halfSwingStarts=[];
+//var halfSwingStarts=[];
 var TswingStarts = [];
-var ThalfSwingStarts=[];
+//var ThalfSwingStarts=[];
 
 var averagePullStrength=[];
-var halfAveragePullStrength=[];
+//var halfAveragePullStrength=[];
 var TaveragePullStrength=[];
-var ThalfAveragePullStrength=[];
+//var ThalfAveragePullStrength=[];
 
 ws = new WebSocket("ws://" + wsHost);
 
@@ -252,7 +252,8 @@ function parseResult(dataBack) {
         currentStatus |= SKIPMAIN;
         updateIcons();
         swingStarts=[];
-        halfSwingStarts=[];
+        var mixUpError = 0;
+//        halfSwingStarts=[];
 //        swingStarts[0] = 3; // ditch first couple of samples - could be 1 but meh
         currentPlaybackPosition = 1;
         currentSwingDisplayed = null;
@@ -276,12 +277,17 @@ function parseResult(dataBack) {
                 while (k > i) {
                     k--; // step back from healthily down point
                     if (sample[k][1] <= 0.05 || k == 1){ // find point when bell is nearly stationary and define that (or start of session) as start of stroke
+                        if(swingStarts.length % 2 == 1) { mixUpError = 1; swingStarts[swingStarts.length] = k+1;} // yuk! a just in case should handstroke and backstroke get mixed up - shouldn't happen!
                         swingStarts[swingStarts.length] = k+1;
                         break;
                     }
                 }
                 if (k == i) {
-                    setStatus("Loaded: " + sample.length.toString() + " samples. Should Have: " + dataBack.slice(5) + " Funny swing found. Possible incorrect data. But " + swingStarts.length.toString() + " strokes found. " + swingStarts.toString());
+                    if(mixUpError == 0){
+                        setStatus("Loaded: " + sample.length.toString() + " samples. Should Have: " + dataBack.slice(5) + " Funny swing found. Possible incorrect data. But " + swingStarts.length.toString() + " strokes found. " + swingStarts.toString());
+                    } else {
+                        setStatus("Loaded: " + sample.length.toString() + " samples. Should Have: " + dataBack.slice(5) + " Funny swing found with swing mixmatch.  Possible incorrect data. But " + swingStarts.length.toString() + " strokes found. " + swingStarts.toString());                        
+                    }
                     calibrationValue = getWeighting();
                     getAveragePullStrengths();
                     return;
@@ -291,20 +297,25 @@ function parseResult(dataBack) {
             }
             if (sample[j][0] > 290 && sample[j][0] < 310 && sample[j][1] < 0) { // point where bell moving healthily down @ backstroke
                 k = j;
-                if (halfSwingStarts.length != 0) {
-                    i = halfSwingStarts[halfSwingStarts.length-1]+1
+                if (swingStarts.length != 0) {
+                    i = swingStarts[swingStarts.length-1]+1
                 } else {
-                    i=0;
+                    i = 0;
                 }
                 while (k > i) { // step back from healthily down point
                     k--;
                     if (sample[k][1] >= -0.05){ // find point when bell is nearly stationary and define that as start of half stroke
-                        halfSwingStarts[halfSwingStarts.length] = k+1;
+                        if(swingStarts.length % 2 == 0) {mixUpError =1; swingStarts[swingStarts.length] = k+1;} // yuk! a just in case should handstroke and backstroke get mixed up - shouldn't happen!
+                        swingStarts[swingStarts.length] = k+1;
                         break;
                     }
                 }
                 if (k == i) {
-                    setStatus("Loaded: " + sample.length.toString() + " samples. Should Have: " + dataBack.slice(5) + " Funny half swing found. Possible incorrect data. But " + swingStarts.length.toString() + " strokes found. " + swingStarts.toString());
+                    if(mixUpError == 0){
+                        setStatus("Loaded: " + sample.length.toString() + " samples. Should Have: " + dataBack.slice(5) + " Funny half swing found. Possible incorrect data. But " + swingStarts.length.toString() + " strokes found. " + swingStarts.toString());
+                    } else {
+                        setStatus("Loaded: " + sample.length.toString() + " samples. Should Have: " + dataBack.slice(5) + " Funny half swing found with swing mixmatch.  Possible incorrect data. But " + swingStarts.length.toString() + " strokes found. " + swingStarts.toString());                        
+                    }
                     calibrationValue = getWeighting();
                     getAveragePullStrengths();
                     return;
@@ -312,13 +323,13 @@ function parseResult(dataBack) {
                 while (j < arrayLength && sample[j][0] > 170) j++;
             }
         }
-                
+        if(mixUpError == 0){
+            setStatus("Loaded: " + sample.length.toString() + " samples. Should Have: " + dataBack.slice(5) + ". " + swingStarts.length.toString() + " strokes found.");
+        } else {
+            setStatus("Loaded: " + sample.length.toString() + " samples. Possible mix up found.  Should Have: " + dataBack.slice(5) + ". " + swingStarts.length.toString() + " strokes found.");
+        }
         calibrationValue = getWeighting();
         getAveragePullStrengths();
-        setStatus("Loaded: " + sample.length.toString() + " samples. Should Have: " + dataBack.slice(5) + ". " + swingStarts.length.toString() + " strokes found.");
-//        setStatus("Loaded: " + halfSwingStarts);
-
-        // rebuild file list
         document.getElementById("openSelect").options.length = 0;
         ws.send("FILE:");
         return;
@@ -336,8 +347,8 @@ function parseResult(dataBack) {
         return;
     }
     if (dataBack.slice(0,5) == "SAMP:"){
-        sampleInterval = parseFloat(dataBack.slice(5))*1000;
-        setStatus("Received sample period of " + sampleInterval.toFixed(3) + "ms");
+        sampleInterval = parseFloat(dataBack.slice(5));
+//        setStatus("Received sample period of " + sampleInterval.toFixed(3) + "s");
         return;
     }
 	
@@ -353,7 +364,17 @@ function parseResult(dataBack) {
     }
 
     if (dataBack.slice(0,5) == "EWAI:"){
-        setStatus("Now calibrating. Please keep bell down and at rest ...");
+        setStatus("Now calibrating. Please keep bell down and at rest...");
+        return;
+    }
+
+    if (dataBack.slice(0,5) == "EPUL:"){
+        setStatus("Now calibrating. Please raise bell...");
+        return;
+    }
+
+    if (dataBack.slice(0,5) == "ECAL:"){
+        setStatus("Now calibrating. Please continue to raise bell and set it normally...");
         return;
     }
 
@@ -465,14 +486,14 @@ function getWeighting(){
     return result;
 }
 
-// This function calaculates the difference (error) between a sine wave of amplitude "guess" and the
+// This function calculates the difference (error) between a sine wave of amplitude "guess" and the
 // acceleration profile of the bell.  Called by getWeighting().
 function calculateError(guess){
     var count = 0.0, error = 0.0;
     var i = 0;
     if(swingStarts.length > 1) i = swingStarts[1];
     for(; i < sample.length; i++){
-        if(sample[i][0] < 310 && sample[i][0] > 260 && sample[i][1] < 0){ // only calculate gravity effect going down at backstroke because of fewer other effects such as vibration from ring and switch of direction caused by pulley/garter hole interaction
+        if(sample[i][0] < 300 && sample[i][0] > 270 && sample[i][1] < 0){ // only calculate gravity effect going down at backstroke because of fewer other effects such as vibration from ring and switch of direction caused by pulley/garter hole interaction
             count += 1;
             error += -guess*Math.sin(sample[i][0]*3.1416/180) + sample[i][2];
         }
@@ -495,24 +516,21 @@ function getAveragePullStrengths(){
         for (k=swingStarts[j]; k>0 && (sample[k][0]-i) < 5 ;k--); // find point 5 degrees back from direction change
         k++;
         totalPull=0;
-        for (m=0;(k+m)<sample.length && (sample[k+m][0]-i) < 5; m++){ // add up accns to point 5 degrees forward from direction change
-            pull = sample[k+m][2] - calibrationValue*Math.sin(sample[k+m][0]*3.1416/180);
-            if(pull < 25) continue;  // ignore stuff below noise floor
-            totalPull += pull;
+        if(j % 2 == 0){ // handstroke pull
+            for (m=0;(k+m)<sample.length && (sample[k+m][0]-i) < 5; m++){ // add up accns to point 5 degrees forward from direction change
+                pull = sample[k+m][2] - calibrationValue*Math.sin(sample[k+m][0]*3.1416/180);
+                if(pull < 25) continue;  // ignore stuff below noise floor
+                totalPull += pull;
+            }
+            averagePullStrength[averagePullStrength.length] = totalPull/m;
+        } else { // backstroke pull
+            for (m=0;(k+m)<sample.length && (i-sample[k+m][0]) < 5; m++){ // add up accns to point 5 degrees forward from direction change
+                pull = sample[k+m][2]- calibrationValue*Math.sin(sample[k+m][0]*3.1416/180);
+                if(pull > -25) continue; 
+                totalPull += pull;
+            }
+            averagePullStrength[averagePullStrength.length] = -totalPull/m;            
         }
-        averagePullStrength[averagePullStrength.length] = totalPull/m;
-    }
-    for (j=0; j<halfSwingStarts.length; j++){
-        i=sample[halfSwingStarts[j]][0]; // angle at direction change
-        for (k=halfSwingStarts[j]; k>0 && (i-sample[k][0]) < 5 ;k--); // find point 5 degrees back from direction change
-        k++;
-        totalPull=0;
-        for (m=0;(k+m)<sample.length && (i-sample[k+m][0]) < 5; m++){ // add up accns to point 5 degrees forward from direction change
-            pull = sample[k+m][2]- calibrationValue*Math.sin(sample[k+m][0]*3.1416/180);
-            if(pull > -25) continue; 
-            totalPull += pull;
-        }
-        halfAveragePullStrength[halfAveragePullStrength.length] = -totalPull/m;
     }
 }
 
@@ -526,7 +544,7 @@ function showLive(){
 }
 
 function drawTimer(position, templated){
-    var timeElapsed = ((position-strokeTimer)*sampleInterval)/1000.0;
+    var timeElapsed = ((position-strokeTimer)*sampleInterval);
     if (timeElapsed < 0.2) return; // assume a glitch
     ctxBD.font = "12px sans serif";
     ctxBD.fillStyle = "white";
@@ -548,15 +566,15 @@ function drawTimer(position, templated){
 
 function drawStroke(){
     if (currentSwingDisplayed == null) return;
-    var startpoint = swingStarts[currentSwingDisplayed];
+    var startpoint = swingStarts[currentSwingDisplayed *2];
     if (currentSwingDisplayed != 0) {
-        for(; startpoint > 3; --startpoint) if (sample[startpoint][0] > 90) break;
+        for(; startpoint > 3; --startpoint) if (sample[startpoint][0] > 90) break; // view part of swing that is before start of handstroke pull
     }
     var endpoint = 0;
-    if (currentSwingDisplayed > halfSwingStarts.length -1) {
+    if ((currentSwingDisplayed *2) > swingStarts.length -1) {
         endpoint = sample.length - 3;
     } else {
-        for (endpoint = halfSwingStarts[currentSwingDisplayed]; endpoint < sample.length -3; ++endpoint){
+        for (endpoint = swingStarts[(currentSwingDisplayed*2)+1]; endpoint < sample.length -3; ++endpoint){
             if (sample[endpoint][0] < 270) break;
         }
     }
@@ -569,13 +587,10 @@ function drawStroke(){
     ctxBD.fillStyle = "white";
     var handstrokelength = 0.0;
     var backstrokelength = 0.0;
-    if(currentSwingDisplayed < halfSwingStarts.length) {
-        handstrokelength = (halfSwingStarts[currentSwingDisplayed] - swingStarts[currentSwingDisplayed]) * (sampleInterval/1000.0);  
+    handstrokelength = (swingStarts[(currentSwingDisplayed * 2) + 1] - swingStarts[currentSwingDisplayed * 2]) * sampleInterval;  
+    if((currentSwingDisplayed *2) + 2 < swingStarts.length) {
+        backstrokelength = (swingStarts[(currentSwingDisplayed *2 ) + 2] - swingStarts[currentSwingDisplayed * 2] + 1) * sampleInterval;
     }
-    if((currentSwingDisplayed +1) < swingStarts.length &&
-      currentSwingDisplayed < halfSwingStarts.length) {
-        backstrokelength = (swingStarts[currentSwingDisplayed + 1] - halfSwingStarts[currentSwingDisplayed]) * (sampleInterval/1000.0);
-    } 
     if(handstrokelength != 0.0){
         ctxBD.fillText("H " + handstrokelength.toFixed(2)+"s", 2*BDwidth + 32, ctxBD.canvas.height-20);
     }
@@ -594,7 +609,7 @@ function drawStroke(){
     var angleColour = 0;
     var powerHeight = 0;
     var totalHeight = ctxAT.canvas.height-ATbottomMargin-ATtopMargin;
-    
+/*    
     for (var i=0; i<numberOnATdisplay; i++){
         if ((startSwing + i > swingStarts.length -1) || (startSwing + i > halfSwingStarts.length -1) || startSwing + 1 > averagePullStrength.length -1 || startSwing + i > halfAveragePullStrength -1) break;
         if ((startSwing + i) < 0) continue;
@@ -647,21 +662,21 @@ function drawStroke(){
         ctxAT.fillStyle=angleColours[angleColour];
         ctxAT.fillRect(offset + (i+0.25)*ATstepWidth+ATbarWidth-5, ctxAT.canvas.height-ATbottomMargin-powerHeight, 8, powerHeight);
     }
-
+*/
 }
 
 function TdrawStroke(){
     if (currentSwingDisplayed == null) return;
     if ((currentStatus & TEMPLATEDISPLAYED) == 0) return;
-    var startpoint = TswingStarts[TcurrentSwingDisplayed];
+    var startpoint = TswingStarts[TcurrentSwingDisplayed * 2];
     if (TcurrentSwingDisplayed != 0) {
         for(; startpoint > 3; --startpoint) if (template[startpoint][0] > 90) break;
     }
     var endpoint = 0;
-    if (TcurrentSwingDisplayed > ThalfSwingStarts.length -1) {
+    if ((TcurrentSwingDisplayed *2) > TswingStarts.length -1) {
         endpoint = template.length - 3;
     } else {
-        for (endpoint = ThalfSwingStarts[TcurrentSwingDisplayed]; endpoint < template.length -3; ++endpoint){
+        for (endpoint = TswingStarts[(TcurrentSwingDisplayed * 2) - 1]; endpoint < template.length -3; ++endpoint){
             if (template[endpoint][0] < 270) break;
         }
     }
@@ -673,12 +688,9 @@ function TdrawStroke(){
     ctxBD.textAlign = "center";
     var handstrokelength = 0.0;
     var backstrokelength = 0.0;
-    if(TcurrentSwingDisplayed < ThalfSwingStarts.length) {
-        handstrokelength = (ThalfSwingStarts[TcurrentSwingDisplayed] - TswingStarts[TcurrentSwingDisplayed]) * (sampleInterval/1000.0);  
-    }
-    if((TcurrentSwingDisplayed +1) < TswingStarts.length &&
-      TcurrentSwingDisplayed < ThalfSwingStarts.length) {
-        backstrokelength = (TswingStarts[TcurrentSwingDisplayed + 1] - ThalfSwingStarts[TcurrentSwingDisplayed]) * (sampleInterval/1000.0);
+    handstrokelength = (TswingStarts[(TcurrentSwingDisplayed *2) + 1] - TswingStarts[TcurrentSwingDisplayed * 2]) * sampleInterval;  
+    if((TcurrentSwingDisplayed * 2) + 2 < TswingStarts.length) {
+        backstrokelength = (TswingStarts[(TcurrentSwingDisplayed * 2) + 2] - TswingStarts[(TcurrentSwingDisplayed * 2) + 1]) * sampleInterval;
     } 
     if(handstrokelength != 0.0){
         ctxBD.fillText("H " + handstrokelength.toFixed(2)+"s", posCB + CBwidth/2, ctxBD.canvas.height-50);
@@ -686,7 +698,6 @@ function TdrawStroke(){
     if(backstrokelength != 0.0){
         ctxBD.fillText("B " + backstrokelength.toFixed(2)+"s", posCB + CBwidth/2, ctxBD.canvas.height-40);
     }
-    
 }
 
 function drawSamples(position,iterations){
@@ -1107,7 +1118,7 @@ recordButton.onclick = function() {
         clearAT();
         currentPlaybackPosition = 1; // needs to be one as we are doing comparison with previous entry removed so that playback starts from last swing displayed
         if (liveintervalID != null) clearInterval(liveintervalID);
-        liveintervalID=setInterval(showLive,collectInterval);
+        liveintervalID=setInterval(showLive,collectInterval*1000);
         currentSwingDisplayed=null;
         ws.send("STRT:" + fileName);
     } else {
@@ -1153,7 +1164,7 @@ playIcon.onclick=function(){
         clearAT();
 //        currentPlaybackPosition =1; // needs to be one as we are doing comparison with previous entry removed so that playback starts from last swing displayed
         if (playintervalID != null) clearInterval(playintervalID);
-        playintervalID=setInterval(playbackSample,collectInterval);
+        playintervalID=setInterval(playbackSample,collectInterval*1000);
         currentSwingDisplayed=null;
         ctxBD.clearRect(posCB+1, ctxBD.canvas.height-30, CBwidth-2, 20); // clear existing timers
 
@@ -1168,9 +1179,9 @@ pauseIcon.onclick=function(){
     if ((currentStatus & PLAYBACK) == 0) return;
 
     if ((currentStatus & PAUSED) != 0) {
-        currentStatus &= ~PAUSED
+        currentStatus &= ~PAUSED;
         if (playintervalID != null) clearInterval(playintervalID);
-        playintervalID=setInterval(playbackSample,collectInterval)
+        playintervalID=setInterval(playbackSample,collectInterval*1000);
         textBell();
     } else {
         currentStatus |= PAUSED;
@@ -1281,17 +1292,15 @@ favIcon.onclick=function(){
 
     template=[];
     TswingStarts=[];
-    ThalfSwingStarts=[];
+//    ThalfSwingStarts=[];
     TaveragePullStrength=[];
-    ThalfAveragePullStrength=[]
+//    ThalfAveragePullStrength=[]
     clearTemplates();
     drawTDCs();
     var i = 0;
     for (i = 0; i<sample.length; ++i) template[template.length]=sample[i].slice();
-    for (i = 0; i<halfSwingStarts.length; ++i) ThalfSwingStarts[ThalfSwingStarts.length]=halfSwingStarts[i];
     for (i = 0; i<swingStarts.length; ++i) TswingStarts[TswingStarts.length]=swingStarts[i];
     for (i = 0; i<averagePullStrength.length; ++i) TaveragePullStrength[TaveragePullStrength.length]=averagePullStrength[i];
-    for (i = 0; i<halfAveragePullStrength.length; ++i) ThalfAveragePullStrength[ThalfAveragePullStrength.length]=halfAveragePullStrength[i];
     TcalibrationValue = calibrationValue;
     TcurrentSwingDisplayed=currentSwingDisplayed;
     currentStatus |= TEMPLATEDISPLAYED;
@@ -1311,7 +1320,6 @@ unstarIcon.onclick=function(){
     template=[];
     TcalibrationValue=null;
     TswingStarts=[];
-    ThalfSwingStarts=[];
     TcurrentSwingDisplayed=null;
     clearTemplates();
     currentStatus &= ~TEMPLATEDISPLAYED;
@@ -1730,7 +1738,7 @@ function clearAT(){
     ctxATt.fillRect(0,0,ctxATt.canvas.width,ctxATt.canvas.height);
     currentATmargin=0;
     document.getElementById("canvasAT").style.marginLeft = (currentATmargin * -1) + "px";
-    
+/*    
     ctxATt.font = "14px sans serif";
     ctxATt.fillStyle = "rgb(255,100,100)";
     ctxATt.textAlign = "start";
@@ -1740,17 +1748,17 @@ function clearAT(){
     ctxATt.fillText((scaleValue*0.75).toString(), 2, ATtopMargin+totalHeight*0.25+2);
     ctxATt.fillText((scaleValue*0.5).toString(), 2, ATtopMargin+totalHeight*0.5+2);
     ctxATt.fillText((scaleValue*0.25).toString(), 2, ATtopMargin+totalHeight*0.75+2);
-
+*/
     ctxATt.beginPath();
     ctxATt.strokeStyle = "rgb(255,100,100)";
     ctxATt.moveTo(1, ATtopMargin);
     ctxATt.lineTo(ctxATt.canvas.width, ATtopMargin);
-    ctxATt.moveTo(0, ATtopMargin+totalHeight*0.25);
-    ctxATt.lineTo(ctxATt.canvas.width, ATtopMargin+totalHeight*0.25);
+    ctxATt.moveTo(0, ATtopMargin+totalHeight*0.167);
+    ctxATt.lineTo(ctxATt.canvas.width, ATtopMargin+totalHeight*0.167);
     ctxATt.moveTo(0, ATtopMargin+totalHeight*0.5);
     ctxATt.lineTo(ctxATt.canvas.width, ATtopMargin+totalHeight*0.5);
-    ctxATt.moveTo(0, ATtopMargin+totalHeight*0.75);
-    ctxATt.lineTo(ctxATt.canvas.width, ATtopMargin+totalHeight*0.75);
+    ctxATt.moveTo(0, ATtopMargin+totalHeight*0.833);
+    ctxATt.lineTo(ctxATt.canvas.width, ATtopMargin+totalHeight*0.833);
     ctxATt.moveTo(0, ATtopMargin+totalHeight);
     ctxATt.lineTo(ctxATt.canvas.width, ATtopMargin+totalHeight);
 

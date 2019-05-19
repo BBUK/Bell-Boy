@@ -22,7 +22,7 @@ wget https://bitbucket.org/alberto_pretto/imu_tk/get/7780270fb9a2.zip -O imu_tk.
 unzip imu_tk.zip
 cd alberto_pretto-imu_tk-7780270fb9a2/
 nano CMakeLists.txt
-# add this to the examples section of the file (towards the bottom)
+# add this to the examples section of the file (towards the bottom) (without the hashes)
 # add_executable(BBimu_tk apps/BBimu_tk.cpp)
 # target_link_libraries( BBimu_tk ${IMU_TK_LIBS})
 # set_target_properties( BBimu_tk PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}/bin)
@@ -32,22 +32,32 @@ mkdir build
 cd build
 cmake ..
 make
+#(make will take a long while)
 
-#install bcm2835 library
+#install bcm2835 library - see setupBB.sh
 #compile calibrate.c needs ICM20689.h
 gcc calibrate.c -o calibrate -lbcm2835
 # put BBimu_tk (in alberto_pretto-imu_tk-7780270fb9a2/bin) into same directory as calibrate program
+# shutdown
 
-# with bellboy PCB installed on header (no battery attached)
+## to do a calibration run
+# with bellboy PCB installed on header of Pi
+# power on system - best to run this after a reboot
+# can use battery power if this is running on a zero, if not, power Pi separately and remove battery from bellboy PCB
 # run calibrate
-# enter SAMP: to get sample period
+# enter SAMP: to get sample period a few times - check numbers are sane and stable (on multiple entries) - near to 0.002 for sample period
 # enter CALI: to start calibration run
-# keep device stable for at least 50 secs and then move into 20-30 different positions each stable for 4 seconds
+# keep device stable for at least 50 secs and then move into 30-40 different positions each stable for at least 3-4 seconds(ish)
+# ensure that there is a full range of positions (important)
+# if EOVF: appears then ctrl-c to exit, reboot and try again
 # enter STCA:
 # (will now run imu_tk calibration)
+# high residuals (>10) are an indication that something is not right 
+# OK for EOVF: to appear after calibration is finished
 # enter SAVE:
-# check numbers are sane near to 0.002 for sample period
-# all bias numbers close to 0
-# all transform numbers close to 1 on diagonal and close to zero otherwise
-# then saved to arduino on bellboy device
+# check numbers are sane:
+    # all bias numbers close to 0
+    # all transform numbers close to 1 on diagonal and close to zero otherwise
+# if not sane - ctrl-c to exit within 20 secs. Reboot and try again
+# if ctrl-c is not entered, calibration is saved to arduino on bellboy device automatically
 

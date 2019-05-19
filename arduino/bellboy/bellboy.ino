@@ -99,7 +99,7 @@ void loop() {
   switch (STATE) {
     case 0: // startUp
       ledRedOn();
-      if (volts < 380 && volts > 200) { // must be on external power
+      if (volts < 385 && volts > 200) { // must be on external power
         digitalWrite(batteryChargeEnablePin, HIGH); // enable charging
         pinMode(piRunPin, OUTPUT);
         digitalWrite(piRunPin, LOW); // stop Pi running
@@ -116,7 +116,7 @@ void loop() {
       }
       break;
     case 1: // external power, battery charging
-      if (volts > 380) {
+      if (volts > 385) {
         STATE = 99;  // power removed
         break;
       }
@@ -129,7 +129,7 @@ void loop() {
       ledRedOn();
       break;
     case 2: // external power, charge complete
-      if (volts > 380) {
+      if (volts > 385) {
         STATE = 99;  // power removed go into shutdown mode
         break;
       }
@@ -173,7 +173,7 @@ void loop() {
       if (digitalRead(piPowerDownPin) == HIGH) { // Pi shut itself down
         STATE = 99;
       }
-      if (volts < 380) { // power plugged in -> go into order shutdown mode
+      if (volts < 385) { // power plugged in -> go into order shutdown mode
         flags |= SENDLOWBATT;
         count = 0;
         STATE = 7;
@@ -184,7 +184,7 @@ void loop() {
         STATE = 7;
       }
       if(!(loopCount % 8)) {
-        if (volts < 528.0) {
+        if (volts < 528) {
           ledGreenChirrup();
         } else {
           ledRedChirrup();

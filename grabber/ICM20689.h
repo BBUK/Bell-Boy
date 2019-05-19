@@ -71,11 +71,10 @@
  
 void setup(void);
 void start(uint32_t dataRate);
-void saveCalibration(void);
-void setCalibration(char accel, char gyro, char mag);
 void calculate(float gx, float gy, float gz, float ax, float ay, float az, float h);
-void DCMcalculate(float gx, float gy, float gz, float ax, float ay, float az, float h);
+float calculateError(float guess);
 void pushData(void);
+void doCalibration(void);
 float savGol(unsigned int startPosition);
 void startRun(void);
 void readFIFO(float* values);
@@ -86,3 +85,4 @@ uint16_t readFIFOcount();
 void pullData(void);
 float extractFloat(uint8_t index);
 float pullAndTransform(void);
+unsigned int dingDong(unsigned int startPosition);

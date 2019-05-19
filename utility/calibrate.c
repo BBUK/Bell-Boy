@@ -30,7 +30,7 @@
 * https://bitbucket.org/alberto_pretto/imu_tk.  My own notes on installation are in the NotesOnInstallingimu_tk.docx
 * file in this directory.  My installation is performed on the full version of Raspbian.  Pi Zero can be used but is slow.
 * 
-* The general idea is that this program is run and a SAMP: command is executed a few times until you are happy
+* The general idea is that this program is run (via sudo) and a SAMP: command is executed a few times until you are happy
 * that the result is stable.  The CALI: command is then executed and this starts pushing a timestamp and accelerometer 
 * data to /tmp/CALIBRATIONDATA.  The device is kept still (i.e. resting on a table) for no 
 * less than 50 seconds and is then put into around 30-40 different resting positions each lasting about 4 seconds.
