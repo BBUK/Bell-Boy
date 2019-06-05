@@ -83,6 +83,10 @@
 * (i)   TEST: returns the current basic orientation (for testing)
 * (j)   EYEC: starts eye candy demo
 * (k)   STEC: stops eye candy demo
+* (l)   STND: standalone (playback-only) operation.
+* (m)   PLRD: play and record operation.
+* (n)   BELS: bell data. Format: numberofbells(int),CPM(float),openHandstroke(float), faketimefromBDC(float)
+* (o)   EFIL: end sending of FILE: data
 *
 * There are the following responses back to the user's browser:
 * (i)    STPD: tells the browser that the device has sucessfully stopped sampling
@@ -110,7 +114,6 @@
 * (xx)   ECAL: Bell being pulled up - recording for gravity calibration
 */
 
-
 #include <math.h>
 #include <sys/time.h>
 #include <time.h>
@@ -134,15 +137,6 @@
 
 // Manchester estimation.  Use gcalculator.xlsx to work out for your latitude.
 #define g0 9.8137   
-
-// these are used by the dcm_imu extended Kalman filter
-#define g0_2 (g0*g0)
-#define q_dcm2 (0.1*0.1)
-#define q_gyro_bias2 (0.0001*0.0001)
-#define r_acc2 (0.5*0.5)
-#define r_a2 (10*10)
-#define q_dcm2_init (1*1)
-#define q_gyro_bias2_init (0.1*0.1)
 
 #define DEGREES_TO_RADIANS_MULTIPLIER 0.017453 
 #define RADIANS_TO_DEGREES_MULTIPLIER 57.29578 
@@ -196,7 +190,20 @@ struct {
     float gravityValue;
     unsigned int gravityCalibrationState;
     unsigned int stable;
-    unsigned int wayUp; //////////////////////////////////////////////////////////////////
+    unsigned int lastStrikeCount;
+//    float dingTimeFromBDC;
+//    float dongTimeFromBDC;
+    unsigned int lastBDC;
+//    float dingAngleFromBDC;
+//    float dongAngleFromBDC;
+//    unsigned int dingNumber;
+//    unsigned int dongNumber;
+    unsigned int faked;
+    unsigned int fakeTimefromBDC;
+    unsigned int bellNumber;
+    float CPM;
+    float openHandstroke;
+    int wayup;
 } calibrationData = {.samplePeriod = 0.002, .accBiasX=0, .accBiasY=0, .accBiasZ = 0,
                     .accTransformMatrix[0]=1, .accTransformMatrix[1]=0, .accTransformMatrix[2]=0, .accTransformMatrix[3]=0,
                     .accTransformMatrix[4]=1, .accTransformMatrix[5]=0, .accTransformMatrix[6]=0, .accTransformMatrix[7]=0,
@@ -204,7 +211,7 @@ struct {
                     .gyroTransformMatrix[1]=0, .gyroTransformMatrix[2]=0, .gyroTransformMatrix[3]=0, .gyroTransformMatrix[4]=1,
                     .gyroTransformMatrix[5]=0, .gyroTransformMatrix[6]=0, .gyroTransformMatrix[7]=0, .gyroTransformMatrix[8]=1,
                     .tareValue = 0.0 , .torn = 0, .gravityValue = 0.0, .gravityCalibrationState = 0, .gravityDataCount = 0, 
-                    .stable = 0, .wayUp = 1};
+                    .stable = 0, .bellNumber = 6, .CPM = 31.0, .openHandstroke = 1.0, .faked = 0, .fakeTimefromBDC = 300, .wayup=1};
 
 // only really important when run from command line
 volatile sig_atomic_t sig_exit = 0;
@@ -222,18 +229,6 @@ unsigned int tail;
 unsigned int available;
 float angleBuffer[BUFFERSIZE];
 float rateBuffer[BUFFERSIZE];
-
-// savgol_coeffs(31,1,deriv=1,use="dot")
-//const float savGolCoefficients[] = {
-//    -6.04838710e-03, -5.64516129e-03, -5.24193548e-03, -4.83870968e-03,
-//    -4.43548387e-03, -4.03225806e-03, -3.62903226e-03, -3.22580645e-03,
-//    -2.82258065e-03, -2.41935484e-03, -2.01612903e-03, -1.61290323e-03,
-//    -1.20967742e-03, -8.06451613e-04, -4.03225806e-04, -1.02877021e-17,
-//    4.03225806e-04,   8.06451613e-04,  1.20967742e-03,  1.61290323e-03,
-//    2.01612903e-03,   2.41935484e-03,  2.82258065e-03,  3.22580645e-03,
-//    3.62903226e-03,   4.03225806e-03,  4.43548387e-03,  4.83870968e-03,
-//    5.24193548e-03,   5.64516129e-03,  6.04838710e-03};
-
 
 #define SAVGOLLENGTH  15
 #define SAVGOLHALF 7 // = math.floor(SAVGOLLENGTH/2.0)
@@ -262,34 +257,13 @@ int main(int argc, char const *argv[]){
     setbuf(stdin, NULL);
     fcntl(STDIN_FILENO, F_SETFL, fcntl(STDIN_FILENO, F_GETFL) | O_NONBLOCK);
  
-    FILE *fdTare;
-    fdTare = fopen("/tmp/BBtare","r");
-    if(fdTare != NULL) {
-        if (fgets(linein, sizeof(linein), fdTare) != NULL) {
-            calibrationData.tareValue = atof(linein);
-            calibrationData.torn = 2;
-        }
-        fclose(fdTare);
-    }
-
-    FILE *fdGravity;
-    fdGravity = fopen("/tmp/BBgravity","r");
-    if(fdGravity != NULL) {
-        if (fgets(linein, sizeof(linein), fdGravity) != NULL) {
-            calibrationData.gravityValue = atof(linein);
-            calibrationData.gravityCalibrationState = 4;
-        }
-        fclose(fdGravity);
-    } else {
-        calibrationData.gravityData = (float *)malloc(sizeof(float) * 8000 * 3);
-    }
-
+    getSavedData();
     setup();
 
     while(!sig_exit){
         usleep(LOOPSLEEP);
 		LOOPCOUNT += 1;
-		if(LOOPCOUNT == 1 || (LOOPCOUNT % 2000) == 0){ // check every 100 secs but also the first time through
+		if(LOOPCOUNT == 1 || !(LOOPCOUNT % 200)){ // check every 10 secs but also the first time through
 			I2C_BUFFER[0]=2;
 			bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 2 (power)
 			bcm2835_i2c_read(I2C_BUFFER,2); usleep(100);
@@ -339,10 +313,12 @@ int main(int argc, char const *argv[]){
                 system(oscommand);
                 continue;
             }
+            
             if(strcmp("SAMP:", command) == 0) {
                 printf("SAMP:%f\n",calibrationData.samplePeriod*4.0);
                 continue;
             }
+            
             if(strcmp("FILE:", command) == 0) {
                 DIR *d;
                 struct dirent *dir;
@@ -352,6 +328,7 @@ int main(int argc, char const *argv[]){
                         if(dir->d_type == DT_REG) printf("FILE:%s\n", dir->d_name);
                     }
                 closedir(d);
+                printf("EFIL:\n");
                 }
                 continue;
             }
@@ -368,11 +345,12 @@ int main(int argc, char const *argv[]){
 				EYECANDY = 0;
                 continue;
             }
+            /////////////////
             if(strcmp("CLTA:", command) == 0) {
                 FILE *fdDump;
                 fdDump = fopen("/data/samples/dump","w");
                 if(fdDump != NULL) {
-                    fprintf(fdDump,"GV:%+09.1f, COUNT:%+08.1f WAYUP:%+07.1f\n", calibrationData.gravityValue, (float)calibrationData.gravityDataCount, (float)calibrationData.wayUp);
+                    fprintf(fdDump,"GV:%+09.1f, COUNT:%+08.1f WAYUP:%+07.1f, ROLL:%+07.1f\n", calibrationData.gravityValue, (float)calibrationData.gravityDataCount, (float)calibrationData.wayup, roll-calibrationData.tareValue);
                     for(int i = 0; i<calibrationData.gravityDataCount; ++i){
                         fprintf(fdDump,"A:%+09.1f,R:%+09.1f,C:%+07.1f\n", calibrationData.gravityData[(i*3)], calibrationData.gravityData[(i*3)+1], calibrationData.gravityData[(i*3)+2]);
                     }
@@ -381,8 +359,44 @@ int main(int argc, char const *argv[]){
                 continue;
             }
 
+            if(strcmp("STND:", command) == 0) {  // standalone operation
+                calibrationData.gravityValue = 0;
+                calibrationData.gravityCalibrationState = 4;
+                calibrationData.torn = 3;
+                continue;
+            }
+
+            if(strcmp("PLRD:", command) == 0) {  // play and record operation
+                calibrationData.gravityValue = 0;
+                calibrationData.gravityCalibrationState = 0;
+                calibrationData.torn = 0;
+                getSavedData();
+                continue;
+            }
+            if(strcmp("BELS:", command) == 0) {  // set number of bells.  Not used here but recorded in file
+                if(entries == 2  && strlen(details) > 0){
+                    calibrationData.bellNumber = 0;
+                    calibrationData.CPM = 0;
+                    calibrationData.openHandstroke = 1;
+                    char *ent = strtok(details,","); 
+                    if(ent) calibrationData.bellNumber = atoi(ent);
+                    ent = strtok(NULL,",");
+                    calibrationData.CPM = atof(ent);
+                    ent = strtok(NULL,",");
+                    calibrationData.openHandstroke = atof(ent);
+                    ent = strtok(NULL,",");
+                    calibrationData.fakeTimefromBDC = atoi(ent); // if "Auto" is sent then that results in zero here
+                    if(calibrationData.fakeTimefromBDC == 0){
+                        calibrationData.faked = 1;
+                    } else {
+                        calibrationData.faked = 0;
+                    }
+                }
+                continue;
+            }
+
             if(strcmp("STRT:", command) == 0) {
-                if((calibrationData.torn < 2) || (calibrationData.gravityCalibrationState != 4)){
+                if((calibrationData.torn < 3) || (calibrationData.gravityCalibrationState != 4)){
                     fprintf(stderr, "Still calibrating...\n");
                     printf("ESTR:\n");
                     printf("STPD:\n");                    
@@ -403,6 +417,8 @@ int main(int argc, char const *argv[]){
                     continue;
                 }
                 OUT_COUNT = 0;
+                calibrationData.lastStrikeCount = 0;
+                calibrationData.lastBDC = 0;
                 startRun();
                 continue;
             }
@@ -443,6 +459,7 @@ int main(int argc, char const *argv[]){
                         }
                         READ_OUTBUF_COUNT += sprintf(&READ_OUTBUF[READ_OUTBUF_COUNT],"DATA:%s",READ_OUTBUF_LINE);
                         counter += 1;
+                        if((counter % 50) == 0) pushData(); // collect data from FIFO whilst doing this
                     }
                     if(READ_OUTBUF_COUNT != 0) printf("%s\n",READ_OUTBUF);
                     printf("LFIN:%d\n", counter);
@@ -471,6 +488,7 @@ void doCalibration(void){
         writeRegister(ICM20689_USER_CTRL,0x15); // reset FIFO
         usleep(1000);
         writeRegister(ICM20689_USER_CTRL,0x50);
+        return;
     }
 
     if(FIFOcount < 48) return;
@@ -480,7 +498,7 @@ void doCalibration(void){
         angularVelocity = pullAndTransform();
         switch (calibrationData.gravityCalibrationState) {
             case 0:
-                if(calibrationData.stable == 1 && calibrationData.torn == 2){ // bell is stable and zeroed
+                if(calibrationData.stable == 1 && calibrationData.torn == 3){ // bell is stable and zeroed
                     calibrationData.gravityCalibrationState = 1;
                     for(int i = 0; i< BUFFERSIZE; ++i){ // initialise with dummy data for savgol alignment
                         rateBuffer[i] = 0;
@@ -492,7 +510,7 @@ void doCalibration(void){
                 }
                 break;
             case 1:
-                if(roll < -140.0 || roll > +140.0){ // bell now high enough to start accumulating gravity calibration data
+                if((roll-calibrationData.tareValue) < -140.0 || (roll-calibrationData.tareValue) > +140.0){ // bell now high enough to start accumulating gravity calibration data
                     calibrationData.gravityCalibrationState = 2;
                 }
                 rateBuffer[head] = angularVelocity;
@@ -510,8 +528,10 @@ void doCalibration(void){
                 available += 1;
                 if(available < PUSHBATCH + SAVGOLLENGTH) break;
                 for(int pushcounter = available; pushcounter > SAVGOLLENGTH; --pushcounter){
-                    if((angleBuffer[tail] < 300 && angleBuffer[tail] > 270) ||
-                        (angleBuffer[tail] < 90 && angleBuffer[tail] > 60)){
+                    // Record only a range of angles as the bell is being pulled up.  See calculateError() for justification  
+                    // At this stage we don't know which is handstroke and which is backstroke so record both sides and both directions.  
+                    if((angleBuffer[tail] < 275 && angleBuffer[tail] > 260) ||
+                        (angleBuffer[tail] < 100 && angleBuffer[tail] > 85)){
                         if(calibrationData.gravityDataCount < 8000){
                             calibrationData.gravityData[calibrationData.gravityDataCount*3] = angleBuffer[tail];
                             calibrationData.gravityData[(calibrationData.gravityDataCount*3)+1] = rateBuffer[tail];
@@ -524,20 +544,21 @@ void doCalibration(void){
                 }
                 break;
             case 3:
-                if(roll < 0) {  // work out which way the bell rose and adjust accordingly
-                    for (unsigned int j = 0; j < calibrationData.gravityDataCount; ++j){ // now we know which way the bell was rung up, adjust data.
+                if((roll-calibrationData.tareValue) < 0.0) {  // Work out which way the bell rose and adjust accordingly (we now know which is handstroke and backstroke)
+                    for (unsigned int j = 0; j < calibrationData.gravityDataCount; ++j){ 
                         calibrationData.gravityData[j*3] = 360.0-calibrationData.gravityData[j*3]; // swap angle
                         calibrationData.gravityData[(j*3)+1] *= -1; // swap rate
                         calibrationData.gravityData[(j*3)+2] *= -1; // flip accn
-                        calibrationData.wayUp = -1;
                     }
+                    ///////// temporary
+                    calibrationData.wayup = -1;
                 }
                 calibrationData.gravityValue = 0;
                 for(int guessLog = 14; guessLog >= 0; --guessLog){
                     if(calculateError(calibrationData.gravityValue + pow(2,guessLog)) < 0) calibrationData.gravityValue += pow(2,guessLog);
                 }
                 calibrationData.gravityCalibrationState = 4;
-//////////////////////////////////                free(calibrationData.gravityData);
+ ///////               if(calibrationData.gravityData) {free(calibrationData.gravityData); calibrationData.gravityData = NULL;}
                 FILE *fdGravity;
                 fdGravity = fopen("/tmp/BBgravity","w");
                 if(fdGravity != NULL) {
@@ -579,8 +600,9 @@ void pushData(void){
     static char remote_outbuf[4000]; // not necessary to be static as this buffer is cleared before function exits
     int remote_count = 0;
     static float accn = 0;
-    static float nudgeAngle=0;  // delete this and code below if not needed
-    static int nudgeCount =0;
+    static float nudgeAngle= 0;  // delete this and code below if not needed
+    static int nudgeCount = 0;
+    static int switchCount = 0;
     float taccn;
 
     pullData();
@@ -591,7 +613,7 @@ void pushData(void){
     // I calculate angular accelerations from the rates reported by gyro using a Savitsky Golay
     // filter set to differentiate.  Optimal filter length determined by experiment.
     // Need to have at least SAVGOLLENGTH samples ready in buffer but don't go through this unless there are also
-    // an additional PUSHBATCH samples available.
+    // an additional PUSHBATCH samples available (PUSHBATCH is the number of samples pushed to the browser in each batch).
     // Samples are pushed into the rateBuffer and angleBuffer circular buffers by pullData function.
     // available and tail variables are global and are used to keep track of circular buffer (as is the head
     // variable but that is updated by the pullData function)
@@ -600,32 +622,78 @@ void pushData(void){
     for(int counter = available; counter > SAVGOLLENGTH; --counter){
         // This bit allowed for slight angle drift.  It does this knowing that BDC = 180 degrees.
         // and that is the point when the bell's angular acceleration is zero.  Drift is so low
-        // that this is more trouble than it's worth.  Left in and reported in 
+        // that this is more trouble than it's worth.  Left in and reported but not used.
+        // Also testing shows BDC angle is slightly off that recorded when the bell is at rest.  Frictional effects?
+
+        // TODO: use this to signal when bell is at BDC(ish) so that strikes can be faked - someone might want to use this
+        // with tied clappers.  It would work by faking a strike a defined period of time after BDC.
+
+        float value = 0;
+        unsigned int data = 0;
 
         taccn = savGol(tail);
-        if(taccn * accn < 0.0 && angleBuffer[tail] > 170.0 && angleBuffer[tail] < 190.0  && nudgeCount == 0) {
-            unsigned int lastTail = (tail == 0) ? BUFFERSIZE-1 : tail -1;
+        unsigned int lastTail = (tail == 0) ? BUFFERSIZE-1 : tail -1;
+        if(taccn * accn <= 0.0 && angleBuffer[tail] > 170.0 && angleBuffer[tail] < 190.0  && nudgeCount == 0) {
             float nudgeFactor = accn /(accn - taccn);
             float angleDiffFrom180 = (angleBuffer[lastTail] + nudgeFactor*(angleBuffer[tail]-angleBuffer[lastTail])) - 180.0;
             nudgeAngle = angleDiffFrom180;
-            nudgeCount = 5;
+            nudgeCount = 10;
+            calibrationData.lastBDC = OUT_COUNT;
+            value = nudgeAngle; // report 180 degree point
+            data = 8;
         } 
-        if(nudgeCount != 0) nudgeCount -= 1; // don't do this twice in one half stroke */
-        accn = taccn - calibrationData.gravityValue*sin(angleBuffer[tail]*DEGREES_TO_RADIANS_MULTIPLIER);
-
+        if(nudgeCount != 0) nudgeCount -= 1; // don't do this twice in one half stroke - allows for a bit of noise
+        accn = taccn;
+        float raccn = accn - calibrationData.gravityValue*sin(angleBuffer[tail]*DEGREES_TO_RADIANS_MULTIPLIER);
+        
         unsigned int strike = dingDong(tail); // check to see if there has been a bell strike 1=ding(HS), 2=dong(BS) 0=nowt
 
-        sprintf(remote_outbuf_line, "LIVE:A:%+07.1f,R:%+07.1f,C:%+07.1f,D:%d\n", angleBuffer[tail], rateBuffer[tail], accn, strike);
+        if(rateBuffer[tail] * rateBuffer[lastTail] <= 0.0 && switchCount == 0 && OUT_COUNT > 10) { // detect when bell changes direction
+            data = 7;
+            value = OUT_COUNT;
+            switchCount = 5;
+        } 
+        if (switchCount != 0 && abs(rateBuffer[tail]) > 100.0) switchCount -= 1;
+
+        if(strike > 0 && strike <= 5){
+            data = strike;
+            value = (float)(OUT_COUNT - calibrationData.lastStrikeCount)/ODR; // number of seconds since last strike.
+            calibrationData.lastStrikeCount = OUT_COUNT;
+        }
+
+        if(OUT_COUNT == 0){ // first line of output will show the gravity calibration value
+            value = calibrationData.gravityValue;
+            data = 9;
+        }
+        
+        if(OUT_COUNT == 1){ // second line of output shows the requested number of bells
+            value = calibrationData.bellNumber;
+            data = 9;
+        }
+
+        if(OUT_COUNT == 2){ // third line of output will show the requested CPM
+            value = calibrationData.CPM;
+            data = 9;
+        }
+        
+        if(OUT_COUNT == 3){ // fourth line of output shows the requested open handstoke adjustment
+            value = calibrationData.openHandstroke;
+            data = 9;
+        }
+
+        if(OUT_COUNT == 4){ // fifth line of output shows the requested faked chime status (0=not faked)
+            value = calibrationData.fakeTimefromBDC;
+            data = 9;
+        }
+      
+        sprintf(remote_outbuf_line, "LIVE:A:%+6.1f,R:%+6.1f,C:%+7.1f,D:%d,V:%+10.2f\n", angleBuffer[tail], rateBuffer[tail], raccn, data, value);
         if (remote_count + strlen(remote_outbuf_line) > (sizeof remote_outbuf -2)) {
             printf("%s",remote_outbuf);
             remote_count = 0;
         }
+        
         remote_count += sprintf(&remote_outbuf[remote_count],remote_outbuf_line);     
-        if(OUT_COUNT == 0){
-            sprintf(local_outbuf_line,"A:%+07.1f,R:%+07.1f,C:%+07.1f,D:%d,N:%+07.1f,H:%+07.1f\n", angleBuffer[tail], rateBuffer[tail], accn, strike, nudgeAngle, calibrationData.gravityValue);
-        } else {
-            sprintf(local_outbuf_line,"A:%+07.1f,R:%+07.1f,C:%+07.1f,D:%d,N:%+07.1f\n", angleBuffer[tail], rateBuffer[tail], accn, strike, nudgeAngle);
-        }
+        sprintf(local_outbuf_line,"A:%+6.1f,R:%+6.1f,C:%+7.1f,D:%d,V:%+10.2f\n", angleBuffer[tail], rateBuffer[tail], raccn, data, value);
         if (local_count + strlen(local_outbuf_line) > (sizeof local_outbuf -2)) {
             fputs(local_outbuf, fd_write_out);
             fflush(fd_write_out);
@@ -656,6 +724,7 @@ void pullData(void){
  
         //restart FIFO - keep i2c disabled
         writeRegister(ICM20689_USER_CTRL,0x50);
+        return;
     }
 
     if(count < 48) return;
@@ -711,7 +780,8 @@ float pullAndTransform(){
     // derived from last of these samples.
     for(int i = 0; i < 4; ++i){ 
         readFIFO(fifoData);
-        // used for bias compensation calculation
+        
+        // get average gyro rates - used for dynamic bias compensation calculation
         for(int i = 0; i < 3; ++i){
             averages[i] += fifoData[3+i];
         }
@@ -725,12 +795,13 @@ float pullAndTransform(){
         fifoData[5] -= calibrationData.gyroBiasZ;
 
         // used for bias compensation calculation, checks to see if bell is at rest
-        // by recording a peak gyro movement over the measurement period (5000 samples = 10 secs)
+        // by recording a peak gyro movement over the measurement period (4000 samples = 8 secs)
         for(int i = 0; i < 3; ++i){
             if(abs(fifoData[3+i]) > peaks[i]) peaks[i] = abs(fifoData[3+i]);
+            if(peaks[i] > 2.1) calibrationData.stable = 0;
         }
 
-        // transform data using transform matrix
+        // transform data using transform matrix (from imu_tk and collected from Arduino via setup function)
         fifoData[0] = fifoData[0]*calibrationData.accTransformMatrix[0]
                     + fifoData[1]*calibrationData.accTransformMatrix[1]
                     + fifoData[2]*calibrationData.accTransformMatrix[2];
@@ -756,20 +827,26 @@ float pullAndTransform(){
                     + fifoData[5]*calibrationData.gyroTransformMatrix[8];
 
         count +=1;
-        if((count % 2500) == 0 && calibrationData.torn < 2) printf("EWAI:\n");  // sends signal to browser to indicate that the sensor is still calibrating zero
+        if((count % 2500) == 0 && calibrationData.torn < 3) printf("EWAI:\n");  // sends signal to browser to indicate that the sensor is still calibrating zero
         if((count % 2500) == 0 && calibrationData.gravityCalibrationState == 1) printf("EPUL:\n");  // sends signal to browser to indicate that bell needs to be pulled up
         if((count % 2500) == 0 && calibrationData.gravityCalibrationState == 2) printf("ECAL:\n");  // sends signal to browser to indicate that the bell is high enough to start gravity calibration
 
-        if((count % 5000) == 0){ // check bias once every 10 seconds
-            for(int i = 0; i < 3; ++i) averages[i] /= 5000.0;
-            if(peaks[0] < 1.4 && peaks[1] < 1.4 && peaks[2] < 1.4){  // no peaks in gyro rate so can take the last 10 seconds as stationary
-                calibrationData.gyroBiasX = averages[0];  // adjust biasses
-                calibrationData.gyroBiasY = averages[1];
-                calibrationData.gyroBiasZ = averages[2];
+        if((count % 4000) == 0){ // check bias every 8 seconds
+            if(peaks[0] < 2.1 && peaks[1] < 2.1 && peaks[2] < 2.1){  // no peaks in gyro rate so can take the last 8 seconds as stationary
+                calibrationData.gyroBiasX = averages[0]/4000.0;  // adjust biasses
+                calibrationData.gyroBiasY = averages[1]/4000.0;
+                calibrationData.gyroBiasZ = averages[2]/4000.0;
                 calibrationData.stable = 1; // flag that bell is stable
-                if (calibrationData.torn < 2 && abs(roll) < 20.0) { // if bell is down (or within 20 degrees of vertical) take that as the tare value
+                // Initial (bell down) gyro calibration is done in four stages (each lasting 8 seconds). 
+                // First, measure biasses. 
+                // Second, apply measured biasses.
+                // Third, a further period to allow the readings to settle
+                // Fourth, take "zero" tare value and save.  
+                // The measured angles take a few seconds to settle down once the biasses are applied, hence the third stage.                  
+                
+                if (calibrationData.torn < 3 && abs(roll) < 20.0) { // if bell is down (or within 20 degrees of vertical) take that as the tare value
                     calibrationData.torn +=1;
-                    if (calibrationData.torn == 2) {
+                    if (calibrationData.torn == 3) {
                         calibrationData.tareValue = roll;
                         FILE *fdTare;
                         fdTare = fopen("/tmp/BBtare","w");
@@ -808,7 +885,11 @@ float calculateError(float guess){
     float count = 0.0;
     float error = 0.0;
     for(unsigned int i = 0; i < calibrationData.gravityDataCount; ++i){
-        if(calibrationData.gravityData[(i*3)] < 300 && calibrationData.gravityData[(i*3)] > 260 && calibrationData.gravityData[(i*3)+1] < 0){ // only calculate gravity effect going down at backstroke because of fewer other effects such as vibration from ring and switch of direction caused by pulley/garter hole interaction
+        // Only calculate gravity effect going up at backstroke because of fewer other effects such as vibration from strike and pulley/garter hole interaction.
+        // Because this is intended to be used as the bell is being pulled up - best to do measurement when bell is rising - the ringer could be pulling quite
+        // hard as the bell is falling (in order to get the bell up) and that skews the measurement.
+        // Measure between angles 260 and 275 as we need to avoid the strike (could be as early as 280 degrees on light bells) 
+        if(calibrationData.gravityData[(i*3)] < 275 && calibrationData.gravityData[(i*3)] > 260 && calibrationData.gravityData[(i*3)+1] > 0){ 
             count += 1;
             error += -guess*sin(calibrationData.gravityData[(i*3)]*DEGREES_TO_RADIANS_MULTIPLIER) + calibrationData.gravityData[(i*3)+2];
         }
@@ -822,11 +903,43 @@ float calculateError(float guess){
     return error;
 }
 
+// This function works out when the bell has been struck by the clapper
+// The data is passed to the browser which works out inter-strike timings.
+// Quite a a bit of experimentation here.  The function works out a base level
+// volatility (rate of change of acceleration) of the bell system and when 
+// this jumps suddenly (by 1.7x), a strike is recorded.
+// Tested on heavy and light bells and produces sane and consistent results +- 20ms or so
+// averging these could produce a half-decent odd-struckness meter.
+// Need to test on plain bearing bells
+
 unsigned int dingDong(unsigned int currentPosition){
     static int lastStrike = 2; // 2 = last chime was at backstroke, 1= last chime at handstroke 
     static float rollingValues[5] = {8,8,8,8,8};
     static unsigned int rollingPosition = 0;
     static float baseSD = 0.0; 
+/*    
+    if(OUT_COUNT == 0){
+        calibrationData.dingTimeFromBDC = 0.0;
+        calibrationData.dongTimeFromBDC = 0.0;
+        calibrationData.dingAngleFromBDC = 0.0;
+        calibrationData.dongAngleFromBDC = 0.0;
+        calibrationData.dingNumber = 0;
+        calibrationData.dongNumber = 0;
+    }
+*/ 
+    if(calibrationData.faked){ // doing faked chimes (eg clapper tied)
+        if(((currentPosition - calibrationData.lastBDC)/ODR) > (calibrationData.fakeTimefromBDC/1000.0)){
+            if((lastStrike == 1) && (angleBuffer[currentPosition] < 160) && (rateBuffer[currentPosition] < -20)){
+                lastStrike = 2;
+                return(2);
+            }
+            if((lastStrike == 2) && (angleBuffer[currentPosition] > 200) && (rateBuffer[currentPosition] > 20)){
+                lastStrike = 1;
+                return(1);
+            }
+        }
+        return(0);
+    }
  
 // savgol_coeffs(5,2,deriv=2,use="dot")
     static float dingDongCoefficients[] = { 0.28571429, -0.14285714, -0.28571429, -0.14285714,  0.28571429 };
@@ -838,6 +951,7 @@ unsigned int dingDong(unsigned int currentPosition){
     for(int i = 0; i < 5; ++i){
         savGolResult += dingDongCoefficients[i] * rateBuffer[(windowStartPosition +i) % BUFFERSIZE];
     }
+
     savGolResult *= 50;
     
     rollingValues[rollingPosition] = savGolResult;
@@ -850,18 +964,30 @@ unsigned int dingDong(unsigned int currentPosition){
     
     if((lastStrike == 1) && (SD > 1.7*baseSD) && (angleBuffer[currentPosition] < 70) && (rateBuffer[currentPosition] < 0)){
         lastStrike = 2;
+//        calibrationData.dongNumber += 1;
+//        calibrationData.dongTimeFromBDC += (OUT_COUNT - calibrationData.lastBDC)*125/1000.0;
+//        calibrationData.dongTimeFromBDC /= calibrationData.dongNumber;
+//        calibrationData.dongAngleFromBDC += abs(roll);
+//        calibrationData.dongAngleFromBDC /= calibrationData.dongNumber;
+        calibrationData.lastStrikeCount = OUT_COUNT;
 //        printf("DONG\n");
         return(2);
     } else if((lastStrike == 2) && (SD > 1.7*baseSD) && (angleBuffer[currentPosition] > 290) && (rateBuffer[currentPosition] > 0)) {
         lastStrike = 1;
+//        calibrationData.dingNumber += 1;
+//        calibrationData.dingTimeFromBDC += (OUT_COUNT - calibrationData.lastBDC)*125/1000.0;
+//        calibrationData.dingTimeFromBDC /= calibrationData.dingNumber;
+//        calibrationData.dingAngleFromBDC += abs(roll);
+//        calibrationData.dingAngleFromBDC /= calibrationData.dingNumber;
+        calibrationData.lastStrikeCount = OUT_COUNT;
 //        printf("DING\n");
         return(1);
     } else if ((lastStrike == 1) && (angleBuffer[currentPosition] < 40) && (rateBuffer[currentPosition] < 0)){
         lastStrike = 2;
-        return(4); // fake a strike
+        return(4); // force a strike because not detected
     } else if ((lastStrike == 2) && (angleBuffer[currentPosition] > 320) && (rateBuffer[currentPosition] > 0)){
         lastStrike = 1;
-        return(3); // fake a strike
+        return(3); // force a strike because not detected
     } 
     return(0);
 }
@@ -922,6 +1048,32 @@ void calculate(float gx, float gy, float gz, float ax, float ay, float az, float
     roll = RADIANS_TO_DEGREES_MULTIPLIER * atan2(q0*q1 + q2*q3, 0.5 - q1*q1 - q2*q2);
     pitch = RADIANS_TO_DEGREES_MULTIPLIER * asin(-2.0 * (q1*q3 - q0*q2));
     yaw = RADIANS_TO_DEGREES_MULTIPLIER * atan2(q1*q2 + q0*q3, 0.5 - q2*q2 - q3*q3);
+}
+
+void getSavedData(){
+    FILE *fdTare;
+    char linein[50];
+    fdTare = fopen("/tmp/BBtare","r");
+    if(fdTare != NULL) {
+        if (fgets(linein, sizeof(linein), fdTare) != NULL) {
+            calibrationData.tareValue = atof(linein);
+            calibrationData.torn = 3;
+        }
+        fclose(fdTare);
+    }
+
+    FILE *fdGravity;
+    fdGravity = fopen("/tmp/BBgravity","r");
+    if(fdGravity != NULL) {
+        if (fgets(linein, sizeof(linein), fdGravity) != NULL) {
+            calibrationData.gravityValue = atof(linein);
+            calibrationData.gravityCalibrationState = 4;
+        }
+        fclose(fdGravity);
+    } else {
+        if(!calibrationData.gravityData) calibrationData.gravityData = (float *)malloc(sizeof(float) * 8000 * 3);
+    }
+
 }
 
 void setup(void){	

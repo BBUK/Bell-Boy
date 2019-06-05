@@ -46,7 +46,6 @@ var posBS1 = 0;
 var posCB = 0;  // position on canvas of bell (and timers)
 var CBwidth = 64; // width of bell on canvas
 var BDwidth = 0; // width of individual stroke sections on canvas
-var radius = 0;
 
 var strokeTimer=0; // used for time displays under animated bell
 
@@ -61,8 +60,8 @@ var ATbottomMargin=25; // pixels at bottom of AT canvas
 var ATtopMargin = 25; // pixels at top of AT canvas
 //var forceColours = [ "#0000FF","#0A0AFF","#1414FF","#1F1FFF","#2929FF","#3333FF","#3D3DFF","#4747FF","#5252FF","#5C5CFF","#6666FF","#7070FF","#7A7AFF","#8585FF","#8F8FFF","#9999FF","#A3A3FF"];
 var angleColours = [ "#E01F1F","#E22C2C","#E43A3A","#E64747","#E85454","#EA6262","#EB6F6F","#ED7D7D","#EF8A8A","#F19898","#9898F1","#8A8AEF","#7D7DED","#6F6FEB","#6262EA","#5454E8","#4747E6","#3A3AE4","#2c2cE2","#1F1FE0"];
-var ATstepWidth = 80;
-var ATbarWidth = 30;
+var ATstepWidth = 30;
+var ATbarWidth = 30; // not needed
 
 var oldBellAngle = 0;
 var wsOpened = false;
@@ -84,6 +83,13 @@ var currentPlaybackPosition = 1;
 var playintervalID = null;
 var statusintervalID = null;
 var liveintervalID = null;
+
+var changeInterval = null;
+var CPM = 31.0;
+var changeStep = null;
+var openHandstroke = 1.0;
+
+var gravityValue = 0;
 
 var currentStatus = 0;
 var DOWNLOADINGFILE=1;
@@ -107,24 +113,23 @@ var WOBBLINGATSTAND = 65536;
 var targetAngleHand=null;
 var targetAngleBack=null;
 
-var calibrationValue=null;
-var TcalibrationValue=null;
-
 var currentSwingDisplayed=null;
 var TcurrentSwingDisplayed=null;
 
 var sample = [];
+var ringTimes = [];
+var switchPoints = [];
 var template = [];
+var templateRingTimes = [];
+var templateSwitchPoints = [];
 
 var swingStarts = [];
-//var halfSwingStarts=[];
 var TswingStarts = [];
-//var ThalfSwingStarts=[];
 
 var averagePullStrength=[];
-//var halfAveragePullStrength=[];
 var TaveragePullStrength=[];
-//var ThalfAveragePullStrength=[];
+
+var fileList=[];
 
 ws = new WebSocket("ws://" + wsHost);
 
@@ -152,12 +157,22 @@ for (var i=0; i < ROIRanges.length; i++) {
 document.getElementById("zoomSelect").selectedIndex = currentROI.toString();
 
 document.getElementById("bellsSelect").options.length = 0;
-for (var i=2; i<13; i++) {
+for (var i=3; i<13; i++) {
     var option = document.createElement("option");
-    option.text=i.toString()
+    option.text=i.toString();
     document.getElementById("bellsSelect").add(option);
 }
-document.getElementById("bellsSelect").selectedIndex = 4;
+document.getElementById("bellsSelect").selectedIndex = 3; // default number of bells = 6 
+
+var option = document.createElement("option");
+option.text="Auto";
+document.getElementById("chimeSelect").add(option);
+for (var i=250; i < 500; i += 20) {
+    var option = document.createElement("option");
+    option.text=i.toString();
+    document.getElementById("chimeSelect").add(option);
+}
+document.getElementById("chimeSelect").selectedIndex = 0;
 
 document.getElementById("speedSelect").options.length = 0;
 for (var i=0; i < playbackRanges.length; i++) {
@@ -183,6 +198,7 @@ scaleValue=parseFloat(scales[document.getElementById("scaleSelect").selectedInde
 ws.onopen = function(){
     wsOpened=true;
     setStatus("Link open");
+    fileList=[];
     document.getElementById("openSelect").options.length = 0;
     ws.send("FILE:");
     var d = new Date();
@@ -190,6 +206,7 @@ ws.onopen = function(){
     if (!nonLive){
         ws.send("DATE:" + parseInt(d.getTime()/1000));
         ws.send("SAMP:");
+        calculateTimings();
     }
 };
 
@@ -202,33 +219,105 @@ ws.onmessage = function (event) {
 
 function parseResult(dataBack) {
     if (dataBack.slice(0,5) == "FILE:"){
-        var option = document.createElement("option");
-        option.text=dataBack.slice(5);
-        document.getElementById("openSelect").add(option);
+        fileList[fileList.length] = dataBack.slice(5); 
         return;
     }
+
+    if (dataBack.slice(0,5) == "EFIL:"){
+        fileList.sort();
+        for(var i = 0; i<fileList.length; ++i){
+            var option = document.createElement("option");
+            option.text=fileList[i];
+            document.getElementById("openSelect").add(option);
+        }
+        fileList=[];
+        return;
+    }
+
     if (dataBack.slice(0,5) == "DATA:"){
         var sampArray = dataBack.split("DATA:");
-        var arrayLength = sampArray.length;
-        var added = 0;
-        var extracted = [];
-        for (var i = 0; i < arrayLength; i++) {
-            if (sampArray[i].length > 20) {   // have more checks for good data (sampArray[i].split[","].length >=3)
-                sample[sample.length] = extractData(sampArray[i]);    
-                added+=1;
+        for (var i = 0; i < sampArray.length; i++) {
+            if (sampArray[i].length < 20) continue; // have more checks for good data
+            var entries = sampArray[i].split(",");
+            sample[sample.length] = [parseFloat(entries[0].slice(2)), parseFloat(entries[1].slice(2)), parseFloat(entries[2].slice(2)), parseFloat(entries[3].slice(2)), parseFloat(entries[4].slice(2))];
+            var data = parseFloat(entries[3].slice(2));
+            if(data != 0){
+                var value = parseFloat(entries[4].slice(2));
+                if(data == 1 || data == 2) ringTimes[ringTimes.length] = [value,0.0];
+                if(data == 3 || data == 4) ringTimes[ringTimes.length] = [value,1.0]; // this signals that the strike was faked
+                if(data == 7) switchPoints[switchPoints.length] = value;
+                if(sample.length == 1) gravityValue = value;
+                if(sample.length == 2)  {
+                    if (value < 3) value = 3;
+                    if (value > 12) value = 12;
+                    document.getElementById("bellsSelect").selectedIndex = Math.round(value - 3);
+                    calculateTimings();
+                }
+                if(sample.length == 3) {
+                    if (value < 20) value = 20;
+                    if (value > 50) value = 50;
+                    CPM = Math.round(value);
+                    calculateTimings()
+                }
+                if(sample.length == 4) {
+                    openHandstroke = Math.round(value*10)/10;
+                    if(openHandstroke < 0.39) openHandstroke = 0.0;
+                    if(openHandstroke > 2.21) openHandstroke = 2.2;
+                    calculateTimings();
+                }
+                if(sample.length == 5){
+                    if(value < 250){
+                        document.getElementById("chimeSelect").selectedIndex = 0; // auto detection
+                    } else {
+                        document.getElementById("chimeSelect").selectedIndex = Math.round(1+((value-250)/20));
+                    }
+                }
+                // process other data values here if necessary
             }
         }
-        setStatus("Loaded: " + added.toString() + " samples. Now Have: " + sample.length.toString());
+        setStatus("Loaded: " + sample.length.toString());
         return;
     }
     
     if (dataBack.slice(0,5) == "LIVE:"){
-        if ((currentStatus & RECORDINGSESSION) == 0) { return; }  // server may push data after stopping
+        if ((currentStatus & RECORDINGSESSION) == 0) return;  // server may push data after stopping
         var sampArray = dataBack.split("LIVE:");
-        var arrayLength = sampArray.length;
-        for (var i = 0; i < arrayLength; i++) {
-            if (sampArray[i].length > 20) {   // have more checks for good data (sampArray[i].split[","].length >=3)
-                sample[sample.length] = extractData(sampArray[i]);    
+        for (var i = 0; i < sampArray.length; i++) {
+            if (sampArray[i].length < 20) continue; // have more checks for good data
+            var entries = sampArray[i].split(",");
+            sample[sample.length] = [parseFloat(entries[0].slice(2)), parseFloat(entries[1].slice(2)), parseFloat(entries[2].slice(2)), parseFloat(entries[3].slice(2)), parseFloat(entries[4].slice(2))];
+            var data = parseFloat(entries[3].slice(2));
+            if(data != 0){
+                var value = parseFloat(entries[4].slice(2));
+                if(data == 1 || data == 2) ringTimes[ringTimes.length] = [value,0.0]; // need to check if this is zero length
+                if(data == 3 || data == 4) ringTimes[ringTimes.length] = [value,1.0]; // this signals that the strike was faked
+                if(data == 7) switchPoints[switchPoints.length] = value;
+                if(sample.length == 1) gravityValue = value;
+                if(sample.length == 2)  {
+                    if (value < 3) value = 3;
+                    if (value > 12) value = 12;
+                    document.getElementById("bellsSelect").selectedIndex = Math.round(value - 3);
+                    calculateTimings();
+                }
+                if(sample.length == 3) {
+                    if (value < 20) value = 20;
+                    if (value > 50) value = 50;
+                    CPM = Math.round(value);
+                    calculateTimings()
+                }
+                if(sample.length == 4) {
+                    openHandstroke = Math.round(value*10)/10;
+                    if(openHandstroke < 0.39) openHandstroke = 0.0;
+                    if(openHandstroke > 2.21) openHandstroke = 2.2;
+                    calculateTimings();
+                }
+                if(sample.length == 5){
+                    if(value < 250){
+                        document.getElementById("chimeSelect").selectedIndex = 0; // auto detection
+                    } else {
+                        document.getElementById("chimeSelect").selectedIndex = Math.round(1+((value-250)/20));
+                    }
+                }
             }
         }
         return;
@@ -252,83 +341,30 @@ function parseResult(dataBack) {
         currentStatus |= SKIPMAIN;
         updateIcons();
         swingStarts=[];
-        var mixUpError = 0;
-//        halfSwingStarts=[];
-//        swingStarts[0] = 3; // ditch first couple of samples - could be 1 but meh
+        swingStarts[0] = 0;
         currentPlaybackPosition = 1;
         currentSwingDisplayed = null;
-        var i = null, j=null , k=null;
-        var arrayLength=sample.length;
-
-//        while (i < arrayLength && sample[i][0] < 180) i++;
-//        if (i == arrayLength) {
-//            setStatus("Loaded: " + sample.length.toString() + " samples. Should Have: " + dataBack.slice(5) + " No strokes found");
-//            return;
-//        }
-
-        for (j = 0; j < arrayLength; j++){
-            if (sample[j][0] > 50 && sample[j][0] < 70 && sample[j][1] > 0) { // this is point that bell is moving heathily down @ handstroke
-                k = j;
-                if (swingStarts.length != 0) {
-                    i = swingStarts[swingStarts.length-1]+1
-                } else {
-                    i=0;
-                }
-                while (k > i) {
-                    k--; // step back from healthily down point
-                    if (sample[k][1] <= 0.05 || k == 1){ // find point when bell is nearly stationary and define that (or start of session) as start of stroke
-                        if(swingStarts.length % 2 == 1) { mixUpError = 1; swingStarts[swingStarts.length] = k+1;} // yuk! a just in case should handstroke and backstroke get mixed up - shouldn't happen!
-                        swingStarts[swingStarts.length] = k+1;
-                        break;
-                    }
-                }
-                if (k == i) {
-                    if(mixUpError == 0){
-                        setStatus("Loaded: " + sample.length.toString() + " samples. Should Have: " + dataBack.slice(5) + " Funny swing found. Possible incorrect data. But " + swingStarts.length.toString() + " strokes found. " + swingStarts.toString());
-                    } else {
-                        setStatus("Loaded: " + sample.length.toString() + " samples. Should Have: " + dataBack.slice(5) + " Funny swing found with swing mixmatch.  Possible incorrect data. But " + swingStarts.length.toString() + " strokes found. " + swingStarts.toString());                        
-                    }
-                    calibrationValue = getWeighting();
-                    getAveragePullStrengths();
-                    return;
-                }
-                while (j < arrayLength && sample[j][0] < 190) j++;  // move forward through sample past BDC
+        var j=0;
+        var arrayLength = sample.length;
+        while (j < arrayLength && sample[j][0] < 90.0) j++;  // move forward through sample to next swing
+        for (; j < arrayLength; j++){
+            if (sample[j][0] < 90.0 && sample[j][1] < 0.0) {
+                swingStarts[swingStarts.length] = j;
+                while (j < arrayLength && sample[j][0] < 90.0) j++;  // move forward through sample to next swing
+                while (j < arrayLength && sample[j][0] >= 90.0) j++;
                 if (j == arrayLength ) break;
             }
-            if (sample[j][0] > 290 && sample[j][0] < 310 && sample[j][1] < 0) { // point where bell moving healthily down @ backstroke
-                k = j;
-                if (swingStarts.length != 0) {
-                    i = swingStarts[swingStarts.length-1]+1
-                } else {
-                    i = 0;
-                }
-                while (k > i) { // step back from healthily down point
-                    k--;
-                    if (sample[k][1] >= -0.05){ // find point when bell is nearly stationary and define that as start of half stroke
-                        if(swingStarts.length % 2 == 0) {mixUpError =1; swingStarts[swingStarts.length] = k+1;} // yuk! a just in case should handstroke and backstroke get mixed up - shouldn't happen!
-                        swingStarts[swingStarts.length] = k+1;
-                        break;
-                    }
-                }
-                if (k == i) {
-                    if(mixUpError == 0){
-                        setStatus("Loaded: " + sample.length.toString() + " samples. Should Have: " + dataBack.slice(5) + " Funny half swing found. Possible incorrect data. But " + swingStarts.length.toString() + " strokes found. " + swingStarts.toString());
-                    } else {
-                        setStatus("Loaded: " + sample.length.toString() + " samples. Should Have: " + dataBack.slice(5) + " Funny half swing found with swing mixmatch.  Possible incorrect data. But " + swingStarts.length.toString() + " strokes found. " + swingStarts.toString());                        
-                    }
-                    calibrationValue = getWeighting();
-                    getAveragePullStrengths();
-                    return;
-                }
-                while (j < arrayLength && sample[j][0] > 170) j++;
-            }
         }
-        if(mixUpError == 0){
+        if (switchPoints.length == 0 || sample[switchPoints[0]][0] > 180) switchPoints.unshift(0); // a "just in case" should start at stand not be detected
+        var k = 0;
+        for(j=0; j< ringTimes.length; ++j){
+            if(ringTimes[j][1] == 1.0) k += 1;
+        }
+        if(k==0){
             setStatus("Loaded: " + sample.length.toString() + " samples. Should Have: " + dataBack.slice(5) + ". " + swingStarts.length.toString() + " strokes found.");
         } else {
-            setStatus("Loaded: " + sample.length.toString() + " samples. Possible mix up found.  Should Have: " + dataBack.slice(5) + ". " + swingStarts.length.toString() + " strokes found.");
+            setStatus("Loaded: " + sample.length.toString() + " samples. Should Have: " + dataBack.slice(5) + ". " + swingStarts.length.toString() + " strokes found. " + k + " strikes faked.");
         }
-        calibrationValue = getWeighting();
         getAveragePullStrengths();
         document.getElementById("openSelect").options.length = 0;
         ws.send("FILE:");
@@ -446,14 +482,6 @@ ws.onclose = function(event){
 //                       DATA FUNCTIONS                       //
 ////////////////////////////////////////////////////////////////
 
-function extractData(datastring){
-    var entries = datastring.split(",");
-//    return [parseFloat(entries[0].slice(2)), parseFloat(entries[1].slice(2)), parseFloat(entries[2].slice(2)) * 4000.0];
-        return [parseFloat(entries[0].slice(2)), parseFloat(entries[1].slice(2)), parseFloat(entries[2].slice(2))];
-//    
-
-}
-
 function playbackSample(){
 //         playintervalID=setInterval(playbackSample,sampleInterval*(100/playbackRanges[currentPlaybackSpeed][1]));
 // sampleInterval*collectChunk*(100/playbackRanges[currentPlaybackSpeed][1])
@@ -474,58 +502,25 @@ function playbackSample(){
     }
 }
 
-// This function calculates the effect of gravity on the bell by varying the amplitude of a sine wave
-// and minimising the difference between the sine wave and recorded acceleration profile of the bell.
-// Uses a straightforward 14 bit binary search method. Calls calculateError().
-function getWeighting(){
-    var result = 0, guessLog;
-    if ((currentStatus & SESSIONLOADED) == 0) return;
-    for(guessLog = 14; guessLog >= 0; --guessLog){
-        if(calculateError(result + Math.pow(2,guessLog)) < 0) result += Math.pow(2,guessLog);
-    }
-    return result;
-}
-
-// This function calculates the difference (error) between a sine wave of amplitude "guess" and the
-// acceleration profile of the bell.  Called by getWeighting().
-function calculateError(guess){
-    var count = 0.0, error = 0.0;
-    var i = 0;
-    if(swingStarts.length > 1) i = swingStarts[1];
-    for(; i < sample.length; i++){
-        if(sample[i][0] < 300 && sample[i][0] > 270 && sample[i][1] < 0){ // only calculate gravity effect going down at backstroke because of fewer other effects such as vibration from ring and switch of direction caused by pulley/garter hole interaction
-            count += 1;
-            error += -guess*Math.sin(sample[i][0]*3.1416/180) + sample[i][2];
-        }
-        if(count > 4000) break; // should be enough
-    }
-    error /= count;
-    return error;
-}
-
 function getAveragePullStrengths(){
-    if(calibrationValue == null) {
-        getWeighting(); // should not happen as getweighting should always be called first - untidy getweighting should do this as well
-    }
     averagePullStrength=[];
-    halfAveragePullStrength=[];
     var totalPull = null;
     var i = null, j=null, k=null,m = null;
-    for (j=0; j<swingStarts.length; j++){
-        i=sample[swingStarts[j]][0]; // angle at direction change
-        for (k=swingStarts[j]; k>0 && (sample[k][0]-i) < 5 ;k--); // find point 5 degrees back from direction change
+    for (j=0; j<switchPoints.length; j++){
+        i=sample[switchPoints[j]][0]; // angle at direction change
+        for (k=switchPoints[j]; k>0 && Math.abs(sample[k][0] - i) < 5 ;k--); // find point 5 degrees back from direction change
         k++;
         totalPull=0;
         if(j % 2 == 0){ // handstroke pull
-            for (m=0;(k+m)<sample.length && (sample[k+m][0]-i) < 5; m++){ // add up accns to point 5 degrees forward from direction change
-                pull = sample[k+m][2] - calibrationValue*Math.sin(sample[k+m][0]*3.1416/180);
+            for (m=0;(k+m)<sample.length && (sample[k+m][0] - i) < 5; m++){ // add up accns to point 5 degrees forward from direction change
+                pull = sample[k+m][2];
                 if(pull < 25) continue;  // ignore stuff below noise floor
                 totalPull += pull;
             }
             averagePullStrength[averagePullStrength.length] = totalPull/m;
         } else { // backstroke pull
             for (m=0;(k+m)<sample.length && (i-sample[k+m][0]) < 5; m++){ // add up accns to point 5 degrees forward from direction change
-                pull = sample[k+m][2]- calibrationValue*Math.sin(sample[k+m][0]*3.1416/180);
+                pull = sample[k+m][2];
                 if(pull > -25) continue; 
                 totalPull += pull;
             }
@@ -535,7 +530,6 @@ function getAveragePullStrengths(){
 }
 
 function showLive(){
-//    ws.send("LDAT:"); // consider removing this line.
     var iterations = (sample.length-1) - currentPlaybackPosition;
     if (iterations < 5) return; // draw not fewer than 5 samples at a time
     drawSamples(currentPlaybackPosition,iterations);
@@ -566,18 +560,14 @@ function drawTimer(position, templated){
 
 function drawStroke(){
     if (currentSwingDisplayed == null) return;
-    var startpoint = swingStarts[currentSwingDisplayed *2];
-    if (currentSwingDisplayed != 0) {
-        for(; startpoint > 3; --startpoint) if (sample[startpoint][0] > 90) break; // view part of swing that is before start of handstroke pull
-    }
+    var startpoint = swingStarts[currentSwingDisplayed];
     var endpoint = 0;
-    if ((currentSwingDisplayed *2) > swingStarts.length -1) {
-        endpoint = sample.length - 3;
+    if(currentSwingDisplayed == swingStarts.length-1) {
+        endpoint = sample.length - 3
     } else {
-        for (endpoint = swingStarts[(currentSwingDisplayed*2)+1]; endpoint < sample.length -3; ++endpoint){
-            if (sample[endpoint][0] < 270) break;
-        }
+        endpoint = swingStarts[currentSwingDisplayed+1];
     }
+    
     drawSamples(startpoint,endpoint-startpoint);
     currentStatus &= ~(LASTHS1 | LASTBS1 | LASTHS2 | LASTBS2);
 
@@ -587,17 +577,15 @@ function drawStroke(){
     ctxBD.fillStyle = "white";
     var handstrokelength = 0.0;
     var backstrokelength = 0.0;
-    handstrokelength = (swingStarts[(currentSwingDisplayed * 2) + 1] - swingStarts[currentSwingDisplayed * 2]) * sampleInterval;  
-    if((currentSwingDisplayed *2) + 2 < swingStarts.length) {
-        backstrokelength = (swingStarts[(currentSwingDisplayed *2 ) + 2] - swingStarts[currentSwingDisplayed * 2] + 1) * sampleInterval;
-    }
+    handstrokelength = ringTimes[(currentSwingDisplayed * 2)];
+    backstrokelength = ringTimes[(currentSwingDisplayed * 2)+1];
     if(handstrokelength != 0.0){
         ctxBD.fillText("H " + handstrokelength.toFixed(2)+"s", 2*BDwidth + 32, ctxBD.canvas.height-20);
     }
     if(backstrokelength != 0.0){
         ctxBD.fillText("B " + backstrokelength.toFixed(2)+"s", 2*BDwidth + 32, ctxBD.canvas.height-10);
     }
- 
+// up to here 
     clearAT();
     var numberOnATdisplay = Math.ceil((1.0*ctxATt.canvas.width)/ATstepWidth);
     var offset = ((ctxATt.canvas.width/2.0 - ATstepWidth/2.0) % ATstepWidth) - ATstepWidth;
@@ -668,19 +656,19 @@ function drawStroke(){
 function TdrawStroke(){
     if (currentSwingDisplayed == null) return;
     if ((currentStatus & TEMPLATEDISPLAYED) == 0) return;
-    var startpoint = TswingStarts[TcurrentSwingDisplayed * 2];
-    if (TcurrentSwingDisplayed != 0) {
-        for(; startpoint > 3; --startpoint) if (template[startpoint][0] > 90) break;
-    }
+    var startpoint = TswingStarts[TcurrentSwingDisplayed];
     var endpoint = 0;
-    if ((TcurrentSwingDisplayed *2) > TswingStarts.length -1) {
-        endpoint = template.length - 3;
+    var endpoint = 0;
+    if(TcurrentSwingDisplayed == TswingStarts.length-1) {
+        endpoint = template.length - 3
     } else {
-        for (endpoint = TswingStarts[(TcurrentSwingDisplayed * 2) - 1]; endpoint < template.length -3; ++endpoint){
-            if (template[endpoint][0] < 270) break;
-        }
+        endpoint = TswingStarts[TcurrentSwingDisplayed+1];
     }
+
     drawSamplesOnTemplate(startpoint,endpoint-startpoint);
+
+// up to here
+
 
     ctxBD.clearRect(posCB+1, ctxBD.canvas.height-60, CBwidth-2, 20);
     ctxBD.font = "12px sans serif";
@@ -700,16 +688,39 @@ function TdrawStroke(){
     }
 }
 
+function calculateTimings(){
+    var numberOfBells = document.getElementById("bellsSelect").selectedIndex + 3;
+    changeInterval = 60.0/CPM;
+    changeStep = changeInterval/numberOfBells;
+    var pealTime = 0.0;
+    if(numberOfBells > 7){
+        pealTime = (changeInterval * 5000.0);
+    } else {
+        pealTime = (changeInterval * 5040.0);
+    }
+    var hours = Math.floor(pealTime/3600.0);
+    var minutes = Math.round((pealTime % 3600)/60.0);
+    document.getElementById("CPM").innerHTML=CPM.toFixed(1)+"&nbsp;";
+    document.getElementById("CPM").title = "Peal time: " + hours + ":" + minutes;
+    document.getElementById("OH").innerHTML=openHandstroke.toFixed(1)+"&nbsp;";
+    if(!nonLive){
+        ws.send("BELS:" + numberOfBells + "," + CPM + "," + openHandstroke.toFixed(1) + "," + document.getElementById("chimeSelect").options[document.getElementById("chimeSelect").selectedIndex].text); 
+    }
+}
+
 function drawSamples(position,iterations){
     var stepSize = (BDwidth * 1.0)/(ROIL-ROIU);
     for (var i = 0; i < iterations; i++){
         var dataEntryOld = sample[position + i -1].slice();
         var dataEntryCurrent = sample[position + i].slice();
         var dataEntryNext = sample[position + i + 1].slice();
-        if(calibrationValue != null){
-            dataEntryCurrent[2] -= calibrationValue*Math.sin(dataEntryCurrent[0]*3.1416/180);
+        if((currentStatus & RECORDINGSESSION) != 0 || (currentStatus & PLAYBACK) != 0 ) {
+            if(dataEntryCurrent[3] == 2) drawLiveTime(dataEntryCurrent[4],false,false);
+            if(dataEntryCurrent[3] == 4) drawLiveTime(dataEntryCurrent[4],false,true);
+            if(dataEntryCurrent[3] == 1) drawLiveTime(dataEntryCurrent[4],true,false);
+            if(dataEntryCurrent[3] == 3) drawLiveTime(dataEntryCurrent[4],true,true);
+            drawBell(180-dataEntryCurrent[0]);
         }
-        if((currentStatus & RECORDINGSESSION) != 0 || (currentStatus & PLAYBACK) != 0 ) drawBell(180-dataEntryCurrent[0]);
 //        drawAT(dataEntryCurrent[2]);
         if (dataEntryCurrent[0] > ROIU && dataEntryCurrent[0] < ROIL && dataEntryCurrent[1] >= 0) { // within ROI for HS1
 
@@ -722,11 +733,6 @@ function drawSamples(position,iterations){
                 continue; // for moment don't swap, just do nothing
             }
             if ((currentStatus & LASTHS1) == 0 ) { // clear highest part of this and previous ROI if this is the first time
-                if((currentStatus & WOBBLINGATSTAND) == 0){
-                    drawHSpower(dataEntryCurrent[2],dataEntryCurrent[0]); // and also draw power indicator if not wobbling
-                } else {
-                    currentStatus &= ~WOBBLINGATSTAND;
-                }
                 var pixelsFromROIL = (ROIL - startAngle) * stepSize;
                 ctxBD.clearRect(posBS2 + pixelsFromROIL, 14, 2 * (BDwidth - pixelsFromROIL), ctxBD.canvas.height - 14 - 25);
                 if ((currentStatus & LASTBS2) != 0 ) {
@@ -776,7 +782,6 @@ function drawSamples(position,iterations){
                 continue; // for moment don't swap, just do nothing
             }
             if ((currentStatus & LASTBS1) == 0 ) { // clear highest part of this and previous ROI if this is the first time
-                drawBSpower(dataEntryCurrent[2]*-1,360-dataEntryCurrent[0]);// and also draw power indicator
                 var pixelsFromROIL = (ROIL - startAngle) * stepSize;
                 ctxBD.clearRect(posHS2 + pixelsFromROIL, 14, 2 * (BDwidth - pixelsFromROIL), ctxBD.canvas.height - 14 - 25);
                 if ((currentStatus & LASTHS2) != 0 ) {
@@ -819,6 +824,94 @@ function drawSamples(position,iterations){
     }
 }
 
+function drawLiveTime(time, HS, faked){
+    currentATmargin += ATstepWidth;
+    if (currentATmargin >= ctxAT.canvas.width/2) currentATmargin -= ctxAT.canvas.width/2;
+    ctxAT.clearRect(currentATmargin-20                     ,0,ATstepWidth,ctxAT.canvas.height);
+    ctxAT.clearRect(currentATmargin-20+ctxAT.canvas.width/2,0,ATstepWidth,ctxAT.canvas.height);
+
+    var totalHeight = ctxAT.canvas.height-ATbottomMargin-ATtopMargin;
+    var range = (0.833*totalHeight)/5.0;  //range of +- 2.5 change "steps"
+
+    var position = 0.0;
+
+    if(HS) position = -range*(time - changeInterval + (openHandstroke*changeStep))/changeStep;
+    var overflow = 0;
+    if(position < -totalHeight/2.0){
+        overflow = 1;
+        position = -totalHeight/2.0;
+    }
+    if(position > totalHeight/2.0){
+        overflow = 1;
+        position = totalHeight/2.0
+    }
+
+    position += (ATtopMargin + totalHeight/2.0);
+
+    ctxAT.beginPath();
+
+    if(faked){
+        ctxAT.strokeStyle = "red";
+    } else {
+        ctxAT.strokeStyle = "white";
+    }
+
+    if(overflow){
+        ctxAT.strokeStyle = "yellow";
+    }
+
+    if(HS){
+        ctxAT.rect(currentATmargin-18, position-10, 18, 18);
+        ctxAT.moveTo(currentATmargin-18, position-10);
+        ctxAT.lineTo(currentATmargin, position+10);
+        ctxAT.moveTo(currentATmargin, position-10);
+        ctxAT.lineTo(currentATmargin-18, position+10);
+        ctxAT.moveTo(currentATmargin-20, position-6);
+        ctxAT.lineTo(currentATmargin-20, position+6);
+
+        ctxAT.rect(currentATmargin-18+ctxAT.canvas.width/2, position-10, 18, 18);
+        ctxAT.moveTo(currentATmargin-18+ctxAT.canvas.width/2, position-10);
+        ctxAT.lineTo(currentATmargin+ctxAT.canvas.width/2, position+10);
+        ctxAT.moveTo(currentATmargin+ctxAT.canvas.width/2, position-10);
+        ctxAT.lineTo(currentATmargin-18+ctxAT.canvas.width/2, position+10);
+        ctxAT.moveTo(currentATmargin-20+ctxAT.canvas.width/2, position-6);
+        ctxAT.lineTo(currentATmargin-20+ctxAT.canvas.width/2, position+6);
+    } else {
+        ctxAT.rect(currentATmargin-20, position-10, 18, 18);
+        ctxAT.moveTo(currentATmargin-20, position-10);
+        ctxAT.lineTo(currentATmargin-2, position+10);
+        ctxAT.moveTo(currentATmargin-2, position-10);
+        ctxAT.lineTo(currentATmargin-20, position+10);
+        ctxAT.moveTo(currentATmargin, position-6);
+        ctxAT.lineTo(currentATmargin, position+6);
+
+        ctxAT.rect(currentATmargin-20+ctxAT.canvas.width/2, position-10, 18, 18);
+        ctxAT.moveTo(currentATmargin-20+ctxAT.canvas.width/2, position-10);
+        ctxAT.lineTo(currentATmargin-2+ctxAT.canvas.width/2, position+10);
+        ctxAT.moveTo(currentATmargin-2+ctxAT.canvas.width/2, position-10);
+        ctxAT.lineTo(currentATmargin-20+ctxAT.canvas.width/2, position+10);
+        ctxAT.moveTo(currentATmargin+ctxAT.canvas.width/2, position-6);
+        ctxAT.lineTo(currentATmargin+ctxAT.canvas.width/2, position+6);
+    }
+/*
+    ctxAT.rect(currentATmargin-20, position-10, 20, 20);
+    ctxAT.moveTo(currentATmargin-20, position-10);
+    ctxAT.lineTo(currentATmargin, position+10);
+    ctxAT.moveTo(currentATmargin, position-10);
+    ctxAT.lineTo(currentATmargin-20, position+10);
+
+    ctxAT.rect(currentATmargin-20+ctxAT.canvas.width/2, position-10, 20, 20);
+    ctxAT.moveTo(currentATmargin-20+ctxAT.canvas.width/2, position-10);
+    ctxAT.lineTo(currentATmargin+ctxAT.canvas.width/2, position+10);
+    ctxAT.moveTo(currentATmargin+ctxAT.canvas.width/2, position-10);
+    ctxAT.lineTo(currentATmargin-20+ctxAT.canvas.width/2, position+10);
+
+*/  
+    ctxAT.stroke();
+
+    document.getElementById("canvasAT").style.marginLeft = (currentATmargin * -1) + "px";
+}
+
 function drawHSpower(accn,angle){
     var totalHeight = ctxAT.canvas.height-ATbottomMargin-ATtopMargin;
     var pixelsPerUnit = totalHeight/scaleValue;
@@ -830,8 +923,6 @@ function drawHSpower(accn,angle){
     currentATmargin += ATstepWidth;
     if (currentATmargin >= ctxAT.canvas.width/2) currentATmargin -= ctxAT.canvas.width/2;
 
-    ctxAT.clearRect(currentATmargin-10-ATstepWidth,0,ATstepWidth+20,ctxAT.canvas.height,0);
-    ctxAT.clearRect(currentATmargin-10-ATstepWidth+ctxAT.canvas.width/2,0,ATstepWidth+20,ctxAT.canvas.height);
  
     var angleColour = Math.round(angle + angleColours.length/2.0);
     
@@ -877,9 +968,6 @@ function drawSamplesOnTemplate(position,iterations){
         var dataEntryOld = template[position + i - 1].slice();
         var dataEntryCurrent = template[position + i].slice();
         var dataEntryNext = template[position + i + 1].slice();
-        if(TcalibrationValue != null){
-            dataEntryCurrent[2] -= TcalibrationValue*Math.sin(dataEntryCurrent[0]*3.1416/180);
-        }
         if (dataEntryCurrent[0] > ROIU && dataEntryCurrent[0] < ROIL && dataEntryCurrent[1] >= 0) { // within ROI for HS1
 
             if (dataEntryNext[0] >= ROIL) {
@@ -964,85 +1052,324 @@ function clearStatus() {
 }
 
 ////////////////////////////////////////////////////////////////
-//                    ICON CLICK FUNCTIONS                    //
+//                   BUTTON CLICK FUNCTIONS                   //
 ////////////////////////////////////////////////////////////////
 
 fileOpenButton.onclick = function() {
-    if ((currentStatus & DOWNLOADINGFILE) != 0) return;
-    if ((currentStatus & PLAYBACK) != 0) return;
-    if ((currentStatus & HELPDISPLAYED) != 0) return;
-    if ((currentStatus & RECORDINGSESSION) != 0) return;
+    if (currentStatus & DOWNLOADINGFILE) return;
+    if (currentStatus & PLAYBACK) return;
+    if (currentStatus & HELPDISPLAYED) return;
+    if (currentStatus & RECORDINGSESSION) return;
     var e = document.getElementById("openSelect");
     sample = [];
+    ringTimes = [];
+    switchPoints = [];
     ws.send("LOAD:" + e.options[e.selectedIndex].text);
     openModal.style.display = "none";
     currentStatus |= DOWNLOADINGFILE;
     currentStatus &= ~SESSIONLOADED;
     currentSwingDisplayed = null;
-    calibrationValue = null;
     clearBell();
     ctxBD.clearRect(posCB+1, ctxBD.canvas.height-30, CBwidth-2, 20); // clear existing timers
     updateIcons();
-}
+};
 
 calibButton.onclick = function() {
     if (nonLive){
         alert("Not implemented for this demo");
         return;
     }
-    if ((currentStatus & DOWNLOADINGFILE) != 0) return;
-    if ((currentStatus & PLAYBACK) != 0) return;
-    if ((currentStatus & HELPDISPLAYED) != 0) return;
-    if ((currentStatus & RECORDINGSESSION) != 0) return;
-    var elem = document.getElementById("calibButton");
-    if (elem.innerText == "Start"){
-        elem.innerText = "Stop";
-        ws.send("EYEC:");
-    } else {
-        elem.innerText = "Start";
-        ws.send("STEC:");
+    if (currentStatus & DOWNLOADINGFILE) return;
+    if (currentStatus & PLAYBACK) return;
+    if (currentStatus & HELPDISPLAYED) return;
+    if (currentStatus & RECORDINGSESSION) return;
+    demoModal.style.display = "block";
+    settingsModal.style.display = "none";
+    ws.send("EYEC:");
+};
+
+plusCPMButton.onclick = function(){
+    if (currentStatus & DOWNLOADINGFILE) return;
+    if (currentStatus & PLAYBACK) return;
+    if (currentStatus & HELPDISPLAYED) return;
+    if (currentStatus & RECORDINGSESSION) return;
+    if(CPM < 50) CPM += 0.5;
+    calculateTimings();
+}
+
+minusCPMButton.onclick = function(){
+    if (currentStatus & DOWNLOADINGFILE) return;
+    if (currentStatus & PLAYBACK) return;
+    if (currentStatus & HELPDISPLAYED) return;
+    if (currentStatus & RECORDINGSESSION) return;
+    if(CPM > 20) CPM -= 0.5;
+    calculateTimings();
+};
+
+plusOHButton.onclick = function(){
+    if (currentStatus & DOWNLOADINGFILE) return;
+    if (currentStatus & PLAYBACK) return;
+    if (currentStatus & HELPDISPLAYED) return;
+    if (currentStatus & RECORDINGSESSION) return;
+    if (openHandstroke < 2.21) openHandstroke += 0.1;
+    if (openHandstroke > 0.09 && openHandstroke < 0.39) openHandstroke = 0.4;
+    calculateTimings();
+};
+
+minusOHButton.onclick = function(){
+    if (currentStatus & DOWNLOADINGFILE) return;
+    if (currentStatus & PLAYBACK) return;
+    if (currentStatus & HELPDISPLAYED) return;
+    if (currentStatus & RECORDINGSESSION) return;
+    if (openHandstroke > 0.09) openHandstroke -= 0.1;
+    if (openHandstroke < 0.39) openHandstroke = 0.0;
+    calculateTimings();
+};
+
+diagnosticsButton.onclick = function(){
+    if (currentStatus & DOWNLOADINGFILE) return;
+    if (currentStatus & PLAYBACK) return;
+    if (currentStatus & HELPDISPLAYED) return;
+    if (currentStatus & RECORDINGSESSION) return;
+    if (!(currentStatus & SESSIONLOADED)) {
+        setStatus("A session must be loaded for diagnostics.");
+        return;
+    }
+    settingsModal.style.display = "none";
+    diagnosticsModal.style.display = "block";
+
+    fillDiagnosticsModal();
+
+    if (!wsOpened){
+        ws.send("CLTA:"); 
     }
 };
 
+document.getElementById('diagHand').onclick = function(){
+    fillDiagnosticsModal();
+};
+
+document.getElementById('diagBack').onclick = function(){
+    fillDiagnosticsModal();
+};
+
+function fillDiagnosticsModal(){
+    var diagnosticsCanvas = document.getElementById("canvasDiagnostics");
+    var ctxDiagnostics = diagnosticsCanvas.getContext("2d");
+    var i;
+    diagnosticsCanvas.style.width= "800 px";
+    diagnosticsCanvas.style.height="325 px";
+    diagnosticsCanvas.width= 800;
+    diagnosticsCanvas.height=325;
+    ctxDiagnostics.canvas.width=800;
+    ctxDiagnostics.canvas.height=325;
+    ctxDiagnostics.clearRect(0, 0, ctxDiagnostics.canvas.width, ctxDiagnostics.canvas.height);
+
+    var midHeight = 150;
+
+    ctxDiagnostics.beginPath();
+    ctxDiagnostics.strokeStyle = "blue";
+
+    if(document.getElementById('diagHand').checked && document.getElementById('diagBack').checked){
+        ctxDiagnostics.moveTo(40+(sample[0][0])*2,-(sample[0][2])*0.5+midHeight);
+        for(i=1;i<sample.length;++i){
+            ctxDiagnostics.lineTo(40+(sample[i][0])*2,-(sample[i][2])*0.5+midHeight);
+        }
+    }
+
+    if(document.getElementById('diagHand').checked && !document.getElementById('diagBack').checked){
+        i=0;
+        while(i<sample.length){
+            for(; i<sample.length && sample[i][1] <= 0; ++i);
+            if(i == sample.length) break;
+            ctxDiagnostics.moveTo(40+(sample[i][0])*2,-(sample[i][2])*0.5+midHeight);
+            for(; i<sample.length && sample[i][1] > 0; ++i) ctxDiagnostics.lineTo(40+(sample[i][0])*2,-(sample[i][2])*0.5+midHeight);
+        }
+    }
+
+    if(!document.getElementById('diagHand').checked && document.getElementById('diagBack').checked){
+        i=0;
+        while(i<sample.length){
+            for(; i<sample.length && sample[i][1] >= 0; ++i);
+            if(i == sample.length) break;
+            ctxDiagnostics.moveTo(40+(sample[i][0])*2,-(sample[i][2])*0.5+midHeight);
+            for(; i<sample.length && sample[i][1] < 0; ++i) ctxDiagnostics.lineTo(40+(sample[i][0])*2,-(sample[i][2])*0.5+midHeight);
+        }
+    }
+
+    ctxDiagnostics.stroke();
+
+    for(i=0;i<sample.length;++i){
+        if(sample[i][3] == 1 || sample[i][4] == 3){
+            if(!document.getElementById('diagHand').checked) continue;
+            ctxDiagnostics.beginPath();
+            if(sample[i][3] == 1){
+                ctxDiagnostics.strokeStyle = "green";
+            } else {
+                ctxDiagnostics.strokeStyle = "red";
+            }
+            ctxDiagnostics.moveTo(40+(sample[i][0])*2,180);
+            ctxDiagnostics.lineTo(35+(sample[i][0])*2,175);
+            ctxDiagnostics.lineTo(45+(sample[i][0])*2,175);
+            ctxDiagnostics.lineTo(40+(sample[i][0])*2,180);
+            ctxDiagnostics.stroke();
+        } else if(sample[i][3] == 2 || sample[i][4] == 4){
+            if(!document.getElementById('diagBack').checked) continue;
+            ctxDiagnostics.beginPath();
+            if(sample[i][3] == 2){
+                ctxDiagnostics.strokeStyle = "green";
+            } else {
+                ctxDiagnostics.strokeStyle = "red";
+            }
+            ctxDiagnostics.moveTo(40+(sample[i][0])*2,120);
+            ctxDiagnostics.lineTo(35+(sample[i][0])*2,125);
+            ctxDiagnostics.lineTo(45+(sample[i][0])*2,125);
+            ctxDiagnostics.lineTo(40+(sample[i][0])*2,120);
+            ctxDiagnostics.stroke();
+        }
+    }
+
+    ctxDiagnostics.beginPath();
+    ctxDiagnostics.strokeStyle = "black";
+    ctxDiagnostics.rect(0, 0, 800, 300);
+    ctxDiagnostics.moveTo(40, 0);
+    ctxDiagnostics.lineTo(40, 310);
+    ctxDiagnostics.moveTo(400, 0);
+    ctxDiagnostics.lineTo(400, 310);
+    ctxDiagnostics.moveTo(760, 0);
+    ctxDiagnostics.lineTo(760, 310);
+    ctxDiagnostics.moveTo(0, 150);
+    ctxDiagnostics.lineTo(799, 150);
+    ctxDiagnostics.stroke();
+    ctxDiagnostics.font = "12px sans serif";
+    ctxDiagnostics.fillStyle = "black";
+    ctxDiagnostics.textAlign = "center";
+    ctxDiagnostics.textBaseline="top";
+    ctxDiagnostics.fillText("0", 40, 311);
+    ctxDiagnostics.fillText("180", 400, 311);
+    ctxDiagnostics.fillText("360", 760, 311);
+    
+    document.getElementById("gravityValue").innerHTML=gravityValue.toString();
+    var BstrikeCount = 0;
+    var HstrikeCount = 0;
+    var averageBSTime = 0.0;
+    var averageHSTime = 0.0;
+    var impliedOHFactor = 0.0;
+    var HditchFirst = 0;
+    var BditchFirst = 0;
+    var lastBDC = 0;
+    var averageHSStrikeAngle = 0.0;
+    var averageBSStrikeAngle = 0.0;
+    var averageBSStrikeTimeFromBDC = 0.0;
+    var averageHSStrikeTimeFromBDC = 0.0;
+
+    for(i=0;i<sample.length;++i){
+        if (sample[i][3] == 8) lastBDC = i;
+        if(sample[i][3] == 1){
+            if(HditchFirst != 0){
+                HstrikeCount += 1;
+                averageHSTime = ((averageHSTime * (HstrikeCount - 1)) + sample[i][4])/HstrikeCount;
+                averageHSStrikeAngle = ((averageHSStrikeAngle * (HstrikeCount - 1)) + sample[i][0])/HstrikeCount;
+                averageHSStrikeTimeFromBDC = ((averageHSStrikeTimeFromBDC * (HstrikeCount - 1)) + ((i-lastBDC)*0.008))/HstrikeCount;
+            } else {
+                HditchFirst = 1;
+            }
+
+        } else if(sample[i][3] == 2){
+            if(BditchFirst != 0){
+                BstrikeCount += 1;
+                averageBSTime = ((averageBSTime * (BstrikeCount - 1)) + sample[i][4])/BstrikeCount;
+                averageBSStrikeAngle = ((averageBSStrikeAngle * (BstrikeCount - 1)) + sample[i][0])/BstrikeCount;
+                averageBSStrikeTimeFromBDC = ((averageBSStrikeTimeFromBDC * (BstrikeCount - 1)) + ((i-lastBDC)*0.008))/BstrikeCount;
+            } else {
+                BditchFirst = 1;
+            }
+        }
+    }
+    calculateTimings(); // should have already been updated
+    document.getElementById("gravityValue").innerHTML=gravityValue.toString();
+    document.getElementById("impliedTimings").innerHTML= (60.0/averageBSTime).toFixed(1) + " CPM " + ((averageHSTime-averageBSTime)/changeStep).toFixed(1) + "(open lead factor)";
+    var pealTime = 0.0;
+    if((document.getElementById("bellsSelect").selectedIndex + 3) > 7){
+        pealTime = (changeInterval * 5000.0);
+    } else {
+        pealTime = (changeInterval * 5040.0);
+    }
+    var hours = Math.floor(pealTime/3600.0);
+    var minutes = Math.round((pealTime % 3600)/60.0);
+    document.getElementById("impliedTimings").title = "Peal time: " + hours + ":" + minutes;
+    document.getElementById("averageStrikeAngles").innerHTML= averageHSStrikeAngle.toFixed(0) + " (handstroke) " + averageBSStrikeAngle.toFixed(0) + " (backstroke)";
+    document.getElementById("averageStrikeTimes").innerHTML= (averageHSStrikeTimeFromBDC*1000).toFixed(0) + " (handstroke) " + (averageBSStrikeTimeFromBDC * 1000).toFixed(0) + " (backstroke)";
+}
+
+playbackButton.onclick = function() {
+    if (nonLive){
+        alert("Not implemented for this demo");
+        return;
+    }
+    if (!wsOpened){
+        setStatus("No communication with BellBoy device.");
+        return;
+    }
+
+    if (currentStatus & DOWNLOADINGFILE) return;
+    if (currentStatus & PLAYBACK) return;
+    if (currentStatus & HELPDISPLAYED) return;
+    if (currentStatus & RECORDINGSESSION) return;
+
+    if (this.innerText == "Playback only"){
+        this.innerText = "Play and record";
+        ws.send("STND:");
+    } else {
+        this.innerText = "Playback only";
+        ws.send("PLRD:");
+    }
+};
+
+bellsSelect.onchange = function() {
+    calculateTimings();
+};
+
+chimeSelect.onchange = function() {
+    calculateTimings();
+};
+
 targetSelectHand.onchange = function() {
-    var h = document.getElementById("targetSelectHand");
-    var t = h.options[h.selectedIndex].text
+    var t = this.options[this.selectedIndex].text
     if (t.isNaN) {
         targetAngleHand=null
     } else {
         targetAngleHand=parseInt(t)
     }
-    if ((currentStatus & TEMPLATEDISPLAYED) != 0){
+    if (currentStatus & TEMPLATEDISPLAYED){
         TdrawStroke();
     } else {
         clearTemplates();
         drawTDCs();
     }
-
-}
+};
 
 targetSelectBack.onchange = function() {
-    var b = document.getElementById("targetSelectBack");
-    var t = b.options[b.selectedIndex].text
+    var t = this.options[this.selectedIndex].text
     if (t.isNaN) {
         targetAngleBack=null
     } else {
         targetAngleBack=parseInt(t)
     }
-    if ((currentStatus & TEMPLATEDISPLAYED) != 0){
+    if (currentStatus & TEMPLATEDISPLAYED){
         TdrawStroke();
     } else {
         clearTemplates();
         drawTDCs();
     }
-}
+};
 
 zoomSelect.onchange = function(){
-    currentROI = document.getElementById("zoomSelect").selectedIndex;
+    currentROI = this.selectedIndex;
     ROIU = ROIRanges[currentROI][0];
     ROIL = ROIRanges[currentROI][1];
     drawFrame();
-    if ((currentStatus & TEMPLATEDISPLAYED) != 0) {
+    if (currentStatus & TEMPLATEDISPLAYED) {
         TdrawStroke();
     } else {
         clearTemplates();
@@ -1052,19 +1379,18 @@ zoomSelect.onchange = function(){
     if (currentSwingDisplayed == null) return;
     drawStroke();
     textBell();
-}
+};
 
 speedSelect.onchange = function(){
-    currentPlaybackSpeed = document.getElementById("speedSelect").selectedIndex;
+    currentPlaybackSpeed = this.selectedIndex;
 // consider whether to allow this to be changed during active playback
-}
-
+};
 
 scaleSelect.onchange = function() {
-    scaleValue=parseFloat(scales[document.getElementById("scaleSelect").selectedIndex])
+    scaleValue=parseFloat(scales[this.selectedIndex])
     drawFrame();
     clearAT();
-    if ((currentStatus & TEMPLATEDISPLAYED) != 0) {
+    if (currentStatus & TEMPLATEDISPLAYED) {
         TdrawStroke();
     } else {
         clearTemplates();
@@ -1073,22 +1399,21 @@ scaleSelect.onchange = function() {
     if (currentSwingDisplayed == null) return;
     drawStroke();
     textBell();
-}
-
+};
 
 recordIcon.onclick=function(){
     if (nonLive){
         alert("Not implemented for this demo");
         return;
     }
-    if (sampleInterval == 0.0){
-        setStatus("No communication with IMU device.  Aborted.");
+    if (!wsOpened){
+        setStatus("No communication with BellBoy device.  Aborted.");
         return;
     }
-    if ((currentStatus & DOWNLOADINGFILE) != 0) return;
-    if ((currentStatus & PLAYBACK) != 0) return;
-    if ((currentStatus & HELPDISPLAYED) != 0) return;
-    if ((currentStatus & RECORDINGSESSION) != 0) {
+    if (currentStatus & DOWNLOADINGFILE) return;
+    if (currentStatus & PLAYBACK) return;
+    if (currentStatus & HELPDISPLAYED) return;
+    if (currentStatus & RECORDINGSESSION) {
         currentStatus &= ~RECORDINGSESSION;
         updateIcons();
         if (liveintervalID != null) clearInterval(liveintervalID);
@@ -1103,7 +1428,7 @@ recordIcon.onclick=function(){
         recordModal.style.display = "block";
         document.getElementById("recordFileName").focus();
     }
-}
+};
 
 recordButton.onclick = function() {
     var fileName = document.getElementById("recordFileName").value;
@@ -1115,6 +1440,8 @@ recordButton.onclick = function() {
         updateIcons();
         drawFrame();
         sample = [];
+        ringTimes = [];
+        switchPoints = [];
         clearAT();
         currentPlaybackPosition = 1; // needs to be one as we are doing comparison with previous entry removed so that playback starts from last swing displayed
         if (liveintervalID != null) clearInterval(liveintervalID);
@@ -1127,27 +1454,31 @@ recordButton.onclick = function() {
 };
 
 // to do, when PLAYED THEN stopped scaling does not work
-// set templte displayed so we know to scale template
+// set template displayed so we know to scale template
 
 powerIcon.onclick = function() {
     if (nonLive){
         alert("Not implemented for this demo");
         return;
     }
-    if ((currentStatus & DOWNLOADINGFILE) != 0) return;
-    if ((currentStatus & PLAYBACK) != 0) return;
-    if ((currentStatus & RECORDINGSESSION) != 0) return;
+    if (!wsOpened){
+        setStatus("No communication with BellBoy device.  Aborted.");
+        return;
+    }
+    if (currentStatus & DOWNLOADINGFILE) return;
+    if (currentStatus & PLAYBACK) return;
+    if (currentStatus & RECORDINGSESSION) return;
     if (confirm("Are you sure you want to power off?")) ws.send("SHDN:");
     return;
 };
 
 playIcon.onclick=function(){
-    if ((currentStatus & DOWNLOADINGFILE) != 0) return;
-    if ((currentStatus & RECORDINGSESSION) != 0) return;
-    if ((currentStatus & SESSIONLOADED) == 0) return;
-    if ((currentStatus & HELPDISPLAYED) != 0) return;
+    if (currentStatus & DOWNLOADINGFILE) return;
+    if (currentStatus & RECORDINGSESSION) return;
+    if (!(currentStatus & SESSIONLOADED)) return;
+    if (currentStatus & HELPDISPLAYED) return;
 
-    if ((currentStatus & PLAYBACK) != 0) {
+    if (currentStatus & PLAYBACK) {
         currentStatus &= ~PLAYBACK;
         currentStatus &= ~PAUSED;
         updateIcons();
@@ -1167,18 +1498,17 @@ playIcon.onclick=function(){
         playintervalID=setInterval(playbackSample,collectInterval*1000);
         currentSwingDisplayed=null;
         ctxBD.clearRect(posCB+1, ctxBD.canvas.height-30, CBwidth-2, 20); // clear existing timers
-
     }
 };
 
 pauseIcon.onclick=function(){
-    if ((currentStatus & DOWNLOADINGFILE) != 0) return;
-    if ((currentStatus & RECORDINGSESSION) != 0) return;
-    if ((currentStatus & SESSIONLOADED) == 0) return;
-    if ((currentStatus & HELPDISPLAYED) != 0) return;
-    if ((currentStatus & PLAYBACK) == 0) return;
+    if (currentStatus & DOWNLOADINGFILE) return;
+    if (currentStatus & RECORDINGSESSION) return;
+    if (!(currentStatus & SESSIONLOADED)) return;
+    if (currentStatus & HELPDISPLAYED) return;
+    if (!(currentStatus & PLAYBACK)) return;
 
-    if ((currentStatus & PAUSED) != 0) {
+    if (currentStatus & PAUSED) {
         currentStatus &= ~PAUSED;
         if (playintervalID != null) clearInterval(playintervalID);
         playintervalID=setInterval(playbackSample,collectInterval*1000);
@@ -1191,15 +1521,15 @@ pauseIcon.onclick=function(){
 };
 
 skipSelectIcon.onclick=function(){
-    if ((currentStatus & DOWNLOADINGFILE) != 0) return;
-    if ((currentStatus & RECORDINGSESSION) != 0) return;
-    if ((currentStatus & HELPDISPLAYED) != 0) return;
-    if ((currentStatus & PLAYBACK) != 0) return;
-    if((currentStatus & SKIPMAIN) != 0){
-        if((currentStatus & SKIPTEMPLATE) != 0){
+    if (currentStatus & DOWNLOADINGFILE) return;
+    if (currentStatus & RECORDINGSESSION) return;
+    if (currentStatus & HELPDISPLAYED) return;
+    if (currentStatus & PLAYBACK) return;
+    if (currentStatus & SKIPMAIN){
+        if(currentStatus & SKIPTEMPLATE){
             currentStatus &= ~SKIPTEMPLATE;
         } else {
-            if((currentStatus & TEMPLATEDISPLAYED) !=0){
+            if(currentStatus & TEMPLATEDISPLAYED){
                 currentStatus |= SKIPTEMPLATE;
                 currentStatus &= ~SKIPMAIN;
             }
@@ -1208,37 +1538,28 @@ skipSelectIcon.onclick=function(){
         currentStatus |= SKIPMAIN;
     }
     updateIcons();
-}
-
-//    if((currentStatus & SKIPMAIN) != 0 && (currentStatus & SKIPTEMPLATE) !=0) { currentStatus &= ~SKIPTEMPLATE; return; }
-//    if((currentStatus & SKIPMAIN) == 0 && (currentStatus & SKIPTEMPLATE) !=0) { currentStatus &= ~SKIPMAIN; return; }
-//    if((currentStatus & SKIPMAIN) != 0 && (currentStatus & SKIPTEMPLATE) == 0 && (currentStatus & TEMPLATEDISPLAYED) !=0) {
-//        currentStatus |= SKIPTEMPLATE;
-//        currentStatus &= ~SKIPMAIN;        
-//    }
-
-
+};
 
 backIcon.onclick=function(){
-    if ((currentStatus & DOWNLOADINGFILE) != 0) return;
-    if ((currentStatus & RECORDINGSESSION) != 0) return;
-    if ((currentStatus & HELPDISPLAYED) != 0) return;
-    if ((currentStatus & PLAYBACK) != 0) return;
+    if (currentStatus & DOWNLOADINGFILE) return;
+    if (currentStatus & RECORDINGSESSION) return;
+    if (currentStatus & HELPDISPLAYED) return;
+    if (currentStatus & PLAYBACK) return;
 
     backclick();
 };
 
 function backclick(){
-    if ((currentStatus & TEMPLATEDISPLAYED) != 0 && (TcurrentSwingDisplayed == 0 || currentSwingDisplayed == 0)) return;
+    if ((currentStatus & TEMPLATEDISPLAYED) && (TcurrentSwingDisplayed == 0 || currentSwingDisplayed == 0)) return;
 
-    if ((currentStatus & TEMPLATEDISPLAYED) != 0 && (currentStatus & SKIPTEMPLATE) != 0  && TcurrentSwingDisplayed != 0 && currentSwingDisplayed != 0) {
+    if ((currentStatus & TEMPLATEDISPLAYED) && (currentStatus & SKIPTEMPLATE) != 0  && TcurrentSwingDisplayed != 0 && currentSwingDisplayed != 0) {
         if (TcurrentSwingDisplayed == null) TcurrentSwingDisplayed=1;
         TcurrentSwingDisplayed -= 1;
         TdrawStroke();
         drawStroke();
     }
 
-    if ((currentStatus & SESSIONLOADED) != 0 && (currentStatus & SKIPMAIN) != 0  && currentSwingDisplayed != 0) {
+    if ((currentStatus & SESSIONLOADED) && (currentStatus & SKIPMAIN) != 0  && currentSwingDisplayed != 0) {
         if (currentSwingDisplayed == null) currentSwingDisplayed=1;
         currentSwingDisplayed -= 1;
         drawFrame();
@@ -1246,31 +1567,30 @@ function backclick(){
     }
     textBell();
     updateIcons();
-}
-
-
+};
+// supposed to stop zooming - does not appear to work
 forwardIcon.addEventListener("touchstart", preventZoom);
 
 forwardIcon.onclick=function(){
-    if ((currentStatus & DOWNLOADINGFILE) != 0) return;
-    if ((currentStatus & RECORDINGSESSION) != 0) return;
-    if ((currentStatus & HELPDISPLAYED) != 0) return;
-    if ((currentStatus & PLAYBACK) != 0) return;
+    if (currentStatus & DOWNLOADINGFILE) return;
+    if (currentStatus & RECORDINGSESSION) return;
+    if (currentStatus & HELPDISPLAYED) return;
+    if (currentStatus & PLAYBACK) return;
 
     foreclick();
 };
 
 function foreclick() {
-    if ((currentStatus & TEMPLATEDISPLAYED) != 0 && (TcurrentSwingDisplayed == TswingStarts.length -1 || currentSwingDisplayed == swingStarts.length - 1)) return;
+    if ((currentStatus & TEMPLATEDISPLAYED) && (TcurrentSwingDisplayed == TswingStarts.length -1 || currentSwingDisplayed == swingStarts.length - 1)) return;
 
-    if ((currentStatus & TEMPLATEDISPLAYED) != 0 && (currentStatus & SKIPTEMPLATE) != 0 && TcurrentSwingDisplayed != TswingStarts.length -1 && currentSwingDisplayed != swingStarts.length - 1) {
+    if ((currentStatus & TEMPLATEDISPLAYED) && (currentStatus & SKIPTEMPLATE) && TcurrentSwingDisplayed != TswingStarts.length -1 && currentSwingDisplayed != swingStarts.length - 1) {
         if (TcurrentSwingDisplayed == null) TcurrentSwingDisplayed=-1;
         TcurrentSwingDisplayed += 1;
         TdrawStroke();
         drawStroke();
     }
 
-    if ((currentStatus & SESSIONLOADED) != 0 && (currentStatus & SKIPMAIN) != 0  && currentSwingDisplayed != swingStarts.length - 1) {
+    if ((currentStatus & SESSIONLOADED) && (currentStatus & SKIPMAIN)  && currentSwingDisplayed != swingStarts.length - 1) {
         if (currentSwingDisplayed == null) currentSwingDisplayed=-1;
         currentSwingDisplayed += 1;
         drawFrame();
@@ -1280,14 +1600,14 @@ function foreclick() {
     textBell();
     updateIcons();
 
-}
+};
 
 favIcon.onclick=function(){
-    if ((currentStatus & DOWNLOADINGFILE) != 0) return;
-    if ((currentStatus & RECORDINGSESSION) != 0) return;
-    if ((currentStatus & SESSIONLOADED) == 0) return;
-    if ((currentStatus & HELPDISPLAYED) != 0) return;
-    if ((currentStatus & PLAYBACK) != 0) return;
+    if (currentStatus & DOWNLOADINGFILE) return;
+    if (currentStatus & RECORDINGSESSION) return;
+    if (!(currentStatus & SESSIONLOADED)) return;
+    if (currentStatus & HELPDISPLAYED) return;
+    if (currentStatus & PLAYBACK) return;
     if (currentSwingDisplayed == null) return;
 
     template=[];
@@ -1301,7 +1621,6 @@ favIcon.onclick=function(){
     for (i = 0; i<sample.length; ++i) template[template.length]=sample[i].slice();
     for (i = 0; i<swingStarts.length; ++i) TswingStarts[TswingStarts.length]=swingStarts[i];
     for (i = 0; i<averagePullStrength.length; ++i) TaveragePullStrength[TaveragePullStrength.length]=averagePullStrength[i];
-    TcalibrationValue = calibrationValue;
     TcurrentSwingDisplayed=currentSwingDisplayed;
     currentStatus |= TEMPLATEDISPLAYED;
     drawStroke();
@@ -1311,16 +1630,16 @@ favIcon.onclick=function(){
 };
 
 unstarIcon.onclick=function(){
-    if ((currentStatus & DOWNLOADINGFILE) != 0) return;
-    if ((currentStatus & RECORDINGSESSION) != 0) return;
-    if ((currentStatus & SESSIONLOADED) == 0) return;
-    if ((currentStatus & HELPDISPLAYED) != 0) return;
-    if ((currentStatus & PLAYBACK) != 0) return;
+    if (currentStatus & DOWNLOADINGFILE) return;
+    if (currentStatus & RECORDINGSESSION) return;
+    if (!(currentStatus & SESSIONLOADED)) return;
+    if (currentStatus & HELPDISPLAYED) return;
+    if (currentStatus & PLAYBACK) return;
 
     template=[];
-    TcalibrationValue=null;
     TswingStarts=[];
     TcurrentSwingDisplayed=null;
+    TaveragePullStrength = [];
     clearTemplates();
     currentStatus &= ~TEMPLATEDISPLAYED;
     currentStatus &= ~SKIPTEMPLATE;
@@ -1332,11 +1651,11 @@ unstarIcon.onclick=function(){
 };
 
 helpIcon.onclick=function(){
-    if ((currentStatus & DOWNLOADINGFILE) != 0) return;
-    if ((currentStatus & PLAYBACK) != 0) return;
-    if ((currentStatus & RECORDINGSESSION) != 0) return;
+    if (currentStatus & DOWNLOADINGFILE) return;
+    if (currentStatus & PLAYBACK) return;
+    if (currentStatus & RECORDINGSESSION) return;
 
-    if ((currentStatus & HELPDISPLAYED) != 0) {
+    if (currentStatus & HELPDISPLAYED) {
         currentStatus &= ~HELPDISPLAYED;
         document.getElementById("bellGraphics").style.display = "block";
         document.getElementById("helpScreen").style.display = "none";
@@ -1350,12 +1669,12 @@ helpIcon.onclick=function(){
 
 function updateIcons(){
     // recordIcon
-    if ((currentStatus & DOWNLOADINGFILE) != 0 ||
-        (currentStatus & PLAYBACK) != 0 ||
-        (currentStatus & HELPDISPLAYED) != 0) {
+    if ((currentStatus & DOWNLOADINGFILE) ||
+        (currentStatus & PLAYBACK) ||
+        (currentStatus & HELPDISPLAYED)) {
         document.getElementById("recordIcon").src = "circle-record-inactive.png";
     } else {
-        if ((currentStatus & RECORDINGSESSION) != 0) {
+        if (currentStatus & RECORDINGSESSION) {
             document.getElementById("recordIcon").src = "circle-stop-active.png";
         } else {
             document.getElementById("recordIcon").src = "circle-record-active.png";
@@ -1363,41 +1682,41 @@ function updateIcons(){
     }
 
     // powerIcon
-    if ((currentStatus & DOWNLOADINGFILE) != 0 ||
-        (currentStatus & PLAYBACK) != 0 ||
-        (currentStatus & RECORDINGSESSION) != 0) {
+    if ((currentStatus & DOWNLOADINGFILE) ||
+        (currentStatus & PLAYBACK) ||
+        (currentStatus & RECORDINGSESSION)) {
         document.getElementById("powerIcon").src = "circle-power-inactive.png";
     } else {
         document.getElementById("powerIcon").src = "circle-power-active.png";
     }
 
     // settings icon
-    if ((currentStatus & DOWNLOADINGFILE) != 0 ||
-        (currentStatus & HELPDISPLAYED) != 0) {
+    if ((currentStatus & DOWNLOADINGFILE) ||
+        (currentStatus & HELPDISPLAYED)) {
         document.getElementById("settingsIcon").src = "settings-inactive.png";
     } else {
         document.getElementById("settingsIcon").src = "settings-active.png";
     }
 
     //downloadIcon
-    if ((currentStatus & DOWNLOADINGFILE) != 0 ||
-        (currentStatus & PLAYBACK) != 0 ||
-        (currentStatus & RECORDINGSESSION) != 0 ||
-        (currentStatus & HELPDISPLAYED) != 0) {
+    if ((currentStatus & DOWNLOADINGFILE) ||
+        (currentStatus & PLAYBACK) ||
+        (currentStatus & RECORDINGSESSION) ||
+        (currentStatus & HELPDISPLAYED)) {
         document.getElementById("downloadIcon").src = "cloud-download-inactive.png";
     } else {
         document.getElementById("downloadIcon").src = "cloud-download-active.png";
     }
 
     //playIcon
-    if ((currentStatus & SESSIONLOADED) == 0) {
+    if (!(currentStatus & SESSIONLOADED)) {
         document.getElementById("playIcon").src = "circle-play-inactive.png";
     } else {
-        if ((currentStatus & DOWNLOADINGFILE) != 0 ||
-            (currentStatus & HELPDISPLAYED) != 0) {
+        if ((currentStatus & DOWNLOADINGFILE) ||
+            (currentStatus & HELPDISPLAYED)) {
             document.getElementById("playIcon").src = "circle-play-inactive.png";
         } else {
-            if ((currentStatus & PLAYBACK) != 0) {
+            if (currentStatus & PLAYBACK) {
                 document.getElementById("playIcon").src = "circle-stop-active.png";
             } else {
                 document.getElementById("playIcon").src = "circle-play-active.png";
@@ -1406,11 +1725,11 @@ function updateIcons(){
     }
 
     //pauseIcon
-    if ((currentStatus & PLAYBACK) == 0) {
+    if (!(currentStatus & PLAYBACK)) {
         document.getElementById("pauseIcon").src = "circle-pause-inactive.png";
     } else {
-        if ((currentStatus & DOWNLOADINGFILE) != 0 ||
-            (currentStatus & HELPDISPLAYED) != 0) {
+        if ((currentStatus & DOWNLOADINGFILE) ||
+            (currentStatus & HELPDISPLAYED)) {
             document.getElementById("pauseIcon").src = "circle-pause-inactive.png";
         } else {
                 document.getElementById("pauseIcon").src = "circle-pause-active.png";
@@ -1418,14 +1737,14 @@ function updateIcons(){
     }
 
     //skipIcons and fav icons
-    if ((currentStatus & SESSIONLOADED) == 0) {
+    if (!(currentStatus & SESSIONLOADED)) {
         document.getElementById("backIcon").src = "circle-back-inactive.png";
         document.getElementById("forwardIcon").src = "circle-forward-inactive.png";
         document.getElementById("favIcon").src = "circle-heart-inactive.png";
     } else {
-        if ((currentStatus & DOWNLOADINGFILE) != 0 ||
-            (currentStatus & PLAYBACK) != 0 ||
-            (currentStatus & HELPDISPLAYED) != 0) {
+        if ((currentStatus & DOWNLOADINGFILE) ||
+            (currentStatus & PLAYBACK) ||
+            (currentStatus & HELPDISPLAYED)) {
             document.getElementById("backIcon").src = "circle-back-inactive.png";
             document.getElementById("forwardIcon").src = "circle-forward-inactive.png";
             document.getElementById("favIcon").src = "circle-heart-inactive.png";
@@ -1450,14 +1769,14 @@ function updateIcons(){
     
     
     // skip select icon
-    if ((currentStatus & DOWNLOADINGFILE) != 0 ||
-        (currentStatus & PLAYBACK) != 0 ||
-        (currentStatus & SESSIONLOADED) == 0 ||
-        (currentStatus & HELPDISPLAYED) != 0) {
+    if ((currentStatus & DOWNLOADINGFILE) ||
+        (currentStatus & PLAYBACK) ||
+        !(currentStatus & SESSIONLOADED) ||
+        (currentStatus & HELPDISPLAYED)) {
         document.getElementById("skipSelectIcon").src = "skip-select-inactive.png";
     } else {
-        if((currentStatus & SKIPMAIN) != 0){
-            if((currentStatus & SKIPTEMPLATE) != 0) {
+        if(currentStatus & SKIPMAIN){
+            if(currentStatus & SKIPTEMPLATE) {
                 document.getElementById("skipSelectIcon").src = "skip-select-active-both.png";
             } else {
                 document.getElementById("skipSelectIcon").src = "skip-select-active-main.png";
@@ -1468,12 +1787,12 @@ function updateIcons(){
     }
 
     // helpIcon
-    if ((currentStatus & DOWNLOADINGFILE) != 0 ||
-        (currentStatus & RECORDINGSESSION) != 0 ||
-        (currentStatus & PLAYBACK) != 0) {
+    if ((currentStatus & DOWNLOADINGFILE) ||
+        (currentStatus & RECORDINGSESSION) ||
+        (currentStatus & PLAYBACK)) {
         document.getElementById("helpIcon").src = "help-inactive.png";
     } else {
-        if ((currentStatus & HELPDISPLAYED) != 0) {
+        if (currentStatus & HELPDISPLAYED) {
             document.getElementById("helpIcon").src = "door-out.png";
         } else {
             document.getElementById("helpIcon").src = "help.png";
@@ -1481,13 +1800,13 @@ function updateIcons(){
     }
 
     //remove template icon
-    if ((currentStatus & DOWNLOADINGFILE) != 0 ||
-        ((currentStatus & PLAYBACK) != 0 && (currentStatus & PAUSED) == 0) ||
-        (currentStatus & HELPDISPLAYED) != 0) {
+    if ((currentStatus & DOWNLOADINGFILE) ||
+        ((currentStatus & PLAYBACK) && !(currentStatus & PAUSED)) ||
+        (currentStatus & HELPDISPLAYED)) {
         document.getElementById("unstarIcon").src = "circle-cross-inactive.png";
 
     } else {
-        if ((currentStatus & TEMPLATEDISPLAYED) != 0){
+        if (currentStatus & TEMPLATEDISPLAYED){
             document.getElementById("unstarIcon").src = "circle-cross-active.png";
         } else {
             document.getElementById("unstarIcon").src = "circle-cross-inactive.png";
@@ -1495,10 +1814,10 @@ function updateIcons(){
     }
 
     // settingsicon
-       if ((currentStatus & DOWNLOADINGFILE) != 0 ||
-        (currentStatus & PLAYBACK) != 0 ||
-        (currentStatus & RECORDINGSESSION) != 0 ||
-        (currentStatus & HELPDISPLAYED) != 0) {
+       if ((currentStatus & DOWNLOADINGFILE) ||
+        (currentStatus & PLAYBACK) ||
+        (currentStatus & RECORDINGSESSION) ||
+        (currentStatus & HELPDISPLAYED)) {
         document.getElementById("settingsIcon").src = "settings-inactive.png";
     } else {
         document.getElementById("settingsIcon").src = "settings-active.png";
@@ -1518,10 +1837,15 @@ var openSpan = document.getElementsByClassName("close")[0];
 var recordModal = document.getElementById("recordModal");
 var recordSpan = document.getElementsByClassName("close")[1];
 
+var diagnosticsModal = document.getElementById("diagnosticsModal");
+var diagnosticsSpan = document.getElementsByClassName("close")[2];
 
 var settingsModal = document.getElementById("settingsModal");
 var settingsBtn = document.getElementById("settingsIcon");
-var settingsSpan = document.getElementsByClassName("close")[2];
+var settingsSpan = document.getElementsByClassName("close")[3];
+
+var demoModal = document.getElementById("demoModal");
+var demoSpan = document.getElementsByClassName("close")[4];
 
 openBtn.onclick = function() {
     if ((currentStatus & DOWNLOADINGFILE) != 0) return;
@@ -1548,12 +1872,19 @@ openSpan.onclick = function() {
 
 settingsSpan.onclick = function() {
     settingsModal.style.display = "none";
-    document.getElementById("calibButton").innerText = "Start";
-    ws.send("STEC:");
 };
 
 recordSpan.onclick = function() {
     recordModal.style.display = "none";
+};
+
+diagnosticsSpan.onclick = function() {
+    diagnosticsModal.style.display = "none";
+};
+
+demoSpan.onclick = function() {
+    demoModal.style.display = "none";
+    ws.send("STEC:");
 };
 
 
@@ -1564,11 +1895,16 @@ window.onclick = function(event) {
     }
     if (event.target == settingsModal) {
         settingsModal.style.display = "none";
-        document.getElementById("calibButton").innerText = "Start";
-        ws.send("STEC:");
     }
     if (event.target == recordModal) {
         recordModal.style.display = "none";
+    }
+    if (event.target == diagnosticsModal) {
+        diagnosticsModal.style.display = "none";
+    }
+    if (event.target == demoModal) {
+        demoModal.style.display = "none";
+        ws.send("STEC:");
     }
 };
 
@@ -1596,10 +1932,10 @@ window.addEventListener("load", function(event){
 });
 
 canvasATt.addEventListener("click", function(event){
-    if ((currentStatus & DOWNLOADINGFILE) != 0) return;
-    if ((currentStatus & RECORDINGSESSION) != 0) return;
-    if ((currentStatus & SESSIONLOADED) == 0) return;
-    if ((currentStatus & HELPDISPLAYED) != 0) return;
+    if (currentStatus & DOWNLOADINGFILE) return;
+    if (currentStatus & RECORDINGSESSION) return;
+    if (!(currentStatus & SESSIONLOADED)) return;
+    if (currentStatus & HELPDISPLAYED) return;
     if (currentSwingDisplayed == null) return;
     var dist = Math.round((event.pageX - ctxATt.canvas.width/2.0)/ATstepWidth);
     while (dist > 0){
@@ -1651,21 +1987,20 @@ function recalculateSize() {
     posCB = BDwidth * 2;
     posHS2 = canvasWidth - (BDwidth *2);
     posBS1 = canvasWidth - BDwidth;
-    radius = canvasHeight;
 
     canvasAT.style.width=(rightWidth * 2)  + "px";  // scrolling display
-    canvasAT.style.height=(Math.min(canvasHeight,rightHeight-canvasHeight-20))  + "px";
+    canvasAT.style.height=(Math.max(canvasHeight,rightHeight-canvasHeight-80))  + "px";
     ctxAT.canvas.width=rightWidth * 2;
-    ctxAT.canvas.height=Math.min(canvasHeight,rightHeight-canvasHeight-20);
-    canvasAT.style.top=((canvasHeight + 20) + (rightHeight - canvasAT.height - canvasBD.height)/2)  + "px";
+    ctxAT.canvas.height=Math.max(canvasHeight,rightHeight-canvasHeight-80);
+    canvasAT.style.top=((canvasHeight+10) + (rightHeight - canvasAT.height - canvasBD.height)/2)  + "px";
     canvasAT.style.left=0 + "px";
 
-    canvasATt.style.width=rightWidth  + "px";
-    canvasATt.style.height=Math.min(canvasHeight,rightHeight-canvasHeight-20)  + "px";
+    canvasATt.style.width=rightWidth + "px";
+    canvasATt.style.height=Math.max(canvasHeight,rightHeight-canvasHeight-80)  + "px";
     ctxATt.canvas.width=rightWidth;
-    ctxATt.canvas.height=Math.min(canvasHeight,rightHeight-canvasHeight-20);
-    canvasATt.style.top=((canvasHeight + 20) + (rightHeight - canvasAT.height - canvasBD.height)/2)  + "px";
-    canvasATt.style.left=0  + "px";
+    ctxATt.canvas.height=Math.max(canvasHeight,rightHeight-canvasHeight-80);
+    canvasATt.style.top=((canvasHeight+10) + (rightHeight - canvasAT.height - canvasBD.height)/2)  + "px";
+    canvasATt.style.left=0 + "px";
    
     ctxBD.fillStyle='rgba(0,0,255,0.1)';
     ctxBD.fillRect(posBS2,0,BDwidth,canvasBD.height);
@@ -1751,17 +2086,24 @@ function clearAT(){
 */
     ctxATt.beginPath();
     ctxATt.strokeStyle = "rgb(255,100,100)";
-    ctxATt.moveTo(1, ATtopMargin);
-    ctxATt.lineTo(ctxATt.canvas.width, ATtopMargin);
-    ctxATt.moveTo(0, ATtopMargin+totalHeight*0.167);
-    ctxATt.lineTo(ctxATt.canvas.width, ATtopMargin+totalHeight*0.167);
+//    ctxATt.moveTo(0, ATtopMargin);
+//    ctxATt.lineTo(ctxATt.canvas.width, ATtopMargin);
+    ctxATt.moveTo(0, ATtopMargin+totalHeight*0.1);
+    ctxATt.lineTo(ctxATt.canvas.width, ATtopMargin+totalHeight*0.1);
+    ctxATt.moveTo(0, ATtopMargin+totalHeight*0.3);
+    ctxATt.lineTo(ctxATt.canvas.width, ATtopMargin+totalHeight*0.3);
+    ctxATt.moveTo(0, ATtopMargin+totalHeight*0.7);
+    ctxATt.lineTo(ctxATt.canvas.width, ATtopMargin+totalHeight*0.7);
+    ctxATt.moveTo(0, ATtopMargin+totalHeight*0.9);
+    ctxATt.lineTo(ctxATt.canvas.width, ATtopMargin+totalHeight*0.9);
+//    ctxATt.moveTo(0, ATtopMargin+totalHeight);
+//    ctxATt.lineTo(ctxATt.canvas.width, ATtopMargin+totalHeight);
+    ctxATt.stroke();
+
+    ctxATt.beginPath();
+    ctxATt.strokeStyle = "rgb(192,192,192)";
     ctxATt.moveTo(0, ATtopMargin+totalHeight*0.5);
     ctxATt.lineTo(ctxATt.canvas.width, ATtopMargin+totalHeight*0.5);
-    ctxATt.moveTo(0, ATtopMargin+totalHeight*0.833);
-    ctxATt.lineTo(ctxATt.canvas.width, ATtopMargin+totalHeight*0.833);
-    ctxATt.moveTo(0, ATtopMargin+totalHeight);
-    ctxATt.lineTo(ctxATt.canvas.width, ATtopMargin+totalHeight);
-
     ctxATt.stroke();
 }
 

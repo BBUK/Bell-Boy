@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="en-gb">
 <head><meta charset="UTF-8">
+<meta name="viewport" content="initial-scale=1,user-scalable=no,maximum-scale=1">
 <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
 <link rel="icon" href="/favicon.ico" type="image/x-icon">
 <style type="text/css">
@@ -14,8 +15,9 @@
     tr:nth-child(even) {background: #bbd}
 	tr:nth-child(odd) {background: #ddf}
     table {outline:1px solid gray; width: 730px;}
-    th.right {text-align: right; width: 200px;}
-
+    th.right {text-align: right; width: 175px;}
+    th.left {text-align: left;}
+    
     section { position:relative; width: 180px; height: 120px; transform-style:preserve-3d;}
     div.face { position:absolute; top:50%; left:50%; background-size:cover;}
     div.face-top    {width: 100px; height: 50px; background-image: url(top.jpg);    transform:translateX(-50%) translateY(-50%)                 translateZ(20px); }
@@ -96,18 +98,34 @@
 <script type="text/javascript" src="bellboy.js" async defer></script>
 </div>
 <div id="openModal" class="modal"><div class="modal-content"><span class="close">&times;</span><p>Select a file to open...</p><select class="selectfile" id="openSelect"></select><button class="selectfile" id="fileOpenButton">Open</button></div></div>
-<div id="recordModal" class="modal"><div class="modal-content"><span class="close">&times;</span><p>Enter filename for recording</p><input type="text" id="recordFileName" style="width:340px;">&nbsp;<button class="selectfile" id="recordButton">Start Recording</button><p id="nameInvalid" style="font-size: 9pt; visibility: hidden; color: red;">Please enter a valid file name:letters, numbers, spaces, dashes and full stops only</p></div></div>
+<div id="recordModal" class="modal"><div class="modal-content"><span class="close">&times;</span><p>Enter filename for recording</p><input type="text" id="recordFileName" style="width:340px;" />&nbsp;<button class="selectfile" id="recordButton">Start Recording</button><p id="nameInvalid" style="font-size: 9pt; visibility: hidden; color: red;">Please enter a valid file name:letters, numbers, spaces, dashes and full stops only</p></div></div>
+<div id="diagnosticsModal" class="modal" ><div class="modal-content" style="margin: 5% auto; width: 820px"><span class="close">&times;</span>
+    <canvas id="canvasDiagnostics" class="bell"></canvas>
+    Show handstroke:&nbsp;<input type="checkbox" class="selectfile" id="diagHand" checked checked="checked" />&nbsp;Show backstroke:&nbsp;<input type="checkbox" class="selectfile" id="diagBack" checked checked="checked" />
+    <TABLE>
+    <TR><TD title="Shows the gravity adjustment value calculated when calibration was carried out.">Gravity adjustment:</TD><TD><span id="gravityValue">0</span></TD></TR>  
+    <TR><TD>Implied timings:</TD><TD><span id="impliedTimings" title="Peal time:">ZZZ(CPM) 0.99 (leadtime).</span></TD></TR>
+    <TR><TD>Average strike angles:</TD><TD><span id="averageStrikeAngles">XXX(handstroke) YYY(backstroke).</span></TD></TR>
+    <TR><TD>Average strike times (from BDC in ms):</TD><TD><span id="averageStrikeTimes">XXX(handstroke) YYY(backstroke).</span></TD></TR>
+    </TABLE>
+</div></div>
 <div id="settingsModal" class="modal"><div class="modal-content" style="width: 780px; margin: auto auto;"><span class="close">&times;</span>
-<TABLE><TR><TH>Choose whether you wish to display target-bell-rise angles and what angle you would like them at (shown as a green line and angle is measured from TDC in degrees)</TH>
-	<TH class="right">Handstroke:&nbsp;<select class="selectfile" id="targetSelectHand"></select>
-	<br>Backstroke:&nbsp;<select class="selectfile" id="targetSelectBack"></select></TH></TR>
-	<TR><TH>Select the range of a stroke you would like the display to show (numbers are degrees from TDC)</TH><TH class="right">Angles:&nbsp;<select class="selectfile" id="zoomSelect"></select></TH></TR>
-	<TR><TH>Change the playback speed of a loaded file or a finished live recording</TH><TH class="right">Play speed:&nbsp;<select class="selectfile" id="speedSelect"></select></TH></TR>
-    <TR><TH>Some bells will show a smaller "pull strength" measurement on the display.  This setting allows you to change the scale of the signals displayed (units are arbitary)</TH><TH class="right">Scale:&nbsp;<select class="selectfile" id="scaleSelect"></select></TH></TR>
-	<TR><TH>Select the number of bells you are using (this is only used to calculate ringing out and ringing in timings).</TH><TH class="right">Bells:&nbsp;<select class="selectfile" id="bellsSelect"></select></TH></TR>
-    <TR><TH>Click the button to the right to check the device is working.  Press the cross on the top right to exit.</TH><TH class="right"><button class="selectfile" id="calibButton">Start</button><section><div class="face face-top"></div><div class="face face-bottom"></div><div class="face face-side1"></div><div class="face face-side2"></div><div class="face face-end1"></div><div class="face face-end2"></div></section></TH></TR>
+<TABLE><TR><TH>Click the button to set the Bell-Boy to playback-only operation.</TH><TH class="right"><button class="selectfile" id="playbackButton">Playback only</button></TH></TR>
+    <TR><TH class="left">Choose whether you wish to display target-bell-rise angles and what angle you would like them at (shown as a green line and angle is measured from TDC in degrees).</TH>
+	<TH class="right">Handstroke:&nbsp;<select class="selectfile" id="targetSelectHand"></select><br>Backstroke:&nbsp;<select class="selectfile" id="targetSelectBack"></select></TH></TR>
+	<TR><TH class="left">Select the range of a stroke you would like the display to show (numbers are degrees from TDC).</TH><TH class="right">Angles:&nbsp;<select class="selectfile" id="zoomSelect"></select></TH></TR>
+	<TR><TH class="left">Change the playback speed of a loaded file or a finished live recording.</TH><TH class="right">Play speed:&nbsp;<select class="selectfile" id="speedSelect"></select></TH></TR>
+    <TR><TH class="left">Some bells will show a smaller "pull strength" measurement on the display.  This setting allows you to change the scale (units are arbitary).</TH><TH class="right">Scale:&nbsp;<select class="selectfile" id="scaleSelect"></select></TH></TR>
+	<TR><TH class="left">Select the number of bells you are using.</TH><TH class="right">Bells:&nbsp;<select class="selectfile" id="bellsSelect"></select></TH></TR>
+	<TR><TH class="left">Select the number of changes per minute (ringing rate) that you want to use.</TH><TH class="right"><button class="selectfile" id="minusCPMButton">-</button><span id="CPM" title="Peal time:">31.0&nbsp;</span><button class="selectfile" id="plusCPMButton">+</button></TH></TR>
+	<TR><TH class="left">Choose open handstroke timings.  Number is in beats (1.0 being the "normal" timing for the bell number and CPM you have chosen when playing with an open handstroke and 0.0 means playing without an open handstroke).</TH><TH class="right"><button class="selectfile" id="minusOHButton">-</button><span id="OH">1.0&nbsp;</span><button class="selectfile" id="plusOHButton">+</button></TH></TR>
+    <TR><TH class="left">Automatically calculate what the CPM and open handstroke timings are for the loaded sample.</TH><TH class="right"><button class="selectfile" id="autoButton">Auto</button></TH></TR>
+	<TR><TH class="left">Choose if you want automatic chime detection or manual chime simulation using a time (in ms) from BDC.  If your clappers are tied, use manual.</TH><TH class="right">Chimes:&nbsp;<select class="selectfile" id="chimeSelect"></select></TH></TR>
+    <TR><TH class="left">Click the button for a deskside demo.</TH><TH class="right"><button class="selectfile" id="calibButton">Start demo</button></TH></TR>
+    <TR><TH class="left">Show some diagnostics.</TH><TH class="right"><button class="selectfile" id="diagnosticsButton">Diagnostics</button></TH></TR>
 </TABLE>
 </div></div>
+<div id="demoModal" class="modal"><div class="modal-content"><span class="close">&times;</span><section><div class="face face-top"></div><div class="face face-bottom"></div><div class="face face-side1"></div><div class="face face-side2"></div><div class="face face-end1"></div><div class="face face-end2"></div></section></div></div>
 <div style="margin-top: 0px; padding-bottom: 5px; padding-top: 5px; padding-left: 60px; background: #686888; text-align:center; min-width: 800px;">
 	<img src="./circle-record-active.png" id="recordIcon" title="Record session/Stop Recording" class="invertable">
 	<img src="./circle-play-active.png" id="playIcon" title="Play downloaded or recorded session" class="invertable">

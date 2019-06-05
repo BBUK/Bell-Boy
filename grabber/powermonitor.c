@@ -86,7 +86,7 @@ int main(int argc, char const *argv[]){
         bcm2835_i2c_read(i2cBuffer,2); usleep(100);
         result = (i2cBuffer[0]<<8)+i2cBuffer[1];
         if(result & 0x8000) system("/usr/bin/sync && /usr/bin/shutdown -P now");
-        usleep(500000);
+        usleep(500000); // check every half second
     }
   
     while(!sig_exit){
@@ -95,9 +95,7 @@ int main(int argc, char const *argv[]){
             bcm2835_i2c_write(i2cBuffer,1); usleep(100); // set register 2 (power)
             bcm2835_i2c_read(i2cBuffer,2); usleep(100);
             result = (i2cBuffer[0]<<8)+i2cBuffer[1];
-            if(result & 0x8000){
-                system("/usr/bin/sync && /usr/bin/shutdown -P now");
-            }
+            if(result & 0x8000) system("/usr/bin/sync && /usr/bin/shutdown -P now");
         }
         usleep(5000000); // check every 5 seconds
     }

@@ -75,6 +75,7 @@ void calculate(float gx, float gy, float gz, float ax, float ay, float az, float
 float calculateError(float guess);
 void pushData(void);
 void doCalibration(void);
+void getSavedData(void);
 float savGol(unsigned int startPosition);
 void startRun(void);
 void readFIFO(float* values);
