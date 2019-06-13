@@ -1,7 +1,6 @@
 <!DOCTYPE html>
 <html lang="en-gb">
 <head><meta charset="UTF-8">
-<meta name="viewport" content="initial-scale=1,user-scalable=no,maximum-scale=1">
 <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
 <link rel="icon" href="/favicon.ico" type="image/x-icon">
 <style type="text/css">
@@ -27,7 +26,7 @@
     div.face-end1   {width: 40px; height:  50px; background-image: url(end1.jpg);   transform:translateX(-50%) translateY(-50%) rotateY(90deg)  translateZ(50px); }
     div.face-end2   {width: 40px; height:  50px; background-image: url(end2.jpg);   transform:translateX(-50%) translateY(-50%) rotateY(-90deg) translateZ(50px); }
 
-    img.invertable{width:64px; height: 64px; padding: 3px; padding-right: 8px; margin-top: 5px;}
+    img.invertable{width:64px; height: 64px; padding: 3px; padding-right: 8px; margin-top: 5px; touch-action: manipulation;}
 	
 	img.pointer {width:64px; height: 32px; padding: 0px; padding-right: 10px}
     
@@ -86,11 +85,10 @@
     text-decoration: none;
     cursor: pointer;
 	}
-    
-  
     </style>
 </head>
 <body>
+<div id="wrapper" style="padding: 0; margin: 0; min-width: 800px; touch-action: manipulation;">
 <div style="display: none; margin-top: 3px; border-radius: 25px 25px 0px 0px; background: #686888;" id="helpScreen"><iframe id="helpIframe" style="margin: 20px 20px 20px 20px; border: 0px; background-color: white;" scrolling="yes" src="help.html"></iframe></div>
 <div style="overflow: hidden; position: relative; margin-top: 3px; border-radius: 25px 25px 0px 0px; background: #686888; text-align:center;" id="bellGraphics">
 <canvas id="canvasBD" class="bellc"></canvas><canvas id="canvasBDt" class="bellc"></canvas>
@@ -117,7 +115,7 @@
 	<TR><TH class="left">Change the playback speed of a loaded file or a finished live recording.</TH><TH class="right">Play speed:&nbsp;<select class="selectfile" id="speedSelect"></select></TH></TR>
     <TR><TH class="left">Some bells will show a smaller "pull strength" measurement on the display.  This setting allows you to change the scale (units are arbitary).</TH><TH class="right">Scale:&nbsp;<select class="selectfile" id="scaleSelect"></select></TH></TR>
 	<TR><TH class="left">Select the number of bells you are using.</TH><TH class="right">Bells:&nbsp;<select class="selectfile" id="bellsSelect"></select></TH></TR>
-	<TR><TH class="left">Select the number of changes per minute (ringing rate) that you want to use.</TH><TH class="right"><button class="selectfile" id="minusCPMButton">-</button><span id="CPM" title="Peal time:">31.0&nbsp;</span><button class="selectfile" id="plusCPMButton">+</button></TH></TR>
+	<TR><TH class="left">Select the number of changes per minute (ringing rate) that you want to use.</TH><TH class="right"><button class="selectfile" id="minusCPMButton">-</button><span id="CPM" title="Peal time: 2:43">31.0&nbsp;</span><button class="selectfile" id="plusCPMButton">+</button></TH></TR>
 	<TR><TH class="left">Choose open handstroke timings.  Number is in beats (1.0 being the "normal" timing for the bell number and CPM you have chosen when playing with an open handstroke and 0.0 means playing without an open handstroke).</TH><TH class="right"><button class="selectfile" id="minusOHButton">-</button><span id="OH">1.0&nbsp;</span><button class="selectfile" id="plusOHButton">+</button></TH></TR>
     <TR><TH class="left">Automatically calculate what the CPM and open handstroke timings are for the loaded sample.</TH><TH class="right"><button class="selectfile" id="autoButton">Auto</button></TH></TR>
 	<TR><TH class="left">Choose if you want automatic chime detection or manual chime simulation using a time (in ms) from BDC.  If your clappers are tied, use manual.</TH><TH class="right">Chimes:&nbsp;<select class="selectfile" id="chimeSelect"></select></TH></TR>
@@ -126,13 +124,14 @@
 </TABLE>
 </div></div>
 <div id="demoModal" class="modal"><div class="modal-content"><span class="close">&times;</span><section><div class="face face-top"></div><div class="face face-bottom"></div><div class="face face-side1"></div><div class="face face-side2"></div><div class="face face-end1"></div><div class="face face-end2"></div></section></div></div>
-<div style="margin-top: 0px; padding-bottom: 5px; padding-top: 5px; padding-left: 60px; background: #686888; text-align:center; min-width: 800px;">
-	<img src="./circle-record-active.png" id="recordIcon" title="Record session/Stop Recording" class="invertable">
+<div style="margin-top: 0px; padding-bottom: 5px; padding-top: 5px; background: #686888; text-align:center; min-width: 800px;">
+	<span style="float: left; width: 48px; height: 48px; padding: 3px; margin-left: 8px;">&nbsp;</span>
+    <img src="./circle-record-active.png" id="recordIcon" title="Record session/Stop Recording" class="invertable">
 	<img src="./circle-play-active.png" id="playIcon" title="Play downloaded or recorded session" class="invertable">
 	<img src="./circle-pause-active.png" id="pauseIcon" title="Pause playback" class="invertable">
     <img src="./settings-active.png" id="settingsIcon" title="Open settings menu" class="invertable">
 	<img src="./cloud-download-active.png" id="downloadIcon" title="Download saved session" class="invertable">
-	<img src="./battery100.png" id="batteryIcon" title="Battery: Unknown%" align="right" style="width:48px; height: 30px; padding: 3px; padding-right: 8px; margin-top: 39px;">
+	<span><img src="./battery100.png" id="batteryIcon" title="Battery: Unknown%" style="float: right; width:48px; height: 30px; padding: 3px; margin-right: 8px; margin-top: 39px;"></span>
 </div>
 <div style="margin-top: 3px; border-radius: 0px 0px 25px 25px; background: #686888; text-align:center; min-width: 800px;">
 	<img src="./circle-back-active.png" id="backIcon" title="Skip back to previous stroke" class="invertable">
@@ -143,6 +142,6 @@
 	<img src="./circle-power-active.png" id="powerIcon" title="Power off sensor" class="invertable">
 	<img src="./help.png" id="helpIcon" title="Help" class="invertable">
 </div>
-<div style=" margin-top: 0px; background: #FFFFFF; color: #686888; text-align:center; min-width: 800px;" id="statusLine"></div>
+<div style=" margin-top: 0px; background: #FFFFFF; color: #686888; text-align:center; min-width: 800px;" id="statusLine"></div></div>
 </body>
 </html>

@@ -32,9 +32,9 @@ volatile char i2cbuffer[12];
 // STATE 3 = on battery power battery not measured
 // STATE 4 = on battery power, battery OK, start booting (flashing red)
 // STATE 5 = on battery power, battery OK, Pi booting (flashing green)
-// STATE 6 = on battery power, Pi booted (solid green)
-// STATE 7 = ordered shutdown mode
-// STATE 99 = shut down
+// STATE 6 = on battery power, Pi booted (green chirrup)
+// STATE 7 = ordered shutdown mode (red flashing)
+// STATE 99 = shut down (rapid red flashing)
 volatile uint8_t STATE = 0;
 
 void setup() {

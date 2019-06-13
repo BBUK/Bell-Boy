@@ -7,9 +7,13 @@ The Bell-Boy is a device used to measure how hard a person pulls on a tower bell
 
 ## Hardware
 
-The core of the hardware comprises a Raspberry Pi Zero and a PCB mounted on it containing two IMU ICs, a ATMEGA328 with the Arduino bootloader and power management and battery charging circuitry.  The Arduino manages battery charging, controls a LED and also stores device calibration data.  The battery is a LiPo integral to the device and is charged via power sourced from the Rasperry Pi's micro USB power socket.  The wiki gives construction information if you want to build your own.
+The core of the hardware comprises a Raspberry Pi Zero and a PCB mounted on it containing an IMU IC (an ICM20689), a ATMEGA328 with the Arduino bootloader and power management and battery charging circuitry.  The Arduino manages battery charging, controls a LED and also stores device calibration data.  The battery is a LiPo integral to the device and is charged via power sourced from the Rasperry Pi's micro USB power socket.  The wiki gives construction information if you want to build your own.
 
 The various files and a description of what they do is set out below
+
+This is the second version of the hardware.  The first version was designed to be mounted on top of the headstock.  More accurate measurements were found to have been achieved by mounting the device closer to the gudgeon pins of the bell.  That required the device to be smaller, which required a LiPo battery. As I could not find a case that would fit a Pi0 and one of the AA sized LiPo batteries, a "flat" LiPo was used which then needed associated charging paraphernalia.
+
+Despite only using one consumer-grade IMU, the second version is *much* more accurate than the first.  There is virtually zero drift in angular readings for all three axes (less than 0.3 degrees per hour).  Acceleration measurements are similarly improved.
 
 ## Software
 
@@ -21,14 +25,12 @@ This script takes a stock installation of Arch Linux Arm (for the Raspberry Pi) 
 
 This folder contains the source for two small executables.  
 
-The first "grabber" takes data from the IMUs, transforms it into angle, rotational velocity and rotational acceleration and pushes the data to the users browser via a websocket.  As the force applied by the ringer on the rope needs to be distinguished from gravity, vibration and sensor noise, the solution:
+The first, "grabber" takes data from the IMU, transforms it into angle, rotational velocity and rotational acceleration and pushes the data to the users browser via a websocket.  As the force applied by the ringer on the rope needs to be distinguished from gravity, vibration and sensor noise, the solution:
 
-(a) uses two IMUs and averages the sensor data from each of them
-(b) as the IMUs will inevitably operate at slightly different data rates, it aligns the sensor outputs from the two IMUs
-(c) oversamples data from the IMUs (sensors output at 500Hz but the user sees 125Hz). 
-(d) uses an extended Kalman filter (from https://github.com/hhyyti/dcm-imu) to calculate bell angle.  This particular filter seemed
-(e) uses a Savitsky-Golay filter to smooth the measured rotational acceleration
-(f) requires an one-time calibration of the IMU system (from https://bitbucket.org/alberto_pretto/imu_tk).  This is a really useful method of scale and bias calibration that does not require the IMU to be exactly positioned.
+(a) oversamples data from the IMUs (sensors output at 500Hz but the user sees 125Hz). 
+(b) uses a straightforward Mayhony-type filter to calculate angles (I previously used the extended Kalman filter (from https://github.com/hhyyti/dcm-imu) to calculate bell angle but it produced no better results in this application).
+(d) uses a Savitsky-Golay filter to smooth the measured rotational acceleration
+(d) requires an one-time calibration of the IMU system (from https://bitbucket.org/alberto_pretto/imu_tk).  This is a really useful method of scale and bias calibration that does not require the IMU to be exactly positioned.
 
 The grabber communicates with the user's broswer via websocketd (https://github.com/joewalnes/websocketd). 
 

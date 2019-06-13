@@ -68,7 +68,7 @@ default-lease-time 6000;
 max-lease-time 28800;
 authoritative;
 subnet 10.0.0.0 netmask 255.255.255.0 {
-range 10.0.0.2 10.0.0.10;
+range 10.0.0.2 10.0.0.200;
 option broadcast-address 10.0.0.255;
 option routers 10.0.0.1;
 default-lease-time 6000;
@@ -194,7 +194,7 @@ After=network.target
 [Service]
 User=root
 Type=simple
-ExecStart=/srv/http/websocketd --port=80 --staticdir=/srv/http/ /srv/http/grabber
+ExecStart=/srv/http/websocketd --maxforks=1 --port=80 --staticdir=/srv/http/ /srv/http/grabber
 Restart=always
 RestartSec=5
 [Install]

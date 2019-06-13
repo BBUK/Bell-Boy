@@ -56,15 +56,13 @@ var ctxATt=canvasATt.getContext("2d");
 
 var currentATmargin = 0;
 var currentATpixels = 1;
-var ATbottomMargin=25; // pixels at bottom of AT canvas
-var ATtopMargin = 25; // pixels at top of AT canvas
-//var forceColours = [ "#0000FF","#0A0AFF","#1414FF","#1F1FFF","#2929FF","#3333FF","#3D3DFF","#4747FF","#5252FF","#5C5CFF","#6666FF","#7070FF","#7A7AFF","#8585FF","#8F8FFF","#9999FF","#A3A3FF"];
-var angleColours = [ "#E01F1F","#E22C2C","#E43A3A","#E64747","#E85454","#EA6262","#EB6F6F","#ED7D7D","#EF8A8A","#F19898","#9898F1","#8A8AEF","#7D7DED","#6F6FEB","#6262EA","#5454E8","#4747E6","#3A3AE4","#2c2cE2","#1F1FE0"];
+var ATbottomMargin=45; // pixels at bottom of AT canvas
+var ATtopMargin = 30; // pixels at top of AT canvas
 var ATstepWidth = 30;
-var ATbarWidth = 30; // not needed
 
-var oldBellAngle = 0;
 var wsOpened = false;
+
+//var lastWinWidth =  window.innerWidth;
 
 var scaleValue = 0.0;
 
@@ -88,6 +86,10 @@ var changeInterval = null;
 var CPM = 31.0;
 var changeStep = null;
 var openHandstroke = 1.0;
+
+var TchangeInterval = null;
+var TopenHandstroke = null;
+var TchangeStep = null;
 
 var gravityValue = 0;
 
@@ -120,8 +122,8 @@ var sample = [];
 var ringTimes = [];
 var switchPoints = [];
 var template = [];
-var templateRingTimes = [];
-var templateSwitchPoints = [];
+var TringTimes = [];
+var TswitchPoints = [];
 
 var swingStarts = [];
 var TswingStarts = [];
@@ -243,8 +245,8 @@ function parseResult(dataBack) {
             var data = parseFloat(entries[3].slice(2));
             if(data != 0){
                 var value = parseFloat(entries[4].slice(2));
-                if(data == 1 || data == 2) ringTimes[ringTimes.length] = [value,0.0];
-                if(data == 3 || data == 4) ringTimes[ringTimes.length] = [value,1.0]; // this signals that the strike was faked
+                if(data == 1 || data == 2) ringTimes[ringTimes.length] = [value,0];
+                if(data == 3 || data == 4) ringTimes[ringTimes.length] = [value,1]; // this signals that the strike was faked
                 if(data == 7) switchPoints[switchPoints.length] = value;
                 if(sample.length == 1) gravityValue = value;
                 if(sample.length == 2)  {
@@ -261,8 +263,8 @@ function parseResult(dataBack) {
                 }
                 if(sample.length == 4) {
                     openHandstroke = Math.round(value*10)/10;
-                    if(openHandstroke < 0.39) openHandstroke = 0.0;
-                    if(openHandstroke > 2.21) openHandstroke = 2.2;
+                    if(openHandstroke < 0.0) openHandstroke = 0.0;
+                    if(openHandstroke > 2.2) openHandstroke = 2.2;
                     calculateTimings();
                 }
                 if(sample.length == 5){
@@ -289,8 +291,8 @@ function parseResult(dataBack) {
             var data = parseFloat(entries[3].slice(2));
             if(data != 0){
                 var value = parseFloat(entries[4].slice(2));
-                if(data == 1 || data == 2) ringTimes[ringTimes.length] = [value,0.0]; // need to check if this is zero length
-                if(data == 3 || data == 4) ringTimes[ringTimes.length] = [value,1.0]; // this signals that the strike was faked
+                if(data == 1 || data == 2) ringTimes[ringTimes.length] = [value,0]; // need to check if this is zero length
+                if(data == 3 || data == 4) ringTimes[ringTimes.length] = [value,1]; // this signals that the strike was faked
                 if(data == 7) switchPoints[switchPoints.length] = value;
                 if(sample.length == 1) gravityValue = value;
                 if(sample.length == 2)  {
@@ -307,8 +309,8 @@ function parseResult(dataBack) {
                 }
                 if(sample.length == 4) {
                     openHandstroke = Math.round(value*10)/10;
-                    if(openHandstroke < 0.39) openHandstroke = 0.0;
-                    if(openHandstroke > 2.21) openHandstroke = 2.2;
+                    if(openHandstroke < 0.0) openHandstroke = 0.0;
+                    if(openHandstroke > 2.2) openHandstroke = 2.2;
                     calculateTimings();
                 }
                 if(sample.length == 5){
@@ -335,15 +337,19 @@ function parseResult(dataBack) {
             swingStarts=[];
             currentPlaybackPosition = 1;
             currentSwingDisplayed = null;
+            clearAT();
+            if(currentStatus & TEMPLATEDISPLAYED) TdrawStroke();
             return;
         }
         currentStatus |= SESSIONLOADED;
         currentStatus |= SKIPMAIN;
         updateIcons();
         swingStarts=[];
-        swingStarts[0] = 0;
+        swingStarts[0] = 3;
         currentPlaybackPosition = 1;
         currentSwingDisplayed = null;
+        clearAT();
+        if(currentStatus & TEMPLATEDISPLAYED) TdrawStroke();
         var j=0;
         var arrayLength = sample.length;
         while (j < arrayLength && sample[j][0] < 90.0) j++;  // move forward through sample to next swing
@@ -355,13 +361,13 @@ function parseResult(dataBack) {
                 if (j == arrayLength ) break;
             }
         }
-        if (switchPoints.length == 0 || sample[switchPoints[0]][0] > 180) switchPoints.unshift(0); // a "just in case" should start at stand not be detected
+        if (switchPoints.length == 0 || sample[switchPoints[0]][0] > 180) switchPoints.unshift(3); // a "just in case" should start at stand not be detected
         var k = 0;
         for(j=0; j< ringTimes.length; ++j){
-            if(ringTimes[j][1] == 1.0) k += 1;
+            if(ringTimes[j][1] == 1) k += 1;
         }
         if(k==0){
-            setStatus("Loaded: " + sample.length.toString() + " samples. Should Have: " + dataBack.slice(5) + ". " + swingStarts.length.toString() + " strokes found.");
+            setStatus(swingStarts.length.toString() + " strokes found.");
         } else {
             setStatus("Loaded: " + sample.length.toString() + " samples. Should Have: " + dataBack.slice(5) + ". " + swingStarts.length.toString() + " strokes found. " + k + " strikes faked.");
         }
@@ -461,6 +467,10 @@ function parseResult(dataBack) {
         currentStatus |= ABORTFLAG;
         return;
     }
+    if (dataBack.slice(0,5) == "EOVF:"){
+        setStatus("Data overflow!");
+        return;
+    }
     setStatus(dataBack);
 };
 
@@ -504,28 +514,18 @@ function playbackSample(){
 
 function getAveragePullStrengths(){
     averagePullStrength=[];
-    var totalPull = null;
+    var totalPull = 0.0;
     var i = null, j=null, k=null,m = null;
-    for (j=0; j<switchPoints.length; j++){
+    for (j=0; j<switchPoints.length; ++j){
         i=sample[switchPoints[j]][0]; // angle at direction change
         for (k=switchPoints[j]; k>0 && Math.abs(sample[k][0] - i) < 5 ;k--); // find point 5 degrees back from direction change
-        k++;
-        totalPull=0;
-        if(j % 2 == 0){ // handstroke pull
-            for (m=0;(k+m)<sample.length && (sample[k+m][0] - i) < 5; m++){ // add up accns to point 5 degrees forward from direction change
-                pull = sample[k+m][2];
-                if(pull < 25) continue;  // ignore stuff below noise floor
-                totalPull += pull;
-            }
-            averagePullStrength[averagePullStrength.length] = totalPull/m;
-        } else { // backstroke pull
-            for (m=0;(k+m)<sample.length && (i-sample[k+m][0]) < 5; m++){ // add up accns to point 5 degrees forward from direction change
-                pull = sample[k+m][2];
-                if(pull > -25) continue; 
-                totalPull += pull;
-            }
-            averagePullStrength[averagePullStrength.length] = -totalPull/m;            
+        totalPull = 0.0;
+        for (m=1;(k+m)<sample.length && Math.abs(sample[k+m][0] - i) < 5; m++){ // add up accns to point 5 degrees forward from direction change
+            pull = Math.abs(sample[k+m][2]);
+            if(pull < 25) continue;  // ignore stuff below noise floor
+            totalPull += pull;
         }
+        averagePullStrength[averagePullStrength.length] = totalPull/m;
     }
 }
 
@@ -567,7 +567,6 @@ function drawStroke(){
     } else {
         endpoint = swingStarts[currentSwingDisplayed+1];
     }
-    
     drawSamples(startpoint,endpoint-startpoint);
     currentStatus &= ~(LASTHS1 | LASTBS1 | LASTHS2 | LASTBS2);
 
@@ -577,87 +576,92 @@ function drawStroke(){
     ctxBD.fillStyle = "white";
     var handstrokelength = 0.0;
     var backstrokelength = 0.0;
-    handstrokelength = ringTimes[(currentSwingDisplayed * 2)];
-    backstrokelength = ringTimes[(currentSwingDisplayed * 2)+1];
+    if(ringTimes.length > (currentSwingDisplayed * 2)) handstrokelength = ringTimes[(currentSwingDisplayed * 2)][0];
+    if(ringTimes.length > (currentSwingDisplayed * 2)+1) backstrokelength = ringTimes[(currentSwingDisplayed * 2)+1][0];
     if(handstrokelength != 0.0){
         ctxBD.fillText("H " + handstrokelength.toFixed(2)+"s", 2*BDwidth + 32, ctxBD.canvas.height-20);
     }
     if(backstrokelength != 0.0){
         ctxBD.fillText("B " + backstrokelength.toFixed(2)+"s", 2*BDwidth + 32, ctxBD.canvas.height-10);
     }
-// up to here 
     clearAT();
-    var numberOnATdisplay = Math.ceil((1.0*ctxATt.canvas.width)/ATstepWidth);
-    var offset = ((ctxATt.canvas.width/2.0 - ATstepWidth/2.0) % ATstepWidth) - ATstepWidth;
-    var startSwing = Math.ceil(currentSwingDisplayed - numberOnATdisplay/2.0);
-    ctxAT.font = "12px sans serif";
+    ctxAT.font = "14px sans serif";
+    ctxAT.fillStyle = "white";
     ctxAT.textAlign = "start";
     ctxAT.textBaseline="bottom";
-    var pixelsPerUnit = (ctxAT.canvas.height-ATbottomMargin-ATtopMargin)/scaleValue;
-    var angleColour = 0;
-    var powerHeight = 0;
+    
     var totalHeight = ctxAT.canvas.height-ATbottomMargin-ATtopMargin;
-/*    
-    for (var i=0; i<numberOnATdisplay; i++){
-        if ((startSwing + i > swingStarts.length -1) || (startSwing + i > halfSwingStarts.length -1) || startSwing + 1 > averagePullStrength.length -1 || startSwing + i > halfAveragePullStrength -1) break;
-        if ((startSwing + i) < 0) continue;
-        ctxAT.fillStyle = "rgb(255,255,255)";
-        ctxAT.fillText((startSwing+i+1).toString(), i*ATstepWidth+offset, ctxAT.canvas.height-8);
+    var range = totalHeight/4.0; //(0.833*totalHeight)/5.0;  //range of +- 2 change "steps"
+    var position = 0.0;
+    var overflow = 0;
+    var colour = "white";
+    var time = 0;
+    var cross = 0;
+    var faked = 0;
+    var currentDrawRing = 0;
+    var overflow = 0;
+    var time = 0;
+    var height = 0;
+    var rise = 0;
+    var i = 0;
+    var offset = 0;
+    i = Math.floor(-(ctxATt.canvas.width/2)/ATstepWidth)-1;
 
-        powerHeight = Math.round(pixelsPerUnit*averagePullStrength[startSwing + i]);
-        if (powerHeight > totalHeight) powerHeight=totalHeight;
-        angleColour = Math.round(sample[swingStarts[startSwing + i]][0] + angleColours.length/2.0);
-        if (angleColour > (angleColours.length-1)) angleColour = angleColours.length-1; 
-        if (angleColour < 0) angleColour = 0;
-        ctxAT.fillStyle=angleColours[angleColour];
-        ctxAT.fillRect(offset + i*ATstepWidth, ctxAT.canvas.height-ATbottomMargin-powerHeight, ATbarWidth, powerHeight);
+    for(;;i++){
+        cross = 0;
+        faked = 0;
+        overflow = 0;
+        currentDrawRing = (currentSwingDisplayed*2)+i;
+//        if((Math.floor(i/2)+currentSwingDisplayed)+1 > swingStarts.length -1) break;
+//        if((Math.floor(i/2)+currentSwingDisplayed)+1 < 0) continue;
+        if(currentDrawRing < 0) continue;
+        if(currentDrawRing > ringTimes.length -1) break;
+        if(currentDrawRing > switchPoints.length -1) break;
+        if(currentDrawRing > averagePullStrength.length -1) break;
+        offset = (i*ATstepWidth)+ctxATt.canvas.width/2;
+        if(offset > ctxATt.canvas.width) break;
+        if(offset < -ATstepWidth) continue;
+        time = ringTimes[currentDrawRing][0];
+        height = 10 + 25 * (averagePullStrength[currentDrawRing]/scaleValue);
+        if(height > 30) height = 30;
 
-        powerHeight = Math.round(pixelsPerUnit*halfAveragePullStrength[startSwing + i]);
-        if (powerHeight > totalHeight) powerHeight=totalHeight;
-        angleColour = Math.round(360-sample[halfSwingStarts[startSwing + i]][0] + angleColours.length/2.0);
-        if (angleColour > (angleColours.length-1)) angleColour = angleColours.length-1; 
-        if (angleColour < 0) angleColour = 0;
-        ctxAT.fillStyle=angleColours[angleColour];
-        ctxAT.fillRect(offset + i*ATstepWidth+ATbarWidth+4, ctxAT.canvas.height-ATbottomMargin-powerHeight, ATbarWidth, powerHeight);
-    }
-    if ((currentStatus & TEMPLATEDISPLAYED) == 0) return;
-// do template on staves
-    numberOnATdisplay = Math.ceil((1.0*ctxATt.canvas.width)/ATstepWidth);
-    offset = ((ctxATt.canvas.width/2.0 - ATstepWidth/2.0) % ATstepWidth) - ATstepWidth;
-    startSwing = Math.ceil(TcurrentSwingDisplayed - numberOnATdisplay/2.0);
-    ctxAT.strokeStyle = "rgb(240,240,0)";
-    for (var i=0; i<numberOnATdisplay; i++){
-        if ((startSwing + i > swingStarts.length -1) || (startSwing + i > halfSwingStarts.length -1) || startSwing + 1 > averagePullStrength.length -1 || startSwing + i > halfAveragePullStrength -1) break;
-        if ((startSwing + i) < 0) continue;
-        ctxAT.fillStyle = "rgba(240,240,0,1)";
-        ctxAT.fillText((startSwing+i+1).toString(), i*ATstepWidth+offset+ATbarWidth+4, ctxAT.canvas.height-8);
-
-        powerHeight = Math.round(pixelsPerUnit*averagePullStrength[startSwing + i]);
-        if (powerHeight > totalHeight) powerHeight=totalHeight;
-        angleColour = Math.round(sample[swingStarts[startSwing + i]][0] + angleColours.length/2.0);
-        if (angleColour > (angleColours.length-1)) angleColour = angleColours.length-1; 
-        if (angleColour < 0) angleColour = 0;
-        ctxAT.strokeRect(offset + (i+0.25)*ATstepWidth -10, ctxAT.canvas.height-ATbottomMargin-powerHeight-1, 10, powerHeight);
-        ctxAT.fillStyle=angleColours[angleColour];
-        ctxAT.fillRect(offset + (i+0.25)*ATstepWidth -9, ctxAT.canvas.height-ATbottomMargin-powerHeight, 8, powerHeight);
+        if(ringTimes[currentDrawRing][1]==1) faked = 1;
         
-        powerHeight = Math.round(pixelsPerUnit*halfAveragePullStrength[startSwing + i]);
-        if (powerHeight > totalHeight) powerHeight=totalHeight;
-        angleColour = Math.round(360-sample[halfSwingStarts[startSwing + i]][0] + angleColours.length/2.0);
-        if (angleColour > (angleColours.length-1)) angleColour = angleColours.length-1; 
-        if (angleColour < 0) angleColour = 0;
-        ctxAT.strokeRect(offset + (i+0.25)*ATstepWidth +ATbarWidth -6, ctxAT.canvas.height-ATbottomMargin-powerHeight-1, 10, powerHeight);
-        ctxAT.fillStyle=angleColours[angleColour];
-        ctxAT.fillRect(offset + (i+0.25)*ATstepWidth+ATbarWidth-5, ctxAT.canvas.height-ATbottomMargin-powerHeight, 8, powerHeight);
+        if(!(i%2)){
+            position = -range*(time - (changeInterval + (openHandstroke*changeStep)))/changeStep;
+            rise = sample[switchPoints[currentDrawRing]][0] * (height/10.0); // show a rise of +-10 degrees (consider making this += 20)
+        } else {
+            position = -range*(time - changeInterval)/changeStep;
+            rise = (360-sample[switchPoints[currentDrawRing]][0]) * (height/10.0); // show a rise of +-10 degrees (consider making this += 20)
+        }
+        if(rise >= height) rise = height;
+        if(rise <= -height) rise = -height;
+
+        if(position < -totalHeight/2.0){
+            overflow = 1;
+            position = -totalHeight/2.0;
+            height = 10;
+        }
+        if(position > totalHeight/2.0){
+            overflow = 1;
+            position = totalHeight/2.0
+            height = 10;
+        }
+        position += (ATtopMargin + totalHeight/2.0);
+        colour = "white";
+        if(faked || overflow) {colour = "rgba(240,128,128,1)"; cross = 1; }
+        drawBar(offset,ctxAT,!(i%2),position,height,rise,cross,colour);
+        if(!(i%2)){
+            ctxAT.fillText((Math.floor(i/2)+currentSwingDisplayed+1).toFixed(0), offset-20, ctxAT.canvas.height);
+        }
     }
-*/
+    ctxAT.beginPath();
 }
 
 function TdrawStroke(){
-    if (currentSwingDisplayed == null) return;
+    if (TcurrentSwingDisplayed == null) return;
     if ((currentStatus & TEMPLATEDISPLAYED) == 0) return;
     var startpoint = TswingStarts[TcurrentSwingDisplayed];
-    var endpoint = 0;
     var endpoint = 0;
     if(TcurrentSwingDisplayed == TswingStarts.length-1) {
         endpoint = template.length - 3
@@ -667,25 +671,110 @@ function TdrawStroke(){
 
     drawSamplesOnTemplate(startpoint,endpoint-startpoint);
 
-// up to here
-
-
     ctxBD.clearRect(posCB+1, ctxBD.canvas.height-60, CBwidth-2, 20);
+    ctxBD.textAlign = "center";
     ctxBD.font = "12px sans serif";
     ctxBD.fillStyle = "rgba(240,240,0,1)";
-    ctxBD.textAlign = "center";
     var handstrokelength = 0.0;
     var backstrokelength = 0.0;
-    handstrokelength = (TswingStarts[(TcurrentSwingDisplayed *2) + 1] - TswingStarts[TcurrentSwingDisplayed * 2]) * sampleInterval;  
-    if((TcurrentSwingDisplayed * 2) + 2 < TswingStarts.length) {
-        backstrokelength = (TswingStarts[(TcurrentSwingDisplayed * 2) + 2] - TswingStarts[(TcurrentSwingDisplayed * 2) + 1]) * sampleInterval;
-    } 
+    if(TringTimes.length > (TcurrentSwingDisplayed * 2)) handstrokelength = TringTimes[(TcurrentSwingDisplayed * 2)][0];
+    if(TringTimes.length > (TcurrentSwingDisplayed * 2)+1) backstrokelength = TringTimes[(TcurrentSwingDisplayed * 2)+1][0];
     if(handstrokelength != 0.0){
-        ctxBD.fillText("H " + handstrokelength.toFixed(2)+"s", posCB + CBwidth/2, ctxBD.canvas.height-50);
+        ctxBD.fillText("H " + handstrokelength.toFixed(2)+"s", 2*BDwidth + 32, ctxBD.canvas.height-50);
     }
     if(backstrokelength != 0.0){
-        ctxBD.fillText("B " + backstrokelength.toFixed(2)+"s", posCB + CBwidth/2, ctxBD.canvas.height-40);
+        ctxBD.fillText("B " + backstrokelength.toFixed(2)+"s", 2*BDwidth + 32, ctxBD.canvas.height-40);
     }
+    ctxAT.font = "14px sans serif";
+    ctxAT.textAlign = "start";
+    ctxAT.textBaseline="bottom";
+    ctxAT.fillStyle = "rgba(240,240,0,0.6)";
+    ctxAT.strokeStyle = "rgba(240,240,0,0.6)";
+    ctxAT.beginPath();
+    var totalHeight = ctxAT.canvas.height-ATbottomMargin-ATtopMargin;
+    var range = totalHeight/4.0; //(0.833*totalHeight)/5.0;  //range of +- 2 change "steps"
+    var position = 0.0;
+    var overflow = 0;
+    var time = 0;
+    var cross = 0;
+    var currentDrawRing = 0;
+    var overflow = 0;
+    var time = 0;
+    var height = 0;
+    var rise = 0;
+    var i = 0;
+    var offset = 0;
+    i = Math.floor(-(ctxATt.canvas.width/2)/ATstepWidth)-1;
+
+    for(;;i++){
+        cross = 0;
+        faked = 0;
+        overflow = 0;
+        currentDrawRing = (TcurrentSwingDisplayed*2)+i;
+//        if((Math.floor(i/2)+currentSwingDisplayed)+1 > swingStarts.length -1) break;
+//        if((Math.floor(i/2)+currentSwingDisplayed)+1 < 0) continue;
+        if(currentDrawRing < 0) continue;
+        if(currentDrawRing > TringTimes.length -1) break;
+        if(currentDrawRing > TswitchPoints.length -1) break;
+        if(currentDrawRing > TaveragePullStrength.length -1) break;
+        offset = (i*ATstepWidth)+ctxATt.canvas.width/2;
+        if(offset > ctxATt.canvas.width) break;
+        if(offset < -ATstepWidth) continue;
+        time = TringTimes[currentDrawRing][0];
+        height = 10 + 25 * (TaveragePullStrength[currentDrawRing]/scaleValue);
+        if(height > 30) height = 30;
+
+        if(TringTimes[currentDrawRing][1]==1) faked = 1;
+
+        if(!(i%2)){
+            position = -range*(time - (TchangeInterval + (TopenHandstroke*TchangeStep)))/TchangeStep;
+            rise = template[TswitchPoints[currentDrawRing]][0] * (height/10.0); // show a rise of +-10 degrees (consider making this += 20)
+        } else {
+            position = -range*(time - TchangeInterval)/TchangeStep;
+            rise = (360-template[TswitchPoints[currentDrawRing]][0]) * (height/10.0); // show a rise of +-10 degrees (consider making this += 20)
+        }
+        if(rise >= height) rise = height;
+        if(rise <= -height) rise = -height;
+
+        if(position < -totalHeight/2.0){
+            overflow = 1;
+            position = -totalHeight/2.0;
+            height = 10;
+        }
+        if(position > totalHeight/2.0){
+            overflow = 1;
+            position = totalHeight/2.0
+            height = 10;
+        }
+        position += (ATtopMargin + totalHeight/2.0);
+        if(faked || overflow) cross = 1;
+        if(!(i%2)){
+            if(cross){
+                ctxAT.moveTo(offset-12, position-height);
+                ctxAT.lineTo(offset-6, position+height);
+                ctxAT.moveTo(offset-6, position-height);
+                ctxAT.lineTo(offset-12, position+height);
+            } else {
+                ctxAT.fillRect(offset-12, position+rise, 6, height-rise);
+
+            }
+            ctxAT.rect(offset-12, position-height, 6, 2 * height);
+            ctxAT.fillText((Math.floor(i/2)+TcurrentSwingDisplayed+1).toFixed(0), offset+5, ctxAT.canvas.height);
+        } else {
+            if(cross){
+                ctxAT.moveTo(offset-14, position-height);
+                ctxAT.lineTo(offset-8, position+height);
+                ctxAT.moveTo(offset-8, position-height);
+                ctxAT.lineTo(offset-14, position+height);
+            } else {
+                ctxAT.fillRect(offset-14, position+rise, 6, height-rise);
+
+            }
+            ctxAT.rect(offset-14, position-height, 6, 2 * height);
+        }
+        ctxAT.stroke();
+    }
+    ctxAT.beginPath();
 }
 
 function calculateTimings(){
@@ -693,19 +782,22 @@ function calculateTimings(){
     changeInterval = 60.0/CPM;
     changeStep = changeInterval/numberOfBells;
     var pealTime = 0.0;
-    if(numberOfBells > 7){
+    if(numberOfBells > 7){ // not sure this is calculated correctly, as it does not take into account an extra beat for open handstroke
         pealTime = (changeInterval * 5000.0);
     } else {
         pealTime = (changeInterval * 5040.0);
     }
     var hours = Math.floor(pealTime/3600.0);
-    var minutes = Math.round((pealTime % 3600)/60.0);
+    var minutes = "0" + Math.round((pealTime % 3600)/60.0);
     document.getElementById("CPM").innerHTML=CPM.toFixed(1)+"&nbsp;";
-    document.getElementById("CPM").title = "Peal time: " + hours + ":" + minutes;
+    document.getElementById("CPM").title = "Peal time: " + hours + ":" + minutes.substr(minutes.length-2,2);
     document.getElementById("OH").innerHTML=openHandstroke.toFixed(1)+"&nbsp;";
     if(!nonLive){
         ws.send("BELS:" + numberOfBells + "," + CPM + "," + openHandstroke.toFixed(1) + "," + document.getElementById("chimeSelect").options[document.getElementById("chimeSelect").selectedIndex].text); 
     }
+    drawTDCs();
+    foreclick(0); // redraw display with new values
+
 }
 
 function drawSamples(position,iterations){
@@ -715,10 +807,10 @@ function drawSamples(position,iterations){
         var dataEntryCurrent = sample[position + i].slice();
         var dataEntryNext = sample[position + i + 1].slice();
         if((currentStatus & RECORDINGSESSION) != 0 || (currentStatus & PLAYBACK) != 0 ) {
-            if(dataEntryCurrent[3] == 2) drawLiveTime(dataEntryCurrent[4],false,false);
-            if(dataEntryCurrent[3] == 4) drawLiveTime(dataEntryCurrent[4],false,true);
-            if(dataEntryCurrent[3] == 1) drawLiveTime(dataEntryCurrent[4],true,false);
-            if(dataEntryCurrent[3] == 3) drawLiveTime(dataEntryCurrent[4],true,true);
+            if(dataEntryCurrent[3] == 2) drawLiveTime(dataEntryCurrent[4],false,false,position+i);
+            if(dataEntryCurrent[3] == 4) drawLiveTime(dataEntryCurrent[4],false,true,position+i);
+            if(dataEntryCurrent[3] == 1) drawLiveTime(dataEntryCurrent[4],true,false,position+i);
+            if(dataEntryCurrent[3] == 3) drawLiveTime(dataEntryCurrent[4],true,true,position+i);
             drawBell(180-dataEntryCurrent[0]);
         }
 //        drawAT(dataEntryCurrent[2]);
@@ -824,18 +916,22 @@ function drawSamples(position,iterations){
     }
 }
 
-function drawLiveTime(time, HS, faked){
+function drawLiveTime(time, HS, faked,currentPosition){
     currentATmargin += ATstepWidth;
     if (currentATmargin >= ctxAT.canvas.width/2) currentATmargin -= ctxAT.canvas.width/2;
     ctxAT.clearRect(currentATmargin-20                     ,0,ATstepWidth,ctxAT.canvas.height);
     ctxAT.clearRect(currentATmargin-20+ctxAT.canvas.width/2,0,ATstepWidth,ctxAT.canvas.height);
 
     var totalHeight = ctxAT.canvas.height-ATbottomMargin-ATtopMargin;
-    var range = (0.833*totalHeight)/5.0;  //range of +- 2.5 change "steps"
+    var range = totalHeight/4.0; //(0.833*totalHeight)/5.0;  //range of +- 2 change "steps"
 
     var position = 0.0;
 
-    if(HS) position = -range*(time - changeInterval + (openHandstroke*changeStep))/changeStep;
+    if(HS) {
+        position = -range*(time - (changeInterval + (openHandstroke*changeStep)))/changeStep;
+    } else {
+        position = -range*(time - changeInterval)/changeStep;
+    }
     var overflow = 0;
     if(position < -totalHeight/2.0){
         overflow = 1;
@@ -848,111 +944,87 @@ function drawLiveTime(time, HS, faked){
 
     position += (ATtopMargin + totalHeight/2.0);
 
-    ctxAT.beginPath();
-
-    if(faked){
-        ctxAT.strokeStyle = "red";
+    var colour = "white";
+    if(faked) colour = "red";
+    if(overflow) colour = "yellow";
+    
+    var height = 0;
+    var cross = 0; 
+    var j = 0;
+    if(switchPoints.length != 0){
+        for(j = switchPoints.length - 1; j >= 0 && switchPoints[j] > currentPosition; j--); // find switchpoint preceding the current position
+        j = switchPoints[j];
+    }
+    if (currentPosition - j > 300){ // 300 = 2.4 seconds worth of samples - not possible to ring this slowly unless really holding up - assume bad data
+        height = 10; //default height because the switchPoint is not close enough
+        cross = 1;
     } else {
-        ctxAT.strokeStyle = "white";
+        var i=sample[j][0]; // angle at direction change
+        for (k=j; k>0 && Math.abs(sample[k][0] - i) < 5 ;k--);
+        var totalPull = 0.0;
+        var pull = 0.0;
+        for (var m=1;(k+m)<sample.length && Math.abs(sample[k+m][0] - i) < 5; m++){ // add up accns to point 5 degrees forward from direction change
+            pull = Math.abs(sample[k+m][2]);
+            if(pull < 25) continue;  // ignore stuff below noise floor
+            totalPull += pull;
+        }
+        height = 10 + 25 * ((totalPull/m)/scaleValue);
     }
-
-    if(overflow){
-        ctxAT.strokeStyle = "yellow";
-    }
-
+    if(height > 30) height = 30;
+    
+    var rise = 0.0;
     if(HS){
-        ctxAT.rect(currentATmargin-18, position-10, 18, 18);
-        ctxAT.moveTo(currentATmargin-18, position-10);
-        ctxAT.lineTo(currentATmargin, position+10);
-        ctxAT.moveTo(currentATmargin, position-10);
-        ctxAT.lineTo(currentATmargin-18, position+10);
-        ctxAT.moveTo(currentATmargin-20, position-6);
-        ctxAT.lineTo(currentATmargin-20, position+6);
-
-        ctxAT.rect(currentATmargin-18+ctxAT.canvas.width/2, position-10, 18, 18);
-        ctxAT.moveTo(currentATmargin-18+ctxAT.canvas.width/2, position-10);
-        ctxAT.lineTo(currentATmargin+ctxAT.canvas.width/2, position+10);
-        ctxAT.moveTo(currentATmargin+ctxAT.canvas.width/2, position-10);
-        ctxAT.lineTo(currentATmargin-18+ctxAT.canvas.width/2, position+10);
-        ctxAT.moveTo(currentATmargin-20+ctxAT.canvas.width/2, position-6);
-        ctxAT.lineTo(currentATmargin-20+ctxAT.canvas.width/2, position+6);
+        rise=sample[j][0] * (height/10.0); // show a rise of +-10 degrees (consider making this += 20)
     } else {
-        ctxAT.rect(currentATmargin-20, position-10, 18, 18);
-        ctxAT.moveTo(currentATmargin-20, position-10);
-        ctxAT.lineTo(currentATmargin-2, position+10);
-        ctxAT.moveTo(currentATmargin-2, position-10);
-        ctxAT.lineTo(currentATmargin-20, position+10);
-        ctxAT.moveTo(currentATmargin, position-6);
-        ctxAT.lineTo(currentATmargin, position+6);
-
-        ctxAT.rect(currentATmargin-20+ctxAT.canvas.width/2, position-10, 18, 18);
-        ctxAT.moveTo(currentATmargin-20+ctxAT.canvas.width/2, position-10);
-        ctxAT.lineTo(currentATmargin-2+ctxAT.canvas.width/2, position+10);
-        ctxAT.moveTo(currentATmargin-2+ctxAT.canvas.width/2, position-10);
-        ctxAT.lineTo(currentATmargin-20+ctxAT.canvas.width/2, position+10);
-        ctxAT.moveTo(currentATmargin+ctxAT.canvas.width/2, position-6);
-        ctxAT.lineTo(currentATmargin+ctxAT.canvas.width/2, position+6);
+        rise=(360-sample[j][0]) * (height/10.0);
     }
-/*
-    ctxAT.rect(currentATmargin-20, position-10, 20, 20);
-    ctxAT.moveTo(currentATmargin-20, position-10);
-    ctxAT.lineTo(currentATmargin, position+10);
-    ctxAT.moveTo(currentATmargin, position-10);
-    ctxAT.lineTo(currentATmargin-20, position+10);
-
-    ctxAT.rect(currentATmargin-20+ctxAT.canvas.width/2, position-10, 20, 20);
-    ctxAT.moveTo(currentATmargin-20+ctxAT.canvas.width/2, position-10);
-    ctxAT.lineTo(currentATmargin+ctxAT.canvas.width/2, position+10);
-    ctxAT.moveTo(currentATmargin+ctxAT.canvas.width/2, position-10);
-    ctxAT.lineTo(currentATmargin-20+ctxAT.canvas.width/2, position+10);
-
-*/  
-    ctxAT.stroke();
-
+    if(rise >= height) rise = height;
+    if(rise <= -height) rise = -height;
+    
+    drawBar(currentATmargin,ctxAT,HS,position,height,rise,cross,colour);
+    drawBar(currentATmargin+ctxAT.canvas.width/2,ctxAT,HS,position,height,rise,cross,colour);
+    
     document.getElementById("canvasAT").style.marginLeft = (currentATmargin * -1) + "px";
+
 }
 
-function drawHSpower(accn,angle){
-    var totalHeight = ctxAT.canvas.height-ATbottomMargin-ATtopMargin;
-    var pixelsPerUnit = totalHeight/scaleValue;
+function drawBar(offset, context,HS,position,height,rise,cross,colour){
+    var j = 0;
+    context.strokeStyle = colour;
+    context.beginPath();
+    if(HS){
+        context.rect(offset-18, position-height, 18, 2 * height);
+        if(cross){
+            context.moveTo(offset-18, position-height);
+            context.lineTo(offset, position+height);
+            context.moveTo(offset, position-height);
+            context.lineTo(offset-18, position+height);
+        } else {
+            for(j=0;(rise + j) < height; j+=3){
+                context.moveTo(offset-18, position+rise+j);
+                context.lineTo(offset, position+rise+j);
+            }
+        }
+        context.moveTo(offset-20, position-6);
+        context.lineTo(offset-20, position+6);
+    } else {
+        context.rect(offset-20, position-height, 18, 2 * height);
+        if(cross){
+            context.moveTo(offset-20, position-height);
+            context.lineTo(offset-2, position+height);
+            context.moveTo(offset-2, position-height);
+            context.lineTo(offset-20, position+height);
+        } else {
+            for(j=0;(rise + j) < height; j+=3){
+                context.moveTo(offset-20, position+rise+j);
+                context.lineTo(offset-2, position+rise+j);
+            }  
+        }
+        context.moveTo(offset, position-6);
+        context.lineTo(offset, position+6);
 
-//    var ypos = halfHeight + (halfHeight*(accn/scaleValue)/2);
-//    if (ypos < 0) ypos=0;
-//    if (ypos > halfHeight *2) ypos = halfHeight*2;
-
-    currentATmargin += ATstepWidth;
-    if (currentATmargin >= ctxAT.canvas.width/2) currentATmargin -= ctxAT.canvas.width/2;
-
- 
-    var angleColour = Math.round(angle + angleColours.length/2.0);
-    
-    if (angleColour > (angleColours.length-1)) angleColour = angleColours.length-1; 
-    if (angleColour < 0) angleColour = 0;
-    ctxAT.fillStyle=angleColours[angleColour];
-    
-    var powerHeight = Math.round(pixelsPerUnit*accn);
-    if (powerHeight > totalHeight) powerHeight=totalHeight;
-
-    ctxAT.fillRect(currentATmargin-ATstepWidth, ctxAT.canvas.height-ATbottomMargin-powerHeight, ATbarWidth, powerHeight);
-    ctxAT.fillRect(currentATmargin-ATstepWidth+ctxAT.canvas.width/2, ctxAT.canvas.height-ATbottomMargin-powerHeight, ATbarWidth, powerHeight);
-
-    document.getElementById("canvasAT").style.marginLeft = (currentATmargin * -1) + "px";
-}
-
-function drawBSpower(accn,angle){
-    var totalHeight = ctxAT.canvas.height-ATbottomMargin-ATtopMargin;
-    var pixelsPerUnit = totalHeight/scaleValue;
-    var angleColour = Math.round(angle + angleColours.length/2.0);
-    
-    if (angleColour > (angleColours.length-1)) angleColour = angleColours.length-1; 
-    if (angleColour < 0) angleColour = 0;
-    
-    ctxAT.fillStyle=angleColours[angleColour];
-    
-    var powerHeight = Math.round(pixelsPerUnit*accn);
-    if (powerHeight > totalHeight) powerHeight = totalHeight;
-    ctxAT.fillRect(currentATmargin-ATstepWidth+ATbarWidth+4,ctxAT.canvas.height-ATbottomMargin-powerHeight,ATbarWidth,powerHeight);
-    ctxAT.fillRect(currentATmargin-ATstepWidth+ATbarWidth+4+ctxAT.canvas.width/2,ctxAT.canvas.height-ATbottomMargin-powerHeight,ATbarWidth,powerHeight);
+    }
+    context.stroke();
 }
 
 function clearTemplates(){
@@ -1074,9 +1146,64 @@ fileOpenButton.onclick = function() {
     updateIcons();
 };
 
+document.getElementById('autoButton').onclick = function(){
+    if (currentStatus & DOWNLOADINGFILE) return;
+    if (currentStatus & PLAYBACK) return;
+    if (currentStatus & HELPDISPLAYED) return;
+    if (currentStatus & RECORDINGSESSION) return;
+    if (!(currentStatus & SESSIONLOADED)) {
+        setStatus("A session must be loaded to do this.");
+        return;
+    }
+
+    var BstrikeCount = 0;
+    var HstrikeCount = 0;
+    var averageBSTime = 0.0;
+    var averageHSTime = 0.0;
+    var impliedOHFactor = 0.0;
+    var HditchFirst = 0;
+    var BditchFirst = 0;
+
+    for(i=0;i<sample.length;++i){
+        if(sample[i][3] == 1){
+            if(HditchFirst != 0){
+                HstrikeCount += 1;
+                averageHSTime = ((averageHSTime * (HstrikeCount - 1)) + sample[i][4])/HstrikeCount;
+            } else {
+                HditchFirst = 1;
+            }
+
+        } else if(sample[i][3] == 2){
+            if(BditchFirst != 0){
+                BstrikeCount += 1;
+                averageBSTime = ((averageBSTime * (BstrikeCount - 1)) + sample[i][4])/BstrikeCount;
+            } else {
+                BditchFirst = 1;
+            }
+        }
+    }
+    calculateTimings();
+    var impliedCPM = 60.0/averageBSTime;
+    var impliedOH = (averageHSTime-averageBSTime)/changeStep;
+    if(impliedOH < 0.0) impliedOH = 0.0;
+    if(impliedOH > 2.2) impliedOH = 2.2;
+    if(CPM < 20.0) CPM = 20.0;
+    if(CPM > 50.0) CPM = 50.0;
+
+    if (confirm("About to set CPM at " + impliedCPM.toFixed(1) + " and handstroke factor at " + impliedOH.toFixed(1) + ". Does this look sane?")) {
+        CPM = impliedCPM;
+        openHandstroke = impliedOH;
+        calculateTimings();
+    }
+};
+
 calibButton.onclick = function() {
     if (nonLive){
         alert("Not implemented for this demo");
+        return;
+    }
+    if (!wsOpened){
+        setStatus("No communication with BellBoy device.");
         return;
     }
     if (currentStatus & DOWNLOADINGFILE) return;
@@ -1111,8 +1238,7 @@ plusOHButton.onclick = function(){
     if (currentStatus & PLAYBACK) return;
     if (currentStatus & HELPDISPLAYED) return;
     if (currentStatus & RECORDINGSESSION) return;
-    if (openHandstroke < 2.21) openHandstroke += 0.1;
-    if (openHandstroke > 0.09 && openHandstroke < 0.39) openHandstroke = 0.4;
+    if (openHandstroke < 2.19) openHandstroke += 0.1;
     calculateTimings();
 };
 
@@ -1121,8 +1247,7 @@ minusOHButton.onclick = function(){
     if (currentStatus & PLAYBACK) return;
     if (currentStatus & HELPDISPLAYED) return;
     if (currentStatus & RECORDINGSESSION) return;
-    if (openHandstroke > 0.09) openHandstroke -= 0.1;
-    if (openHandstroke < 0.39) openHandstroke = 0.0;
+    if (openHandstroke > 0.11) openHandstroke -= 0.1;
     calculateTimings();
 };
 
@@ -1137,12 +1262,7 @@ diagnosticsButton.onclick = function(){
     }
     settingsModal.style.display = "none";
     diagnosticsModal.style.display = "block";
-
     fillDiagnosticsModal();
-
-    if (!wsOpened){
-        ws.send("CLTA:"); 
-    }
 };
 
 document.getElementById('diagHand').onclick = function(){
@@ -1296,8 +1416,9 @@ function fillDiagnosticsModal(){
         pealTime = (changeInterval * 5040.0);
     }
     var hours = Math.floor(pealTime/3600.0);
-    var minutes = Math.round((pealTime % 3600)/60.0);
-    document.getElementById("impliedTimings").title = "Peal time: " + hours + ":" + minutes;
+    var minutes = "0" + Math.round((pealTime % 3600)/60.0);
+    
+    document.getElementById("impliedTimings").title = "Peal time: " + hours + ":" + minutes.substr(minutes.length-2,2);
     document.getElementById("averageStrikeAngles").innerHTML= averageHSStrikeAngle.toFixed(0) + " (handstroke) " + averageBSStrikeAngle.toFixed(0) + " (backstroke)";
     document.getElementById("averageStrikeTimes").innerHTML= (averageHSStrikeTimeFromBDC*1000).toFixed(0) + " (handstroke) " + (averageBSStrikeTimeFromBDC * 1000).toFixed(0) + " (backstroke)";
 }
@@ -1311,7 +1432,6 @@ playbackButton.onclick = function() {
         setStatus("No communication with BellBoy device.");
         return;
     }
-
     if (currentStatus & DOWNLOADINGFILE) return;
     if (currentStatus & PLAYBACK) return;
     if (currentStatus & HELPDISPLAYED) return;
@@ -1540,66 +1660,66 @@ skipSelectIcon.onclick=function(){
     updateIcons();
 };
 
-backIcon.onclick=function(){
-    if (currentStatus & DOWNLOADINGFILE) return;
-    if (currentStatus & RECORDINGSESSION) return;
-    if (currentStatus & HELPDISPLAYED) return;
-    if (currentStatus & PLAYBACK) return;
-
-    backclick();
-};
-
-function backclick(){
-    if ((currentStatus & TEMPLATEDISPLAYED) && (TcurrentSwingDisplayed == 0 || currentSwingDisplayed == 0)) return;
-
-    if ((currentStatus & TEMPLATEDISPLAYED) && (currentStatus & SKIPTEMPLATE) != 0  && TcurrentSwingDisplayed != 0 && currentSwingDisplayed != 0) {
-        if (TcurrentSwingDisplayed == null) TcurrentSwingDisplayed=1;
-        TcurrentSwingDisplayed -= 1;
-        TdrawStroke();
-        drawStroke();
-    }
-
-    if ((currentStatus & SESSIONLOADED) && (currentStatus & SKIPMAIN) != 0  && currentSwingDisplayed != 0) {
-        if (currentSwingDisplayed == null) currentSwingDisplayed=1;
-        currentSwingDisplayed -= 1;
-        drawFrame();
-        drawStroke();
-    }
-    textBell();
-    updateIcons();
-};
 // supposed to stop zooming - does not appear to work
 forwardIcon.addEventListener("touchstart", preventZoom);
+backIcon.addEventListener("touchstart", preventZoom);
 
 forwardIcon.onclick=function(){
     if (currentStatus & DOWNLOADINGFILE) return;
     if (currentStatus & RECORDINGSESSION) return;
     if (currentStatus & HELPDISPLAYED) return;
     if (currentStatus & PLAYBACK) return;
-
-    foreclick();
+    foreclick(1);
 };
 
-function foreclick() {
-    if ((currentStatus & TEMPLATEDISPLAYED) && (TcurrentSwingDisplayed == TswingStarts.length -1 || currentSwingDisplayed == swingStarts.length - 1)) return;
+backIcon.onclick=function(){
+    if (currentStatus & DOWNLOADINGFILE) return;
+    if (currentStatus & RECORDINGSESSION) return;
+    if (currentStatus & HELPDISPLAYED) return;
+    if (currentStatus & PLAYBACK) return;
 
-    if ((currentStatus & TEMPLATEDISPLAYED) && (currentStatus & SKIPTEMPLATE) && TcurrentSwingDisplayed != TswingStarts.length -1 && currentSwingDisplayed != swingStarts.length - 1) {
-        if (TcurrentSwingDisplayed == null) TcurrentSwingDisplayed=-1;
-        TcurrentSwingDisplayed += 1;
-        TdrawStroke();
+    backclick(1);
+};
+
+function foreclick(skip) {
+    if ((currentStatus & TEMPLATEDISPLAYED) && (currentStatus & SKIPTEMPLATE) && (currentStatus & SKIPMAIN) && (TcurrentSwingDisplayed+skip > TswingStarts.length -1 || currentSwingDisplayed+skip > swingStarts.length - 1)) return;
+
+    if ((currentStatus & SESSIONLOADED) && (currentStatus & SKIPMAIN)  && (currentSwingDisplayed+skip <= swingStarts.length - 1)) {
+        if (currentSwingDisplayed == null) currentSwingDisplayed=-skip;
+        currentSwingDisplayed += skip;
         drawStroke();
+        TdrawStroke();
     }
 
-    if ((currentStatus & SESSIONLOADED) && (currentStatus & SKIPMAIN)  && currentSwingDisplayed != swingStarts.length - 1) {
-        if (currentSwingDisplayed == null) currentSwingDisplayed=-1;
-        currentSwingDisplayed += 1;
-        drawFrame();
+    if ((currentStatus & TEMPLATEDISPLAYED) && (currentStatus & SKIPTEMPLATE) &&  (TcurrentSwingDisplayed+skip <= TswingStarts.length -1)) {
+        if (TcurrentSwingDisplayed == null) TcurrentSwingDisplayed=-skip;
+        TcurrentSwingDisplayed += skip;
         drawStroke();
+        TdrawStroke();
+    }
+    textBell();
+    updateIcons();
+};
+
+function backclick(skip){
+    if ((currentStatus & TEMPLATEDISPLAYED) && (currentStatus & SKIPTEMPLATE) && (currentStatus & SKIPMAIN) && (TcurrentSwingDisplayed-skip < 0 || currentSwingDisplayed-skip < 0)) return;
+
+    if ((currentStatus & SESSIONLOADED) && (currentStatus & SKIPMAIN)  && (currentSwingDisplayed-skip >= 0)) {
+        if (currentSwingDisplayed == null) currentSwingDisplayed=skip;
+        currentSwingDisplayed -= skip;
+        drawStroke();
+        TdrawStroke();
+    }
+
+    if ((currentStatus & TEMPLATEDISPLAYED) && (currentStatus & SKIPTEMPLATE)  && (TcurrentSwingDisplayed-skip >= 0)) {
+        if (TcurrentSwingDisplayed == null) TcurrentSwingDisplayed=skip;
+        TcurrentSwingDisplayed -= skip;
+        drawStroke();
+        TdrawStroke();
     }
 
     textBell();
     updateIcons();
-
 };
 
 favIcon.onclick=function(){
@@ -1612,19 +1732,26 @@ favIcon.onclick=function(){
 
     template=[];
     TswingStarts=[];
-//    ThalfSwingStarts=[];
     TaveragePullStrength=[];
-//    ThalfAveragePullStrength=[]
+    TringTimes=[]
+    TswitchPoints=[]
+    
     clearTemplates();
     drawTDCs();
     var i = 0;
     for (i = 0; i<sample.length; ++i) template[template.length]=sample[i].slice();
     for (i = 0; i<swingStarts.length; ++i) TswingStarts[TswingStarts.length]=swingStarts[i];
     for (i = 0; i<averagePullStrength.length; ++i) TaveragePullStrength[TaveragePullStrength.length]=averagePullStrength[i];
+    for (i = 0; i<ringTimes.length; ++i) TringTimes[TringTimes.length]=ringTimes[i];
+    for (i = 0; i<switchPoints.length; ++i) TswitchPoints[TswitchPoints.length]=switchPoints[i];
+
+    TchangeInterval = changeInterval;
+    TopenHandstroke = openHandstroke;
+    TchangeStep= changeStep;
+
     TcurrentSwingDisplayed=currentSwingDisplayed;
     currentStatus |= TEMPLATEDISPLAYED;
-    drawStroke();
-    TdrawStroke();
+    foreclick(0);
     textBell();    
     updateIcons();
 };
@@ -1861,6 +1988,9 @@ settingsBtn.onclick = function() {
     if ((currentStatus & HELPDISPLAYED) != 0) return;
     if ((currentStatus & RECORDINGSESSION) != 0) return;
     settingsModal.style.display = "block";
+    recalculateSize();// useful for ipad resizing
+    drawTDCs();
+    foreclick(0);
 };
 
 // record button onclick is is main onclick area
@@ -1912,15 +2042,11 @@ window.onclick = function(event) {
 //           WINDOW RESIZE / CANVAS CLICK FUNCTIONS           //
 ////////////////////////////////////////////////////////////////
 
-
-//addEvent(window, "resize", recalculateSize());
 window.addEventListener("resize", function(event){
-  recalculateSize();
-  if ((currentStatus & TEMPLATEDISPLAYED) !=0) TdrawStroke();
-  drawTDCs();
-
-  if ((currentStatus & SESSIONLOADED) !=0) drawStroke();
-
+    recalculateSize();
+    if (currentStatus & TEMPLATEDISPLAYED) TdrawStroke();
+    drawTDCs();
+    if (currentStatus & SESSIONLOADED) drawStroke();
 });
 
 window.addEventListener("load", function(event){
@@ -1937,16 +2063,12 @@ canvasATt.addEventListener("click", function(event){
     if (!(currentStatus & SESSIONLOADED)) return;
     if (currentStatus & HELPDISPLAYED) return;
     if (currentSwingDisplayed == null) return;
-    var dist = Math.round((event.pageX - ctxATt.canvas.width/2.0)/ATstepWidth);
-    while (dist > 0){
-        --dist;
-        foreclick();
+    var dist = Math.round((event.pageX - ctxATt.canvas.width/2.0)/(ATstepWidth*2));
+    if(dist<0){
+        backclick(-dist);
+    } else {
+        foreclick(dist);
     }
-    while (dist < 0){
-        ++dist
-        backclick();
-    }
-
 },false);
 
 
@@ -1959,6 +2081,8 @@ function recalculateSize() {
 
     var winHeight =  window.innerHeight;
     var rightHeight = winHeight - 210;
+
+    document.getElementById("wrapper").style.width = winWidth; // corrects iPad resizing
 
     document.getElementById("bellGraphics").style.width = rightWidth + "px";
     document.getElementById("bellGraphics").style.height = rightHeight + "px";
@@ -1989,17 +2113,17 @@ function recalculateSize() {
     posBS1 = canvasWidth - BDwidth;
 
     canvasAT.style.width=(rightWidth * 2)  + "px";  // scrolling display
-    canvasAT.style.height=(Math.max(canvasHeight,rightHeight-canvasHeight-80))  + "px";
+    canvasAT.style.height=(rightHeight-canvasHeight-40)  + "px";
     ctxAT.canvas.width=rightWidth * 2;
-    ctxAT.canvas.height=Math.max(canvasHeight,rightHeight-canvasHeight-80);
-    canvasAT.style.top=((canvasHeight+10) + (rightHeight - canvasAT.height - canvasBD.height)/2)  + "px";
+    ctxAT.canvas.height=rightHeight-canvasHeight-40;
+    canvasAT.style.top=(canvasHeight+30)  + "px";
     canvasAT.style.left=0 + "px";
 
     canvasATt.style.width=rightWidth + "px";
-    canvasATt.style.height=Math.max(canvasHeight,rightHeight-canvasHeight-80)  + "px";
+    canvasATt.style.height=(rightHeight-canvasHeight-40)  + "px";
     ctxATt.canvas.width=rightWidth;
-    ctxATt.canvas.height=Math.max(canvasHeight,rightHeight-canvasHeight-80);
-    canvasATt.style.top=((canvasHeight+10) + (rightHeight - canvasAT.height - canvasBD.height)/2)  + "px";
+    ctxATt.canvas.height=rightHeight-canvasHeight-40;
+    canvasATt.style.top=(canvasHeight+30) + "px";
     canvasATt.style.left=0 + "px";
    
     ctxBD.fillStyle='rgba(0,0,255,0.1)';
@@ -2013,6 +2137,7 @@ function recalculateSize() {
 
     drawFrame();
     clearAT();
+    
 }
 
 function drawFrame(){
@@ -2059,9 +2184,7 @@ function textBell(){
 }
 
 function clearBell(){
-//    ctxCB.clearRect(0, 0, ctxCB.canvas.width, ctxCB.canvas.height);
     ctxBD.clearRect(2*BDwidth, 0, 64, 64);
-
 }
 
 function clearAT(){
@@ -2073,29 +2196,27 @@ function clearAT(){
     ctxATt.fillRect(0,0,ctxATt.canvas.width,ctxATt.canvas.height);
     currentATmargin=0;
     document.getElementById("canvasAT").style.marginLeft = (currentATmargin * -1) + "px";
-/*    
+    
     ctxATt.font = "14px sans serif";
     ctxATt.fillStyle = "rgb(255,100,100)";
     ctxATt.textAlign = "start";
     ctxATt.textBaseline="top";
+    ctxATt.fillText("Slow/Up", 2, ATtopMargin+2);
+    ctxATt.textBaseline="bottom";
+    ctxATt.fillText("Quick/Down", 2, ATtopMargin+totalHeight-2);
 
-    ctxATt.fillText(scaleValue.toString(), 2, ATtopMargin+2);
-    ctxATt.fillText((scaleValue*0.75).toString(), 2, ATtopMargin+totalHeight*0.25+2);
-    ctxATt.fillText((scaleValue*0.5).toString(), 2, ATtopMargin+totalHeight*0.5+2);
-    ctxATt.fillText((scaleValue*0.25).toString(), 2, ATtopMargin+totalHeight*0.75+2);
-*/
     ctxATt.beginPath();
     ctxATt.strokeStyle = "rgb(255,100,100)";
 //    ctxATt.moveTo(0, ATtopMargin);
 //    ctxATt.lineTo(ctxATt.canvas.width, ATtopMargin);
-    ctxATt.moveTo(0, ATtopMargin+totalHeight*0.1);
-    ctxATt.lineTo(ctxATt.canvas.width, ATtopMargin+totalHeight*0.1);
-    ctxATt.moveTo(0, ATtopMargin+totalHeight*0.3);
-    ctxATt.lineTo(ctxATt.canvas.width, ATtopMargin+totalHeight*0.3);
-    ctxATt.moveTo(0, ATtopMargin+totalHeight*0.7);
-    ctxATt.lineTo(ctxATt.canvas.width, ATtopMargin+totalHeight*0.7);
-    ctxATt.moveTo(0, ATtopMargin+totalHeight*0.9);
-    ctxATt.lineTo(ctxATt.canvas.width, ATtopMargin+totalHeight*0.9);
+    ctxATt.moveTo(0, ATtopMargin+totalHeight*0.0);
+    ctxATt.lineTo(ctxATt.canvas.width, ATtopMargin+totalHeight*0.0);
+    ctxATt.moveTo(0, ATtopMargin+totalHeight*0.25);
+    ctxATt.lineTo(ctxATt.canvas.width, ATtopMargin+totalHeight*0.25);
+    ctxATt.moveTo(0, ATtopMargin+totalHeight*0.75);
+    ctxATt.lineTo(ctxATt.canvas.width, ATtopMargin+totalHeight*0.75);
+    ctxATt.moveTo(0, ATtopMargin+totalHeight*1.0);
+    ctxATt.lineTo(ctxATt.canvas.width, ATtopMargin+totalHeight*1.0);
 //    ctxATt.moveTo(0, ATtopMargin+totalHeight);
 //    ctxATt.lineTo(ctxATt.canvas.width, ATtopMargin+totalHeight);
     ctxATt.stroke();
@@ -2133,9 +2254,7 @@ function drawBell(angle) {
 }
 
 function drawTDCs(){
-
     drawTarget();
-
     var stepSize = (BDwidth * 1.0)/(ROIL-ROIU); // this is how much the position needs to be scaled
     var zero = (0-ROIU) * stepSize;
     var currentStep = null;
