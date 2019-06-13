@@ -27,9 +27,12 @@ This folder contains the source for two small executables.
 
 The first, "grabber" takes data from the IMU, transforms it into angle, rotational velocity and rotational acceleration and pushes the data to the users browser via a websocket.  As the force applied by the ringer on the rope needs to be distinguished from gravity, vibration and sensor noise, the solution:
 
-(a) oversamples data from the IMUs (sensors output at 500Hz but the user sees 125Hz). 
+(a) oversamples data from the IMUs (sensors output at 500Hz but the user sees 125Hz).
+
 (b) uses a straightforward Mayhony-type filter to calculate angles (I previously used the extended Kalman filter (from https://github.com/hhyyti/dcm-imu) to calculate bell angle but it produced no better results in this application).
-(d) uses a Savitsky-Golay filter to smooth the measured rotational acceleration
+
+(c) uses a Savitsky-Golay filter to smooth the measured rotational acceleration
+
 (d) requires an one-time calibration of the IMU system (from https://bitbucket.org/alberto_pretto/imu_tk).  This is a really useful method of scale and bias calibration that does not require the IMU to be exactly positioned.
 
 The grabber communicates with the user's broswer via websocketd (https://github.com/joewalnes/websocketd). 
