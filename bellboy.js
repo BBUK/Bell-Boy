@@ -348,8 +348,7 @@ function parseResult(dataBack) {
         swingStarts[0] = 3;
         currentPlaybackPosition = 1;
         currentSwingDisplayed = null;
-        clearAT();
-        if(currentStatus & TEMPLATEDISPLAYED) TdrawStroke();
+        if((currentStatus & TEMPLATEDISPLAYED) && (dataBack.slice(0,5) == "LFIN:")) { clearAT(); TdrawStroke(); }
         var j=0;
         var arrayLength = sample.length;
         while (j < arrayLength && sample[j][0] < 90.0) j++;  // move forward through sample to next swing
@@ -1215,6 +1214,15 @@ calibButton.onclick = function() {
     ws.send("EYEC:");
 };
 
+adjustButton.onclick = function() {
+    if (currentStatus & DOWNLOADINGFILE) return;
+    if (currentStatus & PLAYBACK) return;
+    if (currentStatus & HELPDISPLAYED) return;
+    if (currentStatus & RECORDINGSESSION) return;
+    adjustModal.style.display = "block";
+    settingsModal.style.display = "none";
+};
+
 plusCPMButton.onclick = function(){
     if (currentStatus & DOWNLOADINGFILE) return;
     if (currentStatus & PLAYBACK) return;
@@ -1974,6 +1982,9 @@ var settingsSpan = document.getElementsByClassName("close")[3];
 var demoModal = document.getElementById("demoModal");
 var demoSpan = document.getElementsByClassName("close")[4];
 
+var adjustModal = document.getElementById("adjustModal");
+var adjustSpan = document.getElementsByClassName("close")[5];
+
 openBtn.onclick = function() {
     if ((currentStatus & DOWNLOADINGFILE) != 0) return;
     if ((currentStatus & PLAYBACK) != 0) return;
@@ -2017,6 +2028,10 @@ demoSpan.onclick = function() {
     ws.send("STEC:");
 };
 
+adjustSpan.onclick = function() {
+    adjustModal.style.display = "none";
+};
+
 
 // When the user clicks anywhere outside of the modal, close it
 window.onclick = function(event) {
@@ -2035,6 +2050,9 @@ window.onclick = function(event) {
     if (event.target == demoModal) {
         demoModal.style.display = "none";
         ws.send("STEC:");
+    }
+    if (event.target == adjustModal) {
+        adjustModal.style.display = "none";
     }
 };
 

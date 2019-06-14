@@ -114,16 +114,20 @@
 	<TR><TH class="left">Select the range of a stroke you would like the display to show (numbers are degrees from TDC).</TH><TH class="right">Angles:&nbsp;<select class="selectfile" id="zoomSelect"></select></TH></TR>
 	<TR><TH class="left">Change the playback speed of a loaded file or a finished live recording.</TH><TH class="right">Play speed:&nbsp;<select class="selectfile" id="speedSelect"></select></TH></TR>
     <TR><TH class="left">Some bells will show a smaller "pull strength" measurement on the display.  This setting allows you to change the scale (units are arbitary).</TH><TH class="right">Scale:&nbsp;<select class="selectfile" id="scaleSelect"></select></TH></TR>
-	<TR><TH class="left">Select the number of bells you are using.</TH><TH class="right">Bells:&nbsp;<select class="selectfile" id="bellsSelect"></select></TH></TR>
-	<TR><TH class="left">Select the number of changes per minute (ringing rate) that you want to use.</TH><TH class="right"><button class="selectfile" id="minusCPMButton">-</button><span id="CPM" title="Peal time: 2:43">31.0&nbsp;</span><button class="selectfile" id="plusCPMButton">+</button></TH></TR>
-	<TR><TH class="left">Choose open handstroke timings.  Number is in beats (1.0 being the "normal" timing for the bell number and CPM you have chosen when playing with an open handstroke and 0.0 means playing without an open handstroke).</TH><TH class="right"><button class="selectfile" id="minusOHButton">-</button><span id="OH">1.0&nbsp;</span><button class="selectfile" id="plusOHButton">+</button></TH></TR>
-    <TR><TH class="left">Automatically calculate what the CPM and open handstroke timings are for the loaded sample.</TH><TH class="right"><button class="selectfile" id="autoButton">Auto</button></TH></TR>
+    <TR><TH class="left">Click the button to adjust method timings.</TH><TH class="right"><button class="selectfile" id="adjustButton">Timings</button></TH></TR>
 	<TR><TH class="left">Choose if you want automatic chime detection or manual chime simulation using a time (in ms) from BDC.  If your clappers are tied, use manual.</TH><TH class="right">Chimes:&nbsp;<select class="selectfile" id="chimeSelect"></select></TH></TR>
     <TR><TH class="left">Click the button for a deskside demo.</TH><TH class="right"><button class="selectfile" id="calibButton">Start demo</button></TH></TR>
     <TR><TH class="left">Show some diagnostics.</TH><TH class="right"><button class="selectfile" id="diagnosticsButton">Diagnostics</button></TH></TR>
 </TABLE>
 </div></div>
 <div id="demoModal" class="modal"><div class="modal-content"><span class="close">&times;</span><section><div class="face face-top"></div><div class="face face-bottom"></div><div class="face face-side1"></div><div class="face face-side2"></div><div class="face face-end1"></div><div class="face face-end2"></div></section></div></div>
+<div id="adjustModal" class="modal"><div class="modal-content" style="width: 780px; margin: auto auto;"><span class="close">&times;</span>
+<TABLE><TR><TH class="left">Select the number of bells you are using.</TH><TH class="right">Bells:&nbsp;<select class="selectfile" id="bellsSelect"></select></TH></TR>
+	<TR><TH class="left">Select the number of changes per minute (ringing rate) that you want to use.</TH><TH class="right"><button class="selectfile" id="minusCPMButton">-</button><span id="CPM" title="Peal time: 2:43">31.0&nbsp;</span><button class="selectfile" id="plusCPMButton">+</button></TH></TR>
+	<TR><TH class="left">Choose open handstroke timings.  Number is in beats (1.0 being the "normal" timing for the bell number and CPM you have chosen when playing with an open handstroke and 0.0 means playing without an open handstroke).</TH><TH class="right"><button class="selectfile" id="minusOHButton">-</button><span id="OH">1.0&nbsp;</span><button class="selectfile" id="plusOHButton">+</button></TH></TR>
+    <TR><TH class="left">Automatically calculate what the CPM and open handstroke timings are for the loaded sample.</TH><TH class="right"><button class="selectfile" id="autoButton">Auto</button></TH></TR>
+</TABLE>
+</div></div>
 <div style="margin-top: 0px; padding-bottom: 5px; padding-top: 5px; background: #686888; text-align:center; min-width: 800px;">
 	<span style="float: left; width: 48px; height: 48px; padding: 3px; margin-left: 8px;">&nbsp;</span>
     <img src="./circle-record-active.png" id="recordIcon" title="Record session/Stop Recording" class="invertable">
