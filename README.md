@@ -29,7 +29,7 @@ The first, "grabber" takes data from the IMU, transforms it into angle, rotation
 
 (a) oversamples data from the IMUs (sensors output at 500Hz but the user sees 125Hz).
 
-(b) uses a straightforward Mayhony-type filter to calculate angles (I previously used the extended Kalman filter (from https://github.com/hhyyti/dcm-imu) to calculate bell angle but it produced no better results in this application).
+(b) uses a straightforward Mahony-type filter to calculate angles (I previously used the extended Kalman filter (from https://github.com/hhyyti/dcm-imu) to calculate bell angle but it produced no better results in this application).
 
 (c) uses a Savitsky-Golay filter to smooth the measured rotational acceleration
 
