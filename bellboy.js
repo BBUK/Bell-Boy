@@ -475,7 +475,7 @@ function parseResult(dataBack) {
 
 ws.onclose = function(event){
     wsOpened=false;
-    setStatus("Error. Resetting device. Please press refresh.");
+    setStatus("Error. Please close any other Bell-Boy windows and press refresh.");
     if ((currentStatus & RECORDINGSESSION) != 0 ) {
         currentStatus &= ~RECORDINGSESSION;
         updateIcons();
@@ -1328,7 +1328,7 @@ function fillDiagnosticsModal(){
     ctxDiagnostics.stroke();
 
     for(i=0;i<sample.length;++i){
-        if(sample[i][3] == 1 || sample[i][4] == 3){
+        if(sample[i][3] == 1 || sample[i][3] == 3){
             if(!document.getElementById('diagHand').checked) continue;
             ctxDiagnostics.beginPath();
             if(sample[i][3] == 1){
@@ -1341,7 +1341,7 @@ function fillDiagnosticsModal(){
             ctxDiagnostics.lineTo(45+(sample[i][0])*2,175);
             ctxDiagnostics.lineTo(40+(sample[i][0])*2,180);
             ctxDiagnostics.stroke();
-        } else if(sample[i][3] == 2 || sample[i][4] == 4){
+        } else if(sample[i][3] == 2 || sample[i][3] == 4){
             if(!document.getElementById('diagBack').checked) continue;
             ctxDiagnostics.beginPath();
             if(sample[i][3] == 2){

@@ -1,7 +1,7 @@
 # Bell-Boy
 NEW VERSION IMMINENT - THIS REPOSITORY CONTAINS A GREAT DEAL OF CODE AND INFORMATION IN FLUX BETWEEN VERSIONS SO SHOULD NOT BE RELIED UPON
 
-This repository contains the code for the Bell-Boy Project.  
+This repository contains the code and hardware design for the Bell-Boy Project.  
 
 The Bell-Boy is a device used to measure how hard a person pulls on a tower bell rope.  I hope it will be a useful training aid.  
 

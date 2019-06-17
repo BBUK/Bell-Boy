@@ -198,6 +198,9 @@ struct {
     unsigned int lastBDC;
     unsigned int manualStrike;
     unsigned int manualTimefromBDC;
+    unsigned int lastStrike; // 2 = last chime was at backstroke, 1= last chime at handstroke
+    unsigned int strikeValue; // 0 = nothing, 1=handstroke, 2=backstroke, 3=fake handstroke, 4=fake backstroke
+    unsigned int strikeHead; 
     unsigned int bellNumber;
     float CPM;
     float openHandstroke;
@@ -208,7 +211,8 @@ struct {
                     .gyroTransformMatrix[1]=0, .gyroTransformMatrix[2]=0, .gyroTransformMatrix[3]=0, .gyroTransformMatrix[4]=1,
                     .gyroTransformMatrix[5]=0, .gyroTransformMatrix[6]=0, .gyroTransformMatrix[7]=0, .gyroTransformMatrix[8]=1,
                     .tareValue = 0.0 , .torn = 0, .gravityValue = 0.0, .gravityCalibrationState = 0, .gravityDataCount = 0, 
-                    .stable = 0, .bellNumber = 6, .CPM = 31.0, .openHandstroke = 1.0, .manualStrike = 0, .manualTimefromBDC = 300};
+                    .stable = 0, .bellNumber = 6, .CPM = 31.0, .openHandstroke = 1.0, .manualStrike = 0, .manualTimefromBDC = 300, 
+                    .lastStrike = 2, .strikeValue = 0};
 
 // only really important when run from command line
 volatile sig_atomic_t sig_exit = 0;
@@ -220,7 +224,7 @@ void sig_handler(int signum) {
 
 // used in relation to circular buffer
 #define PUSHBATCH 20 // number of samples taken before pushing out
-#define BUFFERSIZE 256 // must be bigger than PUSHBATCH + SAVGOLLENGTH
+#define BUFFERSIZE 512 // must be bigger than interval betwwen strikes
 unsigned int head;
 unsigned int tail;
 unsigned int available;
@@ -395,8 +399,8 @@ int main(int argc, char const *argv[]){
                     continue;
                 }
                 OUT_COUNT = 0;
-                calibrationData.lastStrikeCount = 0;
-                calibrationData.lastBDC = 0;
+                calibrationData.lastStrikeCount = 0; 
+                calibrationData.lastBDC = 1000000; // just a random large number until first BDC is recorded
                 startRun();
                 continue;
             }
@@ -580,6 +584,7 @@ void pushData(void){
     static int nudgeCount = 0;
     static int switchCount = 0;
     float taccn;
+    char detailsString[32]; 
 
     pullData();
     pullData(); // call a second time to catch any fresh samples that arrived during processing of the first round
@@ -619,8 +624,6 @@ void pushData(void){
         accn = taccn;
         float raccn = accn - calibrationData.gravityValue*sin(angleBuffer[tail]*DEGREES_TO_RADIANS_MULTIPLIER);
         
-        unsigned int strike = dingDong(tail); // check to see if there has been a bell strike 1=ding(HS), 2=dong(BS) 0=nowt
-
         if(rateBuffer[tail] * rateBuffer[lastTail] <= 0.0 && switchCount == 0 && OUT_COUNT > 10) { // detect when bell changes direction
             data = 7;
             value = OUT_COUNT;
@@ -628,8 +631,9 @@ void pushData(void){
         } 
         if (switchCount != 0 && abs(rateBuffer[tail]) > 100.0) switchCount -= 1;
 
-        if(strike > 0 && strike <= 5){
-            data = strike;
+        if(calibrationData.strikeHead == tail && calibrationData.strikeValue){ // dingDong recorded a strike about here
+            data = calibrationData.strikeValue;
+            calibrationData.strikeValue = 0;
             value = (float)(OUT_COUNT - calibrationData.lastStrikeCount)/ODR; // number of seconds since last strike.
             calibrationData.lastStrikeCount = OUT_COUNT;
         }
@@ -637,27 +641,37 @@ void pushData(void){
         if(OUT_COUNT == 0){ // first line of output will show the gravity calibration value
             value = calibrationData.gravityValue;
             data = 9;
+            strcpy(detailsString, ", #Gravity");
         }
         
         if(OUT_COUNT == 1){ // second line of output shows the requested number of bells
             value = calibrationData.bellNumber;
             data = 9;
+            strcpy(detailsString, ", #Number of Bells");
         }
 
         if(OUT_COUNT == 2){ // third line of output will show the requested CPM
             value = calibrationData.CPM;
             data = 9;
+            strcpy(detailsString, ", #CPM");
         }
         
         if(OUT_COUNT == 3){ // fourth line of output shows the requested open handstoke adjustment
             value = calibrationData.openHandstroke;
             data = 9;
+            strcpy(detailsString, ", #Open Handstroke Factor");
         }
 
         if(OUT_COUNT == 4){ // fifth line of output shows the requested manual chime status (0=auto 1= manual)
             value = calibrationData.manualTimefromBDC;
             data = 9;
+            strcpy(detailsString, ", #Strike time from BDC");
         }
+
+        if(OUT_COUNT == 5){ // clear details
+            strcpy(detailsString, "");
+        }
+
       
         sprintf(remote_outbuf_line, "LIVE:A:%+6.1f,R:%+6.1f,C:%+7.1f,D:%d,V:%+10.2f\n", angleBuffer[tail], rateBuffer[tail], raccn, data, value);
         if (remote_count + strlen(remote_outbuf_line) > (sizeof remote_outbuf -2)) {
@@ -666,7 +680,7 @@ void pushData(void){
         }
         
         remote_count += sprintf(&remote_outbuf[remote_count],remote_outbuf_line);     
-        sprintf(local_outbuf_line,"A:%+6.1f,R:%+6.1f,C:%+7.1f,D:%d,V:%+10.2f\n", angleBuffer[tail], rateBuffer[tail], raccn, data, value);
+        sprintf(local_outbuf_line,"A:%+6.1f,R:%+6.1f,C:%+7.1f,D:%d,V:%+10.2f %s\n", angleBuffer[tail], rateBuffer[tail], raccn, data, value, detailsString);
         if (local_count + strlen(local_outbuf_line) > (sizeof local_outbuf -2)) {
             fputs(local_outbuf, fd_write_out);
             fflush(fd_write_out);
@@ -837,6 +851,7 @@ float pullAndTransform(){
         // This function calculates angles and a quaternion from the gyro and accelerometer measurements. The q0, q1,q2,q3, roll, pitch and yaw globals
         // are updated by this function (hence no return value)
         calculate(fifoData[3],fifoData[4],fifoData[5], fifoData[0],fifoData[1],fifoData[2],calibrationData.samplePeriod);
+        if(RUNNING && !calibrationData.manualStrike) dingDong(fifoData[3]);
     }
     return(fifoData[3]);  // Just "x" gyro rate needed by the calling function (pullData).
 }
@@ -880,38 +895,43 @@ float calculateError(float guess){
 // Quite a a bit of experimentation here.  The function works out a base level
 // volatility (rate of change of acceleration) of the bell system and when 
 // this jumps suddenly (by 1.7x), a strike is recorded.
-// Tested on heavy and light bells and produces sane and consistent results +- 20ms or so
-// averging these could produce a half-decent odd-struckness meter.
+// Tested on heavy and light bells and produces sane and consistent results +- 20ms or so.
 // Need to test on plain bearing bells
 
-unsigned int dingDong(unsigned int currentPosition){
-    static int lastStrike = 2; // 2 = last chime was at backstroke, 1= last chime at handstroke 
+void dingDong(float currentRate){
     static float rollingValues[5] = {8,8,8,8,8};
+    static float rollingRates[5] = {0.0,0.0,0.0,0.0,0.0};
     static unsigned int rollingPosition = 0;
-    static float baseSD = 0.0; 
-    if(calibrationData.manualStrike){ // doing manual chimes (eg clapper tied)
-        if(((currentPosition - calibrationData.lastBDC)/ODR) > (calibrationData.manualTimefromBDC/1000.0)){
-            if((lastStrike == 1) && (angleBuffer[currentPosition] < 160) && (rateBuffer[currentPosition] < -20)){
-                lastStrike = 2;
-                return(2);
-            }
-            if((lastStrike == 2) && (angleBuffer[currentPosition] > 200) && (rateBuffer[currentPosition] > 20)){
-                lastStrike = 1;
-                return(1);
-            }
-        }
-        return(0);
-    }
- 
+    static float baseSD = 0.0;
+    unsigned int lastHead = (head == 0) ? BUFFERSIZE-1 : head -1;
+
 // savgol_coeffs(5,2,deriv=2,use="dot")
     static float dingDongCoefficients[] = { 0.28571429, -0.14285714, -0.28571429, -0.14285714,  0.28571429 };
 
-    unsigned int windowStartPosition = (currentPosition < 2) ? (currentPosition + BUFFERSIZE) - 2 : currentPosition - 2;
+    if(calibrationData.manualStrike){ // doing manual chimes (eg clapper tied)
+        if(((lastHead - calibrationData.lastBDC)/ODR) > (calibrationData.manualTimefromBDC/1000.0)){
+            if((calibrationData.lastStrike == 1) && (angleBuffer[lastHead] < 160) && (rateBuffer[lastHead] < -20)){
+                calibrationData.lastStrike = 2;
+                calibrationData.strikeValue = 2;
+                calibrationData.strikeHead = lastHead;
+                return;
+            }
+            if((calibrationData.lastStrike == 2) && (angleBuffer[lastHead] > 200) && (rateBuffer[lastHead] > 20)){
+                calibrationData.lastStrike = 1;
+                calibrationData.strikeValue = 1;
+                calibrationData.strikeHead = lastHead;
+                return;
+            }
+        }
+        return;
+    }
+    
+    rollingRates[(rollingPosition + 2) % 5] = currentRate * direction;
     
     float savGolResult = 0;
     
     for(int i = 0; i < 5; ++i){
-        savGolResult += dingDongCoefficients[i] * rateBuffer[(windowStartPosition +i) % BUFFERSIZE];
+        savGolResult += dingDongCoefficients[i] * rollingRates[(rollingPosition + i) % 5];
     }
 
     savGolResult *= 50;
@@ -922,22 +942,24 @@ unsigned int dingDong(unsigned int currentPosition){
     float SD = sqrt(rollingValues[0]*rollingValues[0] + rollingValues[1]*rollingValues[1] + rollingValues[2]*rollingValues[2] + rollingValues[3]*rollingValues[3] + rollingValues[4]*rollingValues[4]);
     
     // calculate base level of volatility and apply a bit of smoothing
-    if(angleBuffer[currentPosition] > 100 && angleBuffer[currentPosition] < 260) baseSD = 0.8*baseSD + 0.2*SD;
-    
-    if((lastStrike == 1) && (SD > 1.7*baseSD) && (angleBuffer[currentPosition] < 70) && (rateBuffer[currentPosition] < 0)){
-        lastStrike = 2;
-        return(2);
-    } else if((lastStrike == 2) && (SD > 1.7*baseSD) && (angleBuffer[currentPosition] > 290) && (rateBuffer[currentPosition] > 0)) {
-        lastStrike = 1;
-        return(1);
-    } else if ((lastStrike == 1) && (angleBuffer[currentPosition] < 40) && (rateBuffer[currentPosition] < 0)){
-        lastStrike = 2;
-        return(4); // force a strike because not detected
-    } else if ((lastStrike == 2) && (angleBuffer[currentPosition] > 320) && (rateBuffer[currentPosition] > 0)){
-        lastStrike = 1;
-        return(3); // force a strike because not detected
+    if(angleBuffer[lastHead] > 100 && angleBuffer[lastHead] < 260) baseSD = 0.8*baseSD + 0.2*SD;
+    if((calibrationData.lastStrike == 1) && (SD > 1.7*baseSD) && (angleBuffer[lastHead] < 70) && (rateBuffer[lastHead] < -20)){
+        calibrationData.lastStrike = 2;
+        calibrationData.strikeValue = 2;
+        calibrationData.strikeHead = lastHead;
+    } else if((calibrationData.lastStrike == 2) && (SD > 1.7*baseSD) && (angleBuffer[lastHead] > 290) && (rateBuffer[lastHead] > 20)) {
+        calibrationData.lastStrike = 1;
+        calibrationData.strikeValue = 1;
+        calibrationData.strikeHead = lastHead;
+    } else if ((calibrationData.lastStrike == 1) && (angleBuffer[lastHead] < 40) && (rateBuffer[lastHead] < 0)){ // strike not detected, fake one
+        calibrationData.lastStrike = 2;
+        calibrationData.strikeValue = 4;
+        calibrationData.strikeHead = lastHead;
+    } else if ((calibrationData.lastStrike == 2) && (angleBuffer[lastHead] > 320) && (rateBuffer[lastHead] > 0)){ // strike not detected, fake one
+        calibrationData.lastStrike = 1;
+        calibrationData.strikeValue = 3;
+        calibrationData.strikeHead = lastHead;
     } 
-    return(0);
 }
 
 // Madgwick's implementation of the Mahony filter.

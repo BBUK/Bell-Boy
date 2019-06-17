@@ -86,4 +86,4 @@ uint16_t readFIFOcount();
 void pullData(void);
 float extractFloat(uint8_t index);
 float pullAndTransform(void);
-unsigned int dingDong(unsigned int startPosition);
+void dingDong(float currentRate);
