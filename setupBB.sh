@@ -282,6 +282,8 @@ force user = root
 public = yes
 HDHD
 
+
+### TODO set for later Samba/CIFS versions to unbreak this on Windows - workaround below
 ## Samba Fixes
 ## Windows features -> SMB 1.0/CIFS File Sharing Support -> Turn on client
 ## Powershell(as admin) -> Enable-WindowsOptionalFeature -Online -FeatureName "SMB1Protocol" -All

@@ -738,15 +738,13 @@ function TdrawStroke(){
         if(position < -totalHeight/2.0){
             overflow = 1;
             position = -totalHeight/2.0;
-            height = 10;
         }
         if(position > totalHeight/2.0){
             overflow = 1;
             position = totalHeight/2.0
-            height = 10;
         }
         position += (ATtopMargin + totalHeight/2.0);
-        if(faked || overflow) cross = 1;
+        if(faked || overflow) {cross = 1; height = 3;}
         if(!(i%2)){
             if(cross){
                 ctxAT.moveTo(offset-12, position-height);

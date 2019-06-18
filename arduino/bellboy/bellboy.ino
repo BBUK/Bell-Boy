@@ -95,7 +95,6 @@ void loop() {
 // (1.65/3.1)*1024 = 545 = internal power battery empty
 //                    0 = pi not powered
 
-  
   switch (STATE) {
     case 0: // startUp
       ledRedOn();
