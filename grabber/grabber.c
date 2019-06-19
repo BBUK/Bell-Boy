@@ -944,6 +944,7 @@ void dingDong(float currentRate, int interval){
     
     // calculate base level of volatility and apply a bit of smoothing
     if(angleBuffer[lastHead] > 100 && angleBuffer[lastHead] < 260) baseSD = 0.8*baseSD + 0.2*SD;
+
     if((calibrationData.lastStrike == 1) && (SD > 1.7*baseSD) && (angleBuffer[lastHead] < 70) && (rateBuffer[lastHead] < -20)){
         calibrationData.lastStrike = 2;
         calibrationData.strikeType = 2;
