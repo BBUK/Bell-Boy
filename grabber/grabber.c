@@ -464,25 +464,31 @@ int main(int argc, char const *argv[]){
                     uint8_t  _bytes[sizeof(float)];
                 } floatConv;
                 if(calibrationData.gravityCalibrationState == 4){
-                    I2C_BUFFER[0]=8; // gravityValue
                     floatConv._float = calibrationData.gravityValue;
-                    I2C_BUFFER[1] = floatConv._bytes[0];
-                    I2C_BUFFER[2] = floatConv._bytes[1];
-                    I2C_BUFFER[3] = floatConv._bytes[2];
-                    I2C_BUFFER[4] = floatConv._bytes[3];
-                    bcm2835_i2c_write(I2C_BUFFER,5); 
-                    usleep(750000);
+                } else {
+                    floatConv._float = -360; // nothing recorded, null value flagged
                 }
+                I2C_BUFFER[0]=8; // gravityValue
+                I2C_BUFFER[1] = floatConv._bytes[0];
+                I2C_BUFFER[2] = floatConv._bytes[1];
+                I2C_BUFFER[3] = floatConv._bytes[2];
+                I2C_BUFFER[4] = floatConv._bytes[3];
+                bcm2835_i2c_write(I2C_BUFFER,5); 
+                usleep(750000);
+
                 if(calibrationData.torn == 3){
-                    I2C_BUFFER[0]=9; // tareValue
-                    floatConv._float = calibrationData.tareValue;
-                    I2C_BUFFER[1] = floatConv._bytes[0];
-                    I2C_BUFFER[2] = floatConv._bytes[1];
-                    I2C_BUFFER[3] = floatConv._bytes[2];
-                    I2C_BUFFER[4] = floatConv._bytes[3];
-                    bcm2835_i2c_write(I2C_BUFFER,5); 
-                    usleep(750000);
+                    floatConv._float = calibrationData.tareValue;                    
+                } else {
+                    floatConv._float = -360; // nothing recorded, null value flagged
                 }
+                I2C_BUFFER[0]=9; // tareValue
+                I2C_BUFFER[1] = floatConv._bytes[0];
+                I2C_BUFFER[2] = floatConv._bytes[1];
+                I2C_BUFFER[3] = floatConv._bytes[2];
+                I2C_BUFFER[4] = floatConv._bytes[3];
+                bcm2835_i2c_write(I2C_BUFFER,5); 
+                usleep(750000);
+
                 I2C_BUFFER[0]=7; // tareValue
                 I2C_BUFFER[1] = (char)sleepTime;
                 bcm2835_i2c_write(I2C_BUFFER,2); 
@@ -1265,22 +1271,23 @@ void setup(void){
     bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 8 (gravityValue)
     bcm2835_i2c_read(I2C_BUFFER,4); usleep(100);
     result = extractFloat(0);
-    if(!isnan(result) && result != -1){
+    if(!isnan(result) && result != -360){
         calibrationData.gravityValue = result;
         calibrationData.gravityCalibrationState = 4;
-        calibrationData.torn = 3;
-
-        I2C_BUFFER[0]=9;
-        bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 9 (tareValue)
-        bcm2835_i2c_read(I2C_BUFFER,4); usleep(100);
-        result = extractFloat(0);
-        if(!isnan(result)) calibrationData.tareValue = result;
         FILE *fdGravity;
         fdGravity = fopen("/tmp/BBgravity","w");
         if(fdGravity != NULL) {
             fprintf(fdGravity,"%+08.1f\n", calibrationData.gravityValue);
             fclose(fdGravity);
         }
+    }
+    I2C_BUFFER[0]=9;
+    bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 9 (tareValue)
+    bcm2835_i2c_read(I2C_BUFFER,4); usleep(100);
+    result = extractFloat(0);
+    if(!isnan(result) && result != -360) {
+        calibrationData.tareValue = result;
+        calibrationData.torn = 3;
         FILE *fdTare;
         fdTare = fopen("/tmp/BBtare","w");
         if(fdTare != NULL) {
@@ -1288,7 +1295,6 @@ void setup(void){
             fclose(fdTare);
         }
     }
-
     //start FIFO - keep i2c disabled
     writeRegister(ICM20689_USER_CTRL,0x50);
 }

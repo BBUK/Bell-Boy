@@ -1271,7 +1271,7 @@ sleepButton.onclick = function() {
     if (currentStatus & PLAYBACK) return;
     if (currentStatus & HELPDISPLAYED) return;
     if (currentStatus & RECORDINGSESSION) return;
-    ws.send("EYEC:" + (sleepTime*2));
+    if (confirm("Are you sure you want to send me to sleep?")) ws.send("SLEP:" + (sleepTime*2));
 };
 
 plusOHButton.onclick = function(){

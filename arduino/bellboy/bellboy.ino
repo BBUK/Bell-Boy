@@ -18,8 +18,8 @@ uint8_t promData[5];
 
 volatile uint8_t sleepTime = 0;
 
-volatile float gravityValue = -1.0;
-volatile float tareValue  = 0.0;
+volatile float gravityValue = -360;
+volatile float tareValue  = -360;
 
 union {
   float    _float;
@@ -239,7 +239,7 @@ void loop() {
         STATE = 0;  // sleepiness has ended let's wake up
         break;
       }
-      for (count = 0; count < 197; ++count) { // 30 mins sleep
+      for (count = 0; count < 198; ++count) { // 30 mins sleep
         LowPower.idle(SLEEP_8S, ADC_ON, TIMER2_OFF, TIMER1_OFF, TIMER0_OFF, SPI_OFF, USART0_OFF, TWI_ON);
         ledRedChirrup();
         delay(50);
