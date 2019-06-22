@@ -52,7 +52,7 @@ gcc calibrate.c -o calibrate -lbcm2835
 # if EOVF: appears then ctrl-c to exit, reboot and try again
 # enter STCA:
 # (will now run imu_tk calibration)
-# high residuals (>10) are an indication that something is not right 
+# ???high residuals (>4) are an indication that something is not right 
 # OK for EOVF: to appear after calibration is finished
 # enter SAVE:
 # check numbers are sane:

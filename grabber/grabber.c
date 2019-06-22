@@ -89,6 +89,7 @@
 * (l)   PLRD: play and record operation.
 * (m)   BELS: bell data. Format: numberofbells(int),CPM(float),openHandstroke(float), manualtimefromBDC(float)
 * (n)   EFIL: end sending of FILE: data
+* (o)   SLEP:[number] go to sleep for [number] of half hour units.
 *
 * There are the following responses back to the user's browser:
 * (i)    STPD: tells the browser that the device has sucessfully stopped sampling
@@ -199,7 +200,7 @@ struct {
     unsigned int manualStrike;
     unsigned int manualTimefromBDC;
     unsigned int lastStrike; // 2 = last chime was at backstroke, 1= last chime at handstroke
-    unsigned int strikeType; // 0 = nothing, 1=handstroke, 2=backstroke, 3=fake handstroke, 4=fake backstroke
+    unsigned int flagStrikeType; // 0 = nothing, 1=handstroke, 2=backstroke, 3=fake handstroke, 4=fake backstroke
     float nextStrikeCount; 
     unsigned int bellNumber;
     float CPM;
@@ -212,7 +213,7 @@ struct {
                     .gyroTransformMatrix[5]=0, .gyroTransformMatrix[6]=0, .gyroTransformMatrix[7]=0, .gyroTransformMatrix[8]=1,
                     .tareValue = 0.0 , .torn = 0, .gravityValue = 0.0, .gravityCalibrationState = 0, .gravityDataCount = 0, 
                     .stable = 0, .bellNumber = 6, .CPM = 31.0, .openHandstroke = 1.0, .manualStrike = 0, .manualTimefromBDC = 300, 
-                    .lastStrike = 2, .strikeType = 0};
+                    .lastStrike = 2, .flagStrikeType = 0};
 
 // only really important when run from command line
 volatile sig_atomic_t sig_exit = 0;
@@ -226,11 +227,13 @@ void sig_handler(int signum) {
 #define PUSHBATCH 20
 // must be bigger than SAVGOLLENGTH + PUSHBATCH
 #define BUFFERSIZE 512 
-unsigned int head;
-unsigned int tail;
-unsigned int available;
-float angleBuffer[BUFFERSIZE];
-float rateBuffer[BUFFERSIZE];
+struct {
+    unsigned int head;
+    unsigned int tail;
+    unsigned int available;
+    float angleBuffer[BUFFERSIZE];
+    float rateBuffer[BUFFERSIZE];    
+} fifo;
 
 #define SAVGOLLENGTH  15
 #define SAVGOLHALF 7 // = math.floor(SAVGOLLENGTH/2.0)
@@ -364,11 +367,11 @@ int main(int argc, char const *argv[]){
                     char *ent = strtok(details,","); 
                     if(ent) calibrationData.bellNumber = atoi(ent);
                     ent = strtok(NULL,",");
-                    calibrationData.CPM = atof(ent);
+                    if(ent) calibrationData.CPM = atof(ent);
                     ent = strtok(NULL,",");
-                    calibrationData.openHandstroke = atof(ent);
+                    if(ent) calibrationData.openHandstroke = atof(ent);
                     ent = strtok(NULL,",");
-                    calibrationData.manualTimefromBDC = atoi(ent); // if "Auto" is sent then that results in zero here
+                    if(ent) calibrationData.manualTimefromBDC = atoi(ent); // if "Auto" is sent then that results in zero here
                     if(calibrationData.manualTimefromBDC == 0){
                         calibrationData.manualStrike = 0;
                     } else {
@@ -454,6 +457,39 @@ int main(int argc, char const *argv[]){
                 system("/usr/bin/sync && /usr/bin/shutdown -P now");
                 continue;
             }
+            if(strcmp("SLEP:", command) == 0) {
+                uint8_t sleepTime = atoi(details);
+                union {
+                    float    _float;
+                    uint8_t  _bytes[sizeof(float)];
+                } floatConv;
+                if(calibrationData.gravityCalibrationState == 4){
+                    I2C_BUFFER[0]=8; // gravityValue
+                    floatConv._float = calibrationData.gravityValue;
+                    I2C_BUFFER[1] = floatConv._bytes[0];
+                    I2C_BUFFER[2] = floatConv._bytes[1];
+                    I2C_BUFFER[3] = floatConv._bytes[2];
+                    I2C_BUFFER[4] = floatConv._bytes[3];
+                    bcm2835_i2c_write(I2C_BUFFER,5); 
+                    usleep(750000);
+                }
+                if(calibrationData.torn == 3){
+                    I2C_BUFFER[0]=9; // tareValue
+                    floatConv._float = calibrationData.tareValue;
+                    I2C_BUFFER[1] = floatConv._bytes[0];
+                    I2C_BUFFER[2] = floatConv._bytes[1];
+                    I2C_BUFFER[3] = floatConv._bytes[2];
+                    I2C_BUFFER[4] = floatConv._bytes[3];
+                    bcm2835_i2c_write(I2C_BUFFER,5); 
+                    usleep(750000);
+                }
+                I2C_BUFFER[0]=7; // tareValue
+                I2C_BUFFER[1] = (char)sleepTime;
+                bcm2835_i2c_write(I2C_BUFFER,2); 
+                system("/usr/bin/sync && /usr/bin/shutdown -P now");
+                continue;
+            }
+
             printf("ESTR:\n");
             fprintf(stderr, "Unrecognised command: %s \n", command);
         }
@@ -484,46 +520,46 @@ void doCalibration(void){
                 if(calibrationData.stable == 1 && calibrationData.torn == 3){ // bell is stable and zeroed
                     calibrationData.gravityCalibrationState = 1;
                     for(int i = 0; i< BUFFERSIZE; ++i){ // initialise with dummy data for savgol alignment
-                        rateBuffer[i] = 0;
-                        angleBuffer[i] = 180.0+(roll-calibrationData.tareValue);
+                        fifo.rateBuffer[i] = 0;
+                        fifo.angleBuffer[i] = 180.0+(roll-calibrationData.tareValue);
                     }
-                    head = SAVGOLHALF;
-                    tail = 0;
-                    available = SAVGOLHALF;
+                    fifo.head = SAVGOLHALF;
+                    fifo.tail = 0;
+                    fifo.available = SAVGOLHALF;
                 }
                 break;
             case 1:
                 if((roll-calibrationData.tareValue) < -150.0 || (roll-calibrationData.tareValue) > +150.0){ // bell now high enough to start accumulating gravity calibration data
                     calibrationData.gravityCalibrationState = 2;
                 }
-                rateBuffer[head] = angularVelocity;
-                angleBuffer[head] = 180.0+(roll-calibrationData.tareValue);
-                head = (head + 1) % BUFFERSIZE;
-                tail = (tail + 1) % BUFFERSIZE; // just ditch old data for the time being
+                fifo.rateBuffer[fifo.head] = angularVelocity;
+                fifo.angleBuffer[fifo.head] = 180.0+(roll-calibrationData.tareValue);
+                fifo.head = (fifo.head + 1) % BUFFERSIZE;
+                fifo.tail = (fifo.tail + 1) % BUFFERSIZE; // just ditch old data for the time being
                 break;
             case 2:
                 if(calibrationData.stable == 1 && abs(roll-calibrationData.tareValue) > 160 && abs(roll-calibrationData.tareValue) < 178) {
                     calibrationData.gravityCalibrationState = 3; // bell now rung up proceed to calibration calculations
                 }
-                rateBuffer[head] = angularVelocity;
-                angleBuffer[head] = 180.0+(roll-calibrationData.tareValue);
-                head = (head + 1) % BUFFERSIZE;
-                available += 1;
-                if(available < PUSHBATCH + SAVGOLLENGTH) break;
-                for(int pushcounter = available; pushcounter > SAVGOLLENGTH; --pushcounter){
+                fifo.rateBuffer[fifo.head] = angularVelocity;
+                fifo.angleBuffer[fifo.head] = 180.0+(roll-calibrationData.tareValue);
+                fifo.head = (fifo.head + 1) % BUFFERSIZE;
+                fifo.available += 1;
+                if(fifo.available < PUSHBATCH + SAVGOLLENGTH) break;
+                for(int pushcounter = fifo.available; pushcounter > SAVGOLLENGTH; --pushcounter){
                     // Record only a range of angles as the bell is being pulled up.  See calculateError() for justification  
                     // At this stage we don't know which is handstroke and which is backstroke so record both sides and both directions.  
-                    if((angleBuffer[tail] < 275 && angleBuffer[tail] > 260) ||
-                        (angleBuffer[tail] < 100 && angleBuffer[tail] > 85)){
+                    if((fifo.angleBuffer[fifo.tail] < 275 && fifo.angleBuffer[fifo.tail] > 260) ||
+                        (fifo.angleBuffer[fifo.tail] < 100 && fifo.angleBuffer[fifo.tail] > 85)){
                         if(calibrationData.gravityDataCount < 8000){
-                            calibrationData.gravityData[calibrationData.gravityDataCount*3] = angleBuffer[tail];
-                            calibrationData.gravityData[(calibrationData.gravityDataCount*3)+1] = rateBuffer[tail];
-                            calibrationData.gravityData[(calibrationData.gravityDataCount*3)+2] = savGol(tail);
+                            calibrationData.gravityData[calibrationData.gravityDataCount*3] = fifo.angleBuffer[fifo.tail];
+                            calibrationData.gravityData[(calibrationData.gravityDataCount*3)+1] = fifo.rateBuffer[fifo.tail];
+                            calibrationData.gravityData[(calibrationData.gravityDataCount*3)+2] = savGol(fifo.tail);
                             calibrationData.gravityDataCount += 1;
                         }
                     }
-                    tail = (tail + 1) % BUFFERSIZE;
-                    available -= 1;
+                    fifo.tail = (fifo.tail + 1) % BUFFERSIZE;
+                    fifo.available -= 1;
                 }
                 break;
             case 3:
@@ -563,12 +599,12 @@ void startRun(void){
     }
 
     for(int i = 0; i< BUFFERSIZE; ++i){ // initialise with dummy data for savgol alignment
-        rateBuffer[i] = 0;
-        angleBuffer[i] = direction*(roll-calibrationData.tareValue)-180.0;
+        fifo.rateBuffer[i] = 0;
+        fifo.angleBuffer[i] = direction*(roll-calibrationData.tareValue)-180.0;
     }
-    head = SAVGOLHALF;
-    tail = 0;
-    available = SAVGOLHALF;
+    fifo.head = SAVGOLHALF;
+    fifo.tail = 0;
+    fifo.available = SAVGOLHALF;
 
     RUNNING = 1;
 	EYECANDY = 0;
@@ -599,9 +635,9 @@ void pushData(void){
     // Samples are pushed into the rateBuffer and angleBuffer circular buffers by pullData function.
     // available and tail variables are global and are used to keep track of circular buffer (as is the head
     // variable but that is updated by the pullData function)
-    if(available < PUSHBATCH + SAVGOLLENGTH) return;
+    if(fifo.available < PUSHBATCH + SAVGOLLENGTH) return;
 
-    for(int counter = available; counter > SAVGOLLENGTH; --counter){
+    for(int counter = fifo.available; counter > SAVGOLLENGTH; --counter){
         // This bit allowed for slight angle drift.  It does this knowing that BDC = 180 degrees.
         // and that is the point when the bell's angular acceleration is zero.  Drift is so low
         // that this is more trouble than it's worth.  Left in and reported but not used.
@@ -610,11 +646,11 @@ void pushData(void){
         float value = 0;
         unsigned int data = 0;
 
-        taccn = savGol(tail);
-        unsigned int lastTail = (tail == 0) ? BUFFERSIZE-1 : tail -1;
-        if(taccn * accn <= 0.0 && angleBuffer[tail] > 170.0 && angleBuffer[tail] < 190.0  && nudgeCount == 0) {
+        taccn = savGol(fifo.tail);
+        unsigned int lastTail = (fifo.tail == 0) ? BUFFERSIZE-1 : fifo.tail -1;
+        if(taccn * accn <= 0.0 && fifo.angleBuffer[fifo.tail] > 170.0 && fifo.angleBuffer[fifo.tail] < 190.0  && nudgeCount == 0) {
             float nudgeFactor = accn /(accn - taccn);
-            float angleDiffFrom180 = (angleBuffer[lastTail] + nudgeFactor*(angleBuffer[tail]-angleBuffer[lastTail])) - 180.0;
+            float angleDiffFrom180 = (fifo.angleBuffer[lastTail] + nudgeFactor*(fifo.angleBuffer[fifo.tail]-fifo.angleBuffer[lastTail])) - 180.0;
             nudgeAngle = angleDiffFrom180;
             nudgeCount = 10;
             calibrationData.lastBDC = OUT_COUNT;
@@ -623,18 +659,18 @@ void pushData(void){
         } 
         if(nudgeCount != 0) nudgeCount -= 1; // don't do this twice in one half stroke - allows for a bit of noise
         accn = taccn;
-        float raccn = accn - calibrationData.gravityValue*sin(angleBuffer[tail]*DEGREES_TO_RADIANS_MULTIPLIER);
+        float raccn = accn - calibrationData.gravityValue*sin(fifo.angleBuffer[fifo.tail]*DEGREES_TO_RADIANS_MULTIPLIER);
         
-        if(rateBuffer[tail] * rateBuffer[lastTail] <= 0.0 && switchCount == 0 && OUT_COUNT > 10) { // detect when bell changes direction
+        if(fifo.rateBuffer[fifo.tail] * fifo.rateBuffer[lastTail] <= 0.0 && switchCount == 0 && OUT_COUNT > 10) { // detect when bell changes direction
             data = 7;
             value = OUT_COUNT;
             switchCount = 5;
         } 
-        if (switchCount != 0 && abs(rateBuffer[tail]) > 100.0) switchCount -= 1;
+        if (switchCount != 0 && abs(fifo.rateBuffer[fifo.tail]) > 100.0) switchCount -= 1;
 
-        if((((int)calibrationData.nextStrikeCount) == OUT_COUNT) && calibrationData.strikeType){ // dingDong recorded a strike about here
-            data = calibrationData.strikeType;
-            calibrationData.strikeType = 0;
+        if((((int)calibrationData.nextStrikeCount) == OUT_COUNT) && calibrationData.flagStrikeType){ // dingDong recorded a strike about here
+            data = calibrationData.flagStrikeType;
+            calibrationData.flagStrikeType = 0;
             value = (float)(calibrationData.nextStrikeCount - calibrationData.lastStrikeCount)/ODR; // number of seconds since last strike.
             calibrationData.lastStrikeCount = calibrationData.nextStrikeCount;
         }
@@ -674,22 +710,22 @@ void pushData(void){
         }
 
       
-        sprintf(remote_outbuf_line, "LIVE:A:%+6.1f,R:%+6.1f,C:%+7.1f,D:%d,V:%+10.2f\n", angleBuffer[tail], rateBuffer[tail], raccn, data, value);
+        sprintf(remote_outbuf_line, "LIVE:A:%+6.1f,R:%+6.1f,C:%+7.1f,D:%d,V:%+10.2f\n", fifo.angleBuffer[fifo.tail], fifo.rateBuffer[fifo.tail], raccn, data, value);
         if (remote_count + strlen(remote_outbuf_line) > (sizeof remote_outbuf -2)) {
             printf("%s",remote_outbuf);
             remote_count = 0;
         }
         
         remote_count += sprintf(&remote_outbuf[remote_count],remote_outbuf_line);     
-        sprintf(local_outbuf_line,"A:%+6.1f,R:%+6.1f,C:%+7.1f,D:%d,V:%+10.2f %s\n", angleBuffer[tail], rateBuffer[tail], raccn, data, value, detailsString);
+        sprintf(local_outbuf_line,"A:%+6.1f,R:%+6.1f,C:%+7.1f,D:%d,V:%+10.2f %s\n", fifo.angleBuffer[fifo.tail], fifo.rateBuffer[fifo.tail], raccn, data, value, detailsString);
         if (local_count + strlen(local_outbuf_line) > (sizeof local_outbuf -2)) {
             fputs(local_outbuf, fd_write_out);
             fflush(fd_write_out);
             local_count = 0;
         }
         local_count += sprintf(&local_outbuf[local_count],local_outbuf_line);
-        tail = (tail + 1) % BUFFERSIZE;
-        available -= 1;
+        fifo.tail = (fifo.tail + 1) % BUFFERSIZE;
+        fifo.available -= 1;
         OUT_COUNT += 1;
 
 //        fprintf(fd_write_out,"A:%+07.1f,R:%+07.1f,C:%+07.1f,P:%+07.1f,Y:%+07.1f,AX:%+06.3f,AY:%+06.3f,AZ:%+06.3f,GX:%+07.1f,GY:%+07.1f,GZ:%+07.1f,X:%+06.3f,Y:%+06.3f,Z:%+06.3f\n", roll, (gyro_data[0] + last_x_gyro)/2.0, accTang, pitch, yaw, accel_data[0], accel_data[1], accel_data[2], gyro_data[0], gyro_data[1], gyro_data[2],a[0],a[1],a[2]);
@@ -726,28 +762,28 @@ void pullData(void){
         // using 0 degrees = bell at balance at handstroke, 
         // 360 degrees = bell at balance at backstroke. 180 degrees = BDC. 
 
-        unsigned int lastHead = (head == 0) ? BUFFERSIZE-1 : head -1;
+        unsigned int lastHead = (fifo.head == 0) ? BUFFERSIZE-1 : fifo.head -1;
         float angle = direction*(roll-calibrationData.tareValue)-180.0;
         angle += angleCorrection;
-        if((angleBuffer[lastHead] - angle) > 270){
+        if((fifo.angleBuffer[lastHead] - angle) > 270){
             if(angleCorrection < 720 ) { // should always be true
                 angleCorrection += 360; 
                 angle += 360;
             }
-        } else if ((angleBuffer[lastHead] - angle) < -270){
+        } else if ((fifo.angleBuffer[lastHead] - angle) < -270){
             if(angleCorrection > 0){ // should always be true
             angleCorrection -= 360; 
             angle -= 360;
             }
         }
 
-        rateBuffer[head] = angularVelocity * direction;
-        angleBuffer[head] = angle;
-        head = (head + 1) % BUFFERSIZE;
-        available += 1;
-        if(available >= BUFFERSIZE) {
+        fifo.rateBuffer[fifo.head] = angularVelocity * direction;
+        fifo.angleBuffer[fifo.head] = angle;
+        fifo.head = (fifo.head + 1) % BUFFERSIZE;
+        fifo.available += 1;
+        if(fifo.available >= BUFFERSIZE) {
             printf("EOVF:\n");  // circular buffer full - should never happen
-            available -= 1;
+            fifo.available -= 1;
         }
     }
 }
@@ -861,7 +897,7 @@ float savGol(unsigned int currentPosition){
     unsigned int windowStartPosition = (currentPosition < SAVGOLHALF) ? (currentPosition + BUFFERSIZE) - SAVGOLHALF: currentPosition - SAVGOLHALF;
     float savGolResult=0;
     for(int i = 0; i < SAVGOLLENGTH; ++i){
-        savGolResult += savGolCoefficients[i] * rateBuffer[(windowStartPosition +i) % BUFFERSIZE];
+        savGolResult += savGolCoefficients[i] * fifo.rateBuffer[(windowStartPosition +i) % BUFFERSIZE];
     }
     savGolResult *= ODR;
     return(savGolResult);
@@ -896,7 +932,7 @@ float calculateError(float guess){
 // Quite a a bit of experimentation here.  The function works out a base level
 // volatility (rate of change of acceleration) of the bell system and when 
 // this jumps suddenly (by 1.7x), a strike is recorded.
-// Tested on heavy and light bells and produces sane and consistent results +- 20ms or so.
+// Tested on heavy and light bells and produces sane and consistent results +- 10ms or so.
 // Need to test on plain bearing bells
 
 void dingDong(float currentRate, int interval){
@@ -904,23 +940,23 @@ void dingDong(float currentRate, int interval){
     static float rollingRates[5] = {0.0,0.0,0.0,0.0,0.0};
     static unsigned int rollingPosition = 0;
     static float baseSD = 0.0;
-    unsigned int lastHead = (head == 0) ? BUFFERSIZE-1 : head -1;
+    unsigned int lastHead = (fifo.head == 0) ? BUFFERSIZE-1 : fifo.head -1;
 
 // savgol_coeffs(5,2,deriv=2,use="dot")
     static float dingDongCoefficients[] = { 0.28571429, -0.14285714, -0.28571429, -0.14285714,  0.28571429 };
 
     if(calibrationData.manualStrike){ // doing manual chimes (eg clapper tied)
-        if(((OUT_COUNT + available + (0.25*interval) - calibrationData.lastBDC)/ODR) > (calibrationData.manualTimefromBDC/1000.0)){
-            if((calibrationData.lastStrike == 1) && (angleBuffer[lastHead] < 160) && (rateBuffer[lastHead] < -20)){
+        if(((OUT_COUNT + fifo.available + (0.25*interval) - calibrationData.lastBDC)/ODR) > (calibrationData.manualTimefromBDC/1000.0)){
+            if((calibrationData.lastStrike == 1) && (fifo.angleBuffer[lastHead] < 160) && (fifo.rateBuffer[lastHead] < -20)){
                 calibrationData.lastStrike = 2;
-                calibrationData.strikeType = 2;
-                calibrationData.nextStrikeCount = OUT_COUNT + available + 0.25*interval;
+                calibrationData.flagStrikeType = 2;
+                calibrationData.nextStrikeCount = OUT_COUNT + fifo.available + 0.25*interval;
                 return;
             }
-            if((calibrationData.lastStrike == 2) && (angleBuffer[lastHead] > 200) && (rateBuffer[lastHead] > 20)){
+            if((calibrationData.lastStrike == 2) && (fifo.angleBuffer[lastHead] > 200) && (fifo.rateBuffer[lastHead] > 20)){
                 calibrationData.lastStrike = 1;
-                calibrationData.strikeType = 1;
-                calibrationData.nextStrikeCount = OUT_COUNT + available + 0.25*interval;
+                calibrationData.flagStrikeType = 1;
+                calibrationData.nextStrikeCount = OUT_COUNT + fifo.available + 0.25*interval;
                 return;
             }
         }
@@ -943,24 +979,24 @@ void dingDong(float currentRate, int interval){
     float SD = sqrt(rollingValues[0]*rollingValues[0] + rollingValues[1]*rollingValues[1] + rollingValues[2]*rollingValues[2] + rollingValues[3]*rollingValues[3] + rollingValues[4]*rollingValues[4]);
     
     // calculate base level of volatility and apply a bit of smoothing
-    if(angleBuffer[lastHead] > 100 && angleBuffer[lastHead] < 260) baseSD = 0.8*baseSD + 0.2*SD;
+    if(fifo.angleBuffer[lastHead] > 100 && fifo.angleBuffer[lastHead] < 260) baseSD = 0.8*baseSD + 0.2*SD;
 
-    if((calibrationData.lastStrike == 1) && (SD > 1.7*baseSD) && (angleBuffer[lastHead] < 70) && (rateBuffer[lastHead] < -20)){
+    if((calibrationData.lastStrike == 1) && (SD > 1.7*baseSD) && (fifo.angleBuffer[lastHead] < 70) && (fifo.rateBuffer[lastHead] < -20)){
         calibrationData.lastStrike = 2;
-        calibrationData.strikeType = 2;
-        calibrationData.nextStrikeCount = OUT_COUNT + available + 0.25*interval;
-    } else if((calibrationData.lastStrike == 2) && (SD > 1.7*baseSD) && (angleBuffer[lastHead] > 290) && (rateBuffer[lastHead] > 20)) {
+        calibrationData.flagStrikeType = 2;
+        calibrationData.nextStrikeCount = OUT_COUNT + fifo.available + 0.25*interval;
+    } else if((calibrationData.lastStrike == 2) && (SD > 1.7*baseSD) && (fifo.angleBuffer[lastHead] > 290) && (fifo.rateBuffer[lastHead] > 20)) {
         calibrationData.lastStrike = 1;
-        calibrationData.strikeType = 1;
-        calibrationData.nextStrikeCount = OUT_COUNT + available + 0.25*interval;
-    } else if ((calibrationData.lastStrike == 1) && (angleBuffer[lastHead] < 40) && (rateBuffer[lastHead] < 0)){ // strike not detected, fake one
+        calibrationData.flagStrikeType = 1;
+        calibrationData.nextStrikeCount = OUT_COUNT + fifo.available + 0.25*interval;
+    } else if ((calibrationData.lastStrike == 1) && (fifo.angleBuffer[lastHead] < 40) && (fifo.rateBuffer[lastHead] < 0)){ // strike not detected, fake one
         calibrationData.lastStrike = 2;
-        calibrationData.strikeType = 4;
-        calibrationData.nextStrikeCount = OUT_COUNT + available;
-    } else if ((calibrationData.lastStrike == 2) && (angleBuffer[lastHead] > 320) && (rateBuffer[lastHead] > 0)){ // strike not detected, fake one
+        calibrationData.flagStrikeType = 4;
+        calibrationData.nextStrikeCount = OUT_COUNT + fifo.available;
+    } else if ((calibrationData.lastStrike == 2) && (fifo.angleBuffer[lastHead] > 320) && (fifo.rateBuffer[lastHead] > 0)){ // strike not detected, fake one
         calibrationData.lastStrike = 1;
-        calibrationData.strikeType = 3;
-        calibrationData.nextStrikeCount = OUT_COUNT + available;
+        calibrationData.flagStrikeType = 3;
+        calibrationData.nextStrikeCount = OUT_COUNT + fifo.available;
     } 
 }
 
@@ -1223,6 +1259,35 @@ void setup(void){
     if(!isnan(result)) calibrationData.gyroTransformMatrix[7] = result;
     result = extractFloat(8);
     if(!isnan(result)) calibrationData.gyroTransformMatrix[8] = result;
+
+    // check to see if Pi has awoken from sleep.
+    I2C_BUFFER[0]=8;
+    bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 8 (gravityValue)
+    bcm2835_i2c_read(I2C_BUFFER,4); usleep(100);
+    result = extractFloat(0);
+    if(!isnan(result) && result != -1){
+        calibrationData.gravityValue = result;
+        calibrationData.gravityCalibrationState = 4;
+        calibrationData.torn = 3;
+
+        I2C_BUFFER[0]=9;
+        bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 9 (tareValue)
+        bcm2835_i2c_read(I2C_BUFFER,4); usleep(100);
+        result = extractFloat(0);
+        if(!isnan(result)) calibrationData.tareValue = result;
+        FILE *fdGravity;
+        fdGravity = fopen("/tmp/BBgravity","w");
+        if(fdGravity != NULL) {
+            fprintf(fdGravity,"%+08.1f\n", calibrationData.gravityValue);
+            fclose(fdGravity);
+        }
+        FILE *fdTare;
+        fdTare = fopen("/tmp/BBtare","w");
+        if(fdTare != NULL) {
+            fprintf(fdTare,"%+07.4f\n", calibrationData.tareValue);
+            fclose(fdTare);
+        }
+    }
 
     //start FIFO - keep i2c disabled
     writeRegister(ICM20689_USER_CTRL,0x50);

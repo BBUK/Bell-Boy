@@ -32,6 +32,7 @@ var wsHost="10.0.0.1"
 var sampleInterval = 0.008;  // seconds for each sample (default 125 times/sec).  Updated by SAMP: command
 var collectInterval = 0.08; // update display in ms - here 10 times/sec
 var batteryLevel = 100;
+var sleepTime = 0.5;
 
 var canvasBD = document.getElementById("canvasBD");
 var ctxBD = canvasBD.getContext("2d");
@@ -943,7 +944,7 @@ function drawLiveTime(time, HS, faked,currentPosition){
 
     var colour = "white";
     if(faked) colour = "red";
-    if(overflow) colour = "yellow";
+    if(overflow) colour = "red";
     
     var height = 0;
     var cross = 0; 
@@ -1237,6 +1238,40 @@ minusCPMButton.onclick = function(){
     if (currentStatus & RECORDINGSESSION) return;
     if(CPM > 20) CPM -= 0.5;
     calculateTimings();
+};
+
+plusSleepButton.onclick = function(){
+    if (currentStatus & DOWNLOADINGFILE) return;
+    if (currentStatus & PLAYBACK) return;
+    if (currentStatus & HELPDISPLAYED) return;
+    if (currentStatus & RECORDINGSESSION) return;
+    if(sleepTime < 24.0) sleepTime += 0.5;
+    document.getElementById("sleep").innerHTML=sleepTime.toFixed(1)+"&nbsp;";
+}
+
+minusSleepButton.onclick = function(){
+    if (currentStatus & DOWNLOADINGFILE) return;
+    if (currentStatus & PLAYBACK) return;
+    if (currentStatus & HELPDISPLAYED) return;
+    if (currentStatus & RECORDINGSESSION) return;
+    if(sleepTime > 0) sleepTime -= 0.5;
+    document.getElementById("sleep").innerHTML=sleepTime.toFixed(1)+"&nbsp;";
+};
+
+sleepButton.onclick = function() {
+    if (nonLive){
+        alert("Not implemented for this demo");
+        return;
+    }
+    if (!wsOpened){
+        setStatus("No communication with BellBoy device.");
+        return;
+    }
+    if (currentStatus & DOWNLOADINGFILE) return;
+    if (currentStatus & PLAYBACK) return;
+    if (currentStatus & HELPDISPLAYED) return;
+    if (currentStatus & RECORDINGSESSION) return;
+    ws.send("EYEC:" + (sleepTime*2));
 };
 
 plusOHButton.onclick = function(){

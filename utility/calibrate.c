@@ -460,7 +460,6 @@ float extractFloat(uint8_t index){
     return floatConv._float;
 }
 
-
 // This function works out how quickly samples are pushed out by the ICM20689s
 // by counting how quickly samples are pushed out to the FIFOs.
 void fifoTimer(void){

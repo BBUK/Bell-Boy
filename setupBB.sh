@@ -243,13 +243,15 @@ mv powermonitor /root/
 
 cd ~/Bell-Boy
 mv images/Mounting.png /srv/http/
-mv images/BBtaped.png /srv/http/
 mv images/MainScreenGuide.png /srv/http/
 mv images/Playback.png /srv/http/
 mv images/FileDownload.png /srv/http/
 mv images/StrokeByStroke.png /srv/http/
 mv images/StrokeComparison.png /srv/http/
 mv images/Settings.png /srv/http/
+mv images/Diagnostics.png /srv/http/
+mv images/EyeCandy.png /srv/http/
+mv images/Timings.png /srv/http/
 mv images/*.jpg /srv/http
 
 cd ~
@@ -258,7 +260,7 @@ tee /etc/samba/smb.conf <<HDHD
 [global]
 # workgroup = NT-Domain-Name or Workgroup-Name
 workgroup = WORKGROUP
-
+#protocol = SMB2 ## test this might work with Win10 but not Win7
 server string = Samba Server
 
 printcap name = /etc/printcap
