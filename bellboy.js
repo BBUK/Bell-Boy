@@ -420,6 +420,11 @@ function parseResult(dataBack) {
         return;
     }
 
+    if (dataBack.slice(0,5) == "EDEF:"){
+        setStatus("Error loading calibration.  Default values used.");
+        return;
+    }
+
     if (dataBack.slice(0,5) == "EYEC:"){
         var entries = dataBack.split(",");
 

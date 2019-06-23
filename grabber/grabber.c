@@ -88,7 +88,6 @@
 * (k)   STND: standalone (playback-only) operation.
 * (l)   PLRD: play and record operation.
 * (m)   BELS: bell data. Format: numberofbells(int),CPM(float),openHandstroke(float), manualtimefromBDC(float)
-* (n)   EFIL: end sending of FILE: data
 * (o)   SLEP:[number] go to sleep for [number] of half hour units.
 *
 * There are the following responses back to the user's browser:
@@ -117,6 +116,8 @@
 * (xviii)EWAI: Wait for initial calibration (zeroing)
 * (xix)  EPUL: Wait for bell to be rung up
 * (xx)   ECAL: Bell being pulled up - recording for gravity calibration
+* (xxi)  EFIL: end sending of FILE: data
+* (xxii) EDEF: Some problem with loading calibration data. Default (uncalibrated) valued used.
 */
 
 #include <math.h>
@@ -711,7 +712,12 @@ void pushData(void){
             strcpy(detailsString, ", #Strike time from BDC");
         }
 
-        if(OUT_COUNT == 5){ // clear details
+        if(OUT_COUNT == 5){ // sixth line of output shows the tareValue
+            value = calibrationData.tareValue;
+            data = 9;
+            strcpy(detailsString, ", #Tare Value");
+        }
+        if(OUT_COUNT == 6){ // clear details
             strcpy(detailsString, "");
         }
 
@@ -811,8 +817,8 @@ float pullAndTransform(){
         readFIFO(fifoData);
         
         // get average gyro rates - used for dynamic bias compensation calculation
-        for(int i = 0; i < 3; ++i){
-            averages[i] += fifoData[3+i];
+        for(int j = 0; j < 3; ++j){
+            averages[j] += fifoData[3+j];
         }
 
         fifoData[0] -= calibrationData.accBiasX;
@@ -825,9 +831,9 @@ float pullAndTransform(){
 
         // used for bias compensation calculation, checks to see if bell is at rest
         // by recording a peak gyro movement over the measurement period (4000 samples = 8 secs)
-        for(int i = 0; i < 3; ++i){
-            if(abs(fifoData[3+i]) > peaks[i]) peaks[i] = abs(fifoData[3+i]);
-            if(peaks[i] > 2.1) calibrationData.stable = 0;
+        for(int k = 0; k < 3; ++k){
+            if(abs(fifoData[3+k]) > peaks[k]) peaks[k] = abs(fifoData[3+k]);
+            if(peaks[k] > 2.1) calibrationData.stable = 0;
         }
 
         // transform data using transform matrix (from imu_tk and collected from Arduino via setup function)
@@ -885,10 +891,8 @@ float pullAndTransform(){
                         }
                     }
                 }
-            } else {
-                calibrationData.stable = 0;
             }
-            for(int j = 0; j < 3; ++j) { averages[j] = 0.0; peaks[j] = 0.0; }
+            for(int h = 0; h < 3; ++h) { averages[h] = 0.0; peaks[h] = 0.0; }
         }
         
         // This function calculates angles and a quaternion from the gyro and accelerometer measurements. The q0, q1,q2,q3, roll, pitch and yaw globals
@@ -1183,88 +1187,139 @@ void setup(void){
     bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 10 (samplePeriod)
     bcm2835_i2c_read(I2C_BUFFER,4); usleep(100);
     float result;
+    int fail = 0;
     result = extractFloat(0);
-    if(!isnan(result)) {calibrationData.samplePeriod = result; ODR = 1.0/(result * 4.0);}
+    if(!isnan(result)) {calibrationData.samplePeriod = result; ODR = 1.0/(result * 4.0);} else {fail =1;}
 	
+    if(fail){
+        fail = 0;
+        calibrationData.samplePeriod = 0.002;
+        ODR = 125;
+        printf("EDEF:\n");
+    }
+    
     I2C_BUFFER[0]=200;
     bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 200 (accBiasXYZ)
     bcm2835_i2c_read(I2C_BUFFER,12); usleep(100);
     result = extractFloat(0);
-    if(!isnan(result)) calibrationData.accBiasX = result/g0;
+    if(!isnan(result)) {calibrationData.accBiasX = result/g0;} else {fail =1;}
     result = extractFloat(4);
-    if(!isnan(result)) calibrationData.accBiasY = result/g0;
+    if(!isnan(result)) {calibrationData.accBiasY = result/g0;} else {fail =1;}
     result = extractFloat(8);
-    if(!isnan(result)) calibrationData.accBiasZ = result/g0;
+    if(!isnan(result)) {calibrationData.accBiasZ = result/g0;} else {fail =1;}
+
+    if(fail){
+        fail = 0;
+        calibrationData.accBiasX = 0.0;
+        calibrationData.accBiasY = 0.0;
+        calibrationData.accBiasZ = 0.0;
+        printf("EDEF:\n");
+    }
 	
     I2C_BUFFER[0]=201;
     bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 201 (accTransform first row)
     bcm2835_i2c_read(I2C_BUFFER,12); usleep(100);
     result = extractFloat(0);
-    if(!isnan(result)) calibrationData.accTransformMatrix[0] = result;
+    if(!isnan(result)) {calibrationData.accTransformMatrix[0] = result;} else {fail =1;}
     result = extractFloat(4);
-    if(!isnan(result)) calibrationData.accTransformMatrix[1] = result;
+    if(!isnan(result)) {calibrationData.accTransformMatrix[1] = result;} else {fail =1;}
     result = extractFloat(8);
-    if(!isnan(result)) calibrationData.accTransformMatrix[2] = result;
+    if(!isnan(result)) {calibrationData.accTransformMatrix[2] = result;} else {fail =1;}
 
     I2C_BUFFER[0]=202;
     bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 201 (accTransform second row)
     bcm2835_i2c_read(I2C_BUFFER,12); usleep(100);
     result = extractFloat(0);
-    if(!isnan(result)) calibrationData.accTransformMatrix[3] = result;
+    if(!isnan(result)) {calibrationData.accTransformMatrix[3] = result;} else {fail =1;}
     result = extractFloat(4);
-    if(!isnan(result)) calibrationData.accTransformMatrix[4] = result;
+    if(!isnan(result)) {calibrationData.accTransformMatrix[4] = result;} else {fail =1;}
     result = extractFloat(8);
-    if(!isnan(result)) calibrationData.accTransformMatrix[5] = result;
+    if(!isnan(result)) {calibrationData.accTransformMatrix[5] = result;} else {fail =1;}
 
     I2C_BUFFER[0]=203;
     bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 203 (accTransform bottom row)
     bcm2835_i2c_read(I2C_BUFFER,12); usleep(100);
     result = extractFloat(0);
-    if(!isnan(result)) calibrationData.accTransformMatrix[6] = result;
+    if(!isnan(result)) {calibrationData.accTransformMatrix[6] = result;} else {fail =1;}
     result = extractFloat(4);
-    if(!isnan(result)) calibrationData.accTransformMatrix[7] = result;
+    if(!isnan(result)) {calibrationData.accTransformMatrix[7] = result;} else {fail =1;}
     result = extractFloat(8);
-    if(!isnan(result)) calibrationData.accTransformMatrix[8] = result;
+    if(!isnan(result)) {calibrationData.accTransformMatrix[8] = result;} else {fail =1;}
+
+    if(fail){
+        fail = 0;
+        calibrationData.accTransformMatrix[0] = 1.0;
+        calibrationData.accTransformMatrix[1] = 0.0;
+        calibrationData.accTransformMatrix[2] = 0.0;
+        calibrationData.accTransformMatrix[3] = 0.0;
+        calibrationData.accTransformMatrix[4] = 1.0;
+        calibrationData.accTransformMatrix[5] = 0.0;
+        calibrationData.accTransformMatrix[6] = 0.0;
+        calibrationData.accTransformMatrix[7] = 0.0;
+        calibrationData.accTransformMatrix[8] = 1.0;
+        printf("EDEF:\n");
+    }
 
     I2C_BUFFER[0]=204;
     bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 204 (gyroBiasXYZ)
     bcm2835_i2c_read(I2C_BUFFER,12); usleep(100);
     result = extractFloat(0);
-    if(!isnan(result)) calibrationData.gyroBiasX = result*RADIANS_TO_DEGREES_MULTIPLIER;
+    if(!isnan(result)) {calibrationData.gyroBiasX = result*RADIANS_TO_DEGREES_MULTIPLIER;} else {fail =1;}
     result = extractFloat(4);
-    if(!isnan(result)) calibrationData.gyroBiasY = result*RADIANS_TO_DEGREES_MULTIPLIER;
+    if(!isnan(result)) {calibrationData.gyroBiasY = result*RADIANS_TO_DEGREES_MULTIPLIER;} else {fail =1;}
     result = extractFloat(8);
-    if(!isnan(result)) calibrationData.gyroBiasZ = result*RADIANS_TO_DEGREES_MULTIPLIER;
+    if(!isnan(result)) {calibrationData.gyroBiasZ = result*RADIANS_TO_DEGREES_MULTIPLIER;} else {fail =1;}
+
+    if(fail){
+        fail = 0;
+        calibrationData.gyroBiasX = 0.0;
+        calibrationData.gyroBiasY = 0.0;
+        calibrationData.gyroBiasZ = 0.0;
+        printf("EDEF:\n");
+    }
 
     I2C_BUFFER[0]=205;
     bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 205 (gyroTransform first row)
     bcm2835_i2c_read(I2C_BUFFER,12); usleep(100);
     result = extractFloat(0);
-    if(!isnan(result)) calibrationData.gyroTransformMatrix[0] = result;
+    if(!isnan(result)) {calibrationData.gyroTransformMatrix[0] = result;} else {fail =1;}
     result = extractFloat(4);
-    if(!isnan(result)) calibrationData.gyroTransformMatrix[1] = result;
+    if(!isnan(result)) {calibrationData.gyroTransformMatrix[1] = result;} else {fail =1;}
     result = extractFloat(8);
-    if(!isnan(result)) calibrationData.gyroTransformMatrix[2] = result;
+    if(!isnan(result)) {calibrationData.gyroTransformMatrix[2] = result;} else {fail =1;}
 
     I2C_BUFFER[0]=206;
     bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 206 (gyroTransform second row)
     bcm2835_i2c_read(I2C_BUFFER,12); usleep(100);
     result = extractFloat(0);
-    if(!isnan(result)) calibrationData.gyroTransformMatrix[3] = result;
+    if(!isnan(result)) {calibrationData.gyroTransformMatrix[3] = result;} else {fail =1;}
     result = extractFloat(4);
-    if(!isnan(result)) calibrationData.gyroTransformMatrix[4] = result;
+    if(!isnan(result)) {calibrationData.gyroTransformMatrix[4] = result;} else {fail =1;}
     result = extractFloat(8);
-    if(!isnan(result)) calibrationData.gyroTransformMatrix[5] = result;
+    if(!isnan(result)) {calibrationData.gyroTransformMatrix[5] = result;} else {fail =1;}
 
     I2C_BUFFER[0]=207;
     bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 207 (gyroTransform bottom row)
     bcm2835_i2c_read(I2C_BUFFER,12); usleep(100);
     result = extractFloat(0);
-    if(!isnan(result)) calibrationData.gyroTransformMatrix[6] = result;
+    if(!isnan(result)) {calibrationData.gyroTransformMatrix[6] = result;} else {fail =1;}
     result = extractFloat(4);
-    if(!isnan(result)) calibrationData.gyroTransformMatrix[7] = result;
+    if(!isnan(result)) {calibrationData.gyroTransformMatrix[7] = result;} else {fail =1;}
     result = extractFloat(8);
-    if(!isnan(result)) calibrationData.gyroTransformMatrix[8] = result;
+    if(!isnan(result)) {calibrationData.gyroTransformMatrix[8] = result;} else {fail =1;}
+
+    if(fail){
+        calibrationData.gyroTransformMatrix[0] = 1.0;
+        calibrationData.gyroTransformMatrix[1] = 0.0;
+        calibrationData.gyroTransformMatrix[2] = 0.0;
+        calibrationData.gyroTransformMatrix[3] = 0.0;
+        calibrationData.gyroTransformMatrix[4] = 1.0;
+        calibrationData.gyroTransformMatrix[5] = 0.0;
+        calibrationData.gyroTransformMatrix[6] = 0.0;
+        calibrationData.gyroTransformMatrix[7] = 0.0;
+        calibrationData.gyroTransformMatrix[8] = 1.0;
+        printf("EDEF:\n");
+    }
 
     // check to see if Pi has awoken from sleep.
     I2C_BUFFER[0]=8;
