@@ -245,8 +245,16 @@ void loop() {
         delay(50);
         checkSwitch();
         volts = ((3.0 * volts) + measureVcc()) / 4.0;
-        if (volts >= 540) STATE = 99;  // low battery - give up on sleep.
-        if (volts < 385 && volts > 200) STATE = 0; // plugged in - give up on sleep and start charging
+        if (volts >= 540) {   // low battery - give up on sleep.
+            gravityValue = -360;
+            tareValue  = -360;
+            STATE = 99;
+        }
+        if (volts < 385 && volts > 200){ // plugged in - give up on sleep and start charging
+            gravityValue = -360;
+            tareValue  = -360;
+            STATE = 0;
+        }
         if(STATE !=9) break;
       }
       sleepTime -= 1;

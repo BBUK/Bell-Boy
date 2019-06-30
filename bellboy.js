@@ -630,7 +630,7 @@ function drawStroke(){
         height = 10 + 25 * (averagePullStrength[currentDrawRing]/scaleValue);
         if(height > 30) height = 30;
 
-        if(ringTimes[currentDrawRing][1]==1) faked = 1;
+        if(ringTimes[currentDrawRing][1] == 1) faked = 1;
         
         if(!(i%2)){
             position = -range*(time - (changeInterval + (openHandstroke*changeStep)))/changeStep;
