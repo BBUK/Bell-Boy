@@ -133,7 +133,7 @@ void loop() {
       ledGreenOn();
       break;
     case 3: // battery power,   pi powered, run still low
-      if (volts < 500) {
+      if (volts < 520) {
         if (!(buttonStatus & PRESS)) {
           STATE = 4;  // battery OK and button not pressed release run pin
           pinMode(piRunPin, INPUT);
@@ -153,6 +153,9 @@ void loop() {
       } else {
         ledRedOn();
       }
+      if (volts >= 540) { // battery low -> poweroff
+        STATE = 99;
+      }
       break;
     case 5: // battery power, pi powered and booting, wait for booting to finish
       if (flags & RECEIVEDBOOTUP) {
@@ -163,6 +166,11 @@ void loop() {
         ledOff();
       } else {
         ledGreenOn();
+      }
+      if (volts >= 540) { // battery low -> go into order shutdown mode
+        flags |= SENDLOWBATT;
+        count = 0;
+        STATE = 7;
       }
       break;
     case 6: // steady state operation
@@ -245,9 +253,7 @@ void loop() {
         delay(50);
         checkSwitch();
         volts = ((3.0 * volts) + measureVcc()) / 4.0;
-        if (volts >= 540) {   // low battery - give up on sleep.
-            gravityValue = -360;
-            tareValue  = -360;
+        if (volts >= 520) {   // low battery - give up on sleep.
             STATE = 99;
         }
         if (volts < 385 && volts > 200){ // plugged in - give up on sleep and start charging
