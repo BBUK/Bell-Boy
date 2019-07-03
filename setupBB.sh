@@ -236,7 +236,7 @@ make check
 make install  || { echo "Unable to install BCM2835 library. Exiting"; exit 1; }
 
 cd ~/Bell-Boy/grabber
-gcc grabber.c -o grabber -lm -lbcm2835 || { echo "Unable to compile grabber.  Exiting."; exit 1; }
+gcc grabber.c -o grabber -lm -lbcm2835 -Wall -O3 || { echo "Unable to compile grabber.  Exiting."; exit 1; }
 mv grabber /srv/http/
 gcc powermonitor.c -o powermonitor -lbcm2835 || { echo "Unable to compile Power monitor. Exiting"; exit 1; }
 mv powermonitor /root/

@@ -1,4 +1,4 @@
-//gcc grabber.c -o grabber -lm -lbcm2835
+//gcc grabber.c -o grabber -lm -lbcm2835 -Wall -O3
 
 /*
  * Copyright (c) 2017,2018,2019 Peter Budd. All rights reserved
@@ -221,8 +221,8 @@ void sig_handler(int signum) {
 
 // number of samples taken before pushing out - only a quarter of these are actually pushed out
 #define PUSHBATCH 80
-// must be bigger than SAVGOLLENGTH + PUSHBATCH
-#define BUFFERSIZE 512 
+// must be bigger than SAVGOLLENGTH + SAVGOLHALF
+#define BUFFERSIZE 512
 struct {
     unsigned int head;
     unsigned int tail;
@@ -232,8 +232,8 @@ struct {
     float accelBuffer[BUFFERSIZE];
 } fifo;
 
-#define SAVGOLLENGTH  15
-#define SAVGOLHALF 7 // = math.floor(SAVGOLLENGTH/2.0)
+#define SAVGOLLENGTH  31
+#define SAVGOLHALF 15 // = math.floor(SAVGOLLENGTH/2.0)
 
 int main(int argc, char const *argv[]){
     char linein[50];
@@ -241,6 +241,7 @@ int main(int argc, char const *argv[]){
     char details[42];
     char oscommand[125];
     int entries;
+    float smoothedBattery = 0.0;
 
     struct sigaction sig_action;
     memset(&sig_action, 0, sizeof(struct sigaction));
@@ -263,27 +264,35 @@ int main(int argc, char const *argv[]){
 			bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 2 (power)
 			bcm2835_i2c_read(I2C_BUFFER,2); usleep(100);
 			unsigned int result = (I2C_BUFFER[0]<<8)+I2C_BUFFER[1];
-			if(result & 0x8000) system("/usr/bin/sync && /usr/bin/shutdown -P now");
-			if((result & 0x7FFF) > 519){
-				printf("BATT:0\n");
-			} else if((result & 0x7FFF) > 509){
+            if(result & 0x8000) system("/usr/bin/sync && /usr/bin/shutdown -P now");
+
+            if(LOOPCOUNT == 1) {
+                smoothedBattery = (result & 0x7FFF);
+            } else {
+                smoothedBattery = 0.8*smoothedBattery + 0.2*(result & 0x7FFF);
+            }
+			if(smoothedBattery > 530){
+				printf("BATT:5\n");
+			} else if(smoothedBattery > 519){
 				printf("BATT:10\n");
-			} else if((result & 0x7FFF) > 503){
+			} else if(smoothedBattery > 509){
 				printf("BATT:20\n");
-			} else if((result & 0x7FFF) > 500){
+			} else if(smoothedBattery > 503){
 				printf("BATT:30\n");
-			} else if((result & 0x7FFF) > 495){
+			} else if(smoothedBattery > 500){
 				printf("BATT:40\n");
-			} else if((result & 0x7FFF) > 490){
+			} else if(smoothedBattery > 494){
 				printf("BATT:50\n");
-			} else if((result & 0x7FFF) > 482){
+			} else if(smoothedBattery > 491){
 				printf("BATT:60\n");
-			} else if((result & 0x7FFF) > 475){
+			} else if(smoothedBattery > 481){
 				printf("BATT:70\n");
-			} else if((result & 0x7FFF) > 466){
+			} else if(smoothedBattery > 473){
 				printf("BATT:80\n");
-			} else if((result & 0x7FFF) > 456){
+			} else if(smoothedBattery > 464){
 				printf("BATT:90\n");
+			} else if(smoothedBattery > 456){
+				printf("BATT:95\n");
 			} else {
 				printf("BATT:100\n");
 			}
@@ -514,6 +523,7 @@ void doCalibration(void){
                     grabberData.gravityCalibrationState = 1;
                     for(int i = 0; i< BUFFERSIZE; ++i){ // initialise with dummy data for savgol alignment
                         fifo.rateBuffer[i] = 0;
+                        fifo.accelBuffer[i] = 0;
                         fifo.angleBuffer[i] = 180.0+(roll-grabberData.tareValue);
                     }
                     fifo.head = SAVGOLHALF;
@@ -539,8 +549,8 @@ void doCalibration(void){
                 fifo.angleBuffer[fifo.head] = 180.0+(roll-grabberData.tareValue);
                 fifo.head = (fifo.head + 1) % BUFFERSIZE;
                 fifo.available += 1;
-                if(fifo.available < PUSHBATCH + SAVGOLLENGTH) break;
-                for(int counter = fifo.available; counter > SAVGOLLENGTH; --counter){
+                if(fifo.available < SAVGOLLENGTH) break;
+                for(int counter = fifo.available; counter > SAVGOLHALF; --counter){
                     // Record only a range of angles as the bell is being pulled up.  See calculateError() for justification  
                     // At this stage we don't know which is handstroke and which is backstroke so record both sides and both directions.  
                     if((fifo.angleBuffer[fifo.tail] < 275 && fifo.angleBuffer[fifo.tail] > 260) ||
@@ -621,9 +631,10 @@ void pushData(void){
     static int nudgeCount = 0;
     static int switchCount = 0;
     static char detailsString[32];
+    static unsigned int data = 0;
+    static float value = 0.0;
 
     pullData();
-    pullData(); // call a second time to catch any fresh samples that arrived during processing of the first round
 
     if(!RUNNING) return;
 
@@ -634,16 +645,13 @@ void pushData(void){
     // Samples are pushed into the rateBuffer and angleBuffer circular buffers by pullData function.
     // available and tail variables are global and are used to keep track of circular buffer (as is the head
     // variable but that is updated by the pullData function)
-    if(fifo.available < PUSHBATCH + SAVGOLLENGTH) return;
+    if(fifo.available <= PUSHBATCH + SAVGOLHALF) return;
 
-    for(int counter = fifo.available; counter > SAVGOLLENGTH; --counter){
+    for(int counter = fifo.available; counter > SAVGOLHALF; --counter){ // always leave SAVGOLHALF in fifo because acceleration data is that amount behind the other data
         // This bit allowed for slight angle drift.  It does this knowing that BDC = 180 degrees.
         // and that is the point when the bell's angular acceleration is zero.  Drift is so low
         // that this is more trouble than it's worth.  Left in and reported but not used.
         // Also testing shows BDC angle is slightly off that recorded when the bell is at rest.  Rope weight?
-
-        float value = 0;
-        unsigned int data = 0;
 
         unsigned int lastTail = (fifo.tail == 0) ? BUFFERSIZE-1 : fifo.tail -1;
 
@@ -719,6 +727,8 @@ void pushData(void){
                 local_count = 0;
             }
             local_count += sprintf(&local_outbuf[local_count],local_outbuf_line);
+            data = 0;
+            value = 0.0;
         }
 
         fifo.tail = (fifo.tail + 1) % BUFFERSIZE;
@@ -747,7 +757,7 @@ void pullData(void){
         return;
     }
 
-    if(count < 48) return;
+    if(count < 12) return;
 
     while(count >=12){
         count -= 12;
@@ -776,7 +786,8 @@ void pullData(void){
 
         fifo.rateBuffer[fifo.head] = angularVelocity * grabberData.direction;
         fifo.angleBuffer[fifo.head] = angle;
-        fifo.accelBuffer[fifo.head] = savGol(fifo.head);
+        unsigned int currentAccelPosition = (fifo.head < SAVGOLHALF) ? (fifo.head + BUFFERSIZE) - SAVGOLHALF: fifo.head - SAVGOLHALF;
+        fifo.accelBuffer[currentAccelPosition] = savGol(currentAccelPosition);
         fifo.head = (fifo.head + 1) % BUFFERSIZE;
         fifo.available += 1;
         if(fifo.available >= BUFFERSIZE) {
@@ -887,24 +898,39 @@ float pullAndTransform(){
 }
 
 float savGol(unsigned int currentPosition){
+
+
+// from scipy.signal import savgol_coeffs
+// savgol_coeffs(31,2,deriv=1,use="dot")
+static float savGolCoefficients[] = {
+        -6.04838710e-03, -5.64516129e-03, -5.24193548e-03, -4.83870968e-03,
+        -4.43548387e-03, -4.03225806e-03, -3.62903226e-03, -3.22580645e-03,
+        -2.82258065e-03, -2.41935484e-03, -2.01612903e-03, -1.61290323e-03,
+        -1.20967742e-03, -8.06451613e-04, -4.03225806e-04,  3.68916842e-20,
+        4.03225806e-04,  8.06451613e-04,  1.20967742e-03,  1.61290323e-03,
+        2.01612903e-03,  2.41935484e-03,  2.82258065e-03,  3.22580645e-03,
+        3.62903226e-03,  4.03225806e-03,  4.43548387e-03,  4.83870968e-03,
+        5.24193548e-03,  5.64516129e-03,  6.04838710e-03};
+
+// from scipy.signal import savgol_coeffs
 // savgol_coeffs(15,2,deriv=1,use="dot")
-    static float savGolCoefficients[] = {
-        -2.50000000e-02, -2.14285714e-02, -1.78571429e-02, -1.42857143e-02,
-        -1.07142857e-02, -7.14285714e-03, -3.57142857e-03,  2.95770353e-16,
-        3.57142857e-03,  7.14285714e-03,  1.07142857e-02,  1.42857143e-02,
-        1.78571429e-02,  2.14285714e-02,  2.50000000e-02};
+//    static float savGolCoefficients[] = {
+//        -2.50000000e-02, -2.14285714e-02, -1.78571429e-02, -1.42857143e-02,
+//        -1.07142857e-02, -7.14285714e-03, -3.57142857e-03,  2.95770353e-16,
+//        3.57142857e-03,  7.14285714e-03,  1.07142857e-02,  1.42857143e-02,
+//        1.78571429e-02,  2.14285714e-02,  2.50000000e-02};
 
     unsigned int windowStartPosition = (currentPosition < SAVGOLHALF) ? (currentPosition + BUFFERSIZE) - SAVGOLHALF: currentPosition - SAVGOLHALF;
     float savGolResult=0;
     for(int i = 0; i < SAVGOLLENGTH; ++i){
         savGolResult += savGolCoefficients[i] * fifo.rateBuffer[(windowStartPosition +i) % BUFFERSIZE];
     }
-    savGolResult /= (grabberData.samplePeriod * 4);
+    if(grabberData.samplePeriod != 0) savGolResult /= grabberData.samplePeriod;
     return(savGolResult);
 }
 
 // This function calculates the difference (error) between a sine wave of amplitude "guess" and the
-// acceleration profile of the bell.
+// acceleration profile of the bell.  Used for calibration during ringing-up.
 float calculateError(float guess){
     float count = 0.0;
     float error = 0.0;

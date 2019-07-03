@@ -95,7 +95,7 @@ void loop() {
   switch (STATE) {
     case 0: // startUp
       ledRedOn();
-      if (volts < 385 && volts > 200) { // must be on external power
+      if (volts < 395 && volts > 200) { // must be on external power
         digitalWrite(batteryChargeEnablePin, HIGH); // enable charging
         pinMode(piRunPin, OUTPUT);
         digitalWrite(piRunPin, LOW); // stop Pi running
@@ -112,20 +112,20 @@ void loop() {
       }
       break;
     case 1: // external power, battery charging
-      if (volts > 385) {
+      if (volts > 395) {
         STATE = 99;  // power removed
         break;
       }
       if (digitalRead(chargeStatusPin) == HIGH) {
         STATE = 2;  // charge complete
-//        digitalWrite(batteryChargeEnablePin, LOW);
+        digitalWrite(batteryChargeEnablePin, LOW);
         break;
       }
       //      if(flags & RECEIVEDBOOTUP) flags |= SENDLOWBATT; // run header not installed - shut pi down
       ledRedOn();
       break;
     case 2: // external power, charge complete
-      if (volts > 385) {
+      if (volts > 395) {
         STATE = 99;  // power removed go into shutdown mode
         break;
       }
@@ -184,7 +184,7 @@ void loop() {
         flags &= ~RECEIVEDBOOTUP;
       }
 
-      if (volts < 385) { // power plugged in -> go into order shutdown mode
+      if (volts < 395) { // power plugged in -> go into order shutdown mode
         flags |= SENDLOWBATT;
         count = 0;
         STATE = 7;
@@ -256,7 +256,7 @@ void loop() {
         if (volts >= 520) {   // low battery - give up on sleep.
             STATE = 99;
         }
-        if (volts < 385 && volts > 200){ // plugged in - give up on sleep and start charging
+        if (volts < 395 && volts > 200){ // plugged in - give up on sleep and start charging
             gravityValue = -360;
             tareValue  = -360;
             STATE = 0;
