@@ -513,10 +513,10 @@ void pullData(void){
         //start FIFO - keep i2c disabled
         writeRegister(ICM20689_USER_CTRL,0x50);
     }
-    if(count_1 < 48) return;
+    if(count < 96) return;
     
-    while(count >= 48){
-        count -= 48;
+    while(count >= 12){
+        count -= 12;
 
         readFIFO(fifoData);
         if(CALIBRATING){

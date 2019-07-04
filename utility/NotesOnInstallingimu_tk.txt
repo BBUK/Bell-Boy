@@ -13,9 +13,10 @@ mkdir ceres-bin
 cd ceres-bin
 ccmake ../ceres-solver-1.14.0
 # 
-# set build tests to no
+# set build testing to no
 # set build examples to no
 make
+#(make will take a long while)
 sudo make install
 
 wget https://bitbucket.org/alberto_pretto/imu_tk/get/7780270fb9a2.zip -O imu_tk.zip
@@ -32,7 +33,6 @@ mkdir build
 cd build
 cmake ..
 make
-#(make will take a long while)
 
 #install bcm2835 library - see setupBB.sh
 #compile calibrate.c needs ICM20689.h
