@@ -244,7 +244,7 @@ function parseResult(dataBack) {
             var entries = sampArray[i].split(",");
             sample[sample.length] = [parseFloat(entries[0].slice(2)), parseFloat(entries[1].slice(2)), parseFloat(entries[2].slice(2)), parseFloat(entries[3].slice(2)), parseFloat(entries[4].slice(2))];
             var data = parseFloat(entries[3].slice(2));
-            if(data != 0){
+            if(data != 0 || sample.length <= 5 ){
                 var value = parseFloat(entries[4].slice(2));
                 if(data == 1 || data == 2) ringTimes[ringTimes.length] = [value,0];
                 if(data == 3 || data == 4) ringTimes[ringTimes.length] = [value,1]; // this signals that the strike was faked
@@ -290,7 +290,7 @@ function parseResult(dataBack) {
             var entries = sampArray[i].split(",");
             sample[sample.length] = [parseFloat(entries[0].slice(2)), parseFloat(entries[1].slice(2)), parseFloat(entries[2].slice(2)), parseFloat(entries[3].slice(2)), parseFloat(entries[4].slice(2))];
             var data = parseFloat(entries[3].slice(2));
-            if(data != 0){
+            if(data != 0 || sample.length <= 5){
                 var value = parseFloat(entries[4].slice(2));
                 if(data == 1 || data == 2) ringTimes[ringTimes.length] = [value,0]; // need to check if this is zero length
                 if(data == 3 || data == 4) ringTimes[ringTimes.length] = [value,1]; // this signals that the strike was faked
