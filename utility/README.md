@@ -2,8 +2,6 @@
 
 To calibrate the ICM20689, imu_tk needs to be installed.  imu_tk needs Ceres Solver to be installed.  Ceres Solver only just compiles on the 500MB Pi (better on the larger-memoried models).  Step by step instructions on how to install Ceres Solver and imu_tk are in the NotesOnInstallingimu_tk.txt file.  Other files used are ICM20689.h, BBimu_tk.cpp (a slight variation of the sample file provided as part of imu_tk), calibrate.c and getcalibration.c (the latter is not necessary for doing the calibration but is a handy way of seeing the calibration loaded).
 
-Note that although it compiles imu_tk does not run properly on Raspbian Buster.  I suspect a new version of g++ breaking imu_tk somehow.  The latest version of Stretch works fine.  Perform the compilation on Stretch systems only.
-
 ## g calculator
 
 gcalculator.xlsx is a little spreadsheet I used to work out what g is in my viscinity.  I am sure the variance in g is not enough to make much difference to results.

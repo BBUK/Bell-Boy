@@ -20,6 +20,7 @@ volatile uint8_t sleepTime = 0;
 
 volatile float gravityValue = -360;
 volatile float tareValue  = -360;
+volatile float ropeValue  = 0;
 
 union {
   float    _float;
@@ -65,7 +66,7 @@ void setup() {
   pinMode(piRunPin, OUTPUT);
   digitalWrite(piRunPin, LOW); // stop pi running
   Wire.begin(16);
-  Wire.setClock(100000);
+  Wire.setClock(100000);  // TODO: more reliable comms, drop this to 50,000 and also on grabber.c (wire.setclock(50000) will set TWBR to 72 which should work OK).
   Wire.onReceive(i2cReceive);
   Wire.onRequest(i2cPushData);
   ADMUX = _BV(REFS0); // reference to VCC (PC0/ADC0 being measured)
@@ -259,6 +260,7 @@ void loop() {
         if (volts < 395 && volts > 200){ // plugged in - give up on sleep and start charging
             gravityValue = -360;
             tareValue  = -360;
+            ropeValue = 0;
             STATE = 0;
         }
         if(STATE !=9) break;
@@ -322,9 +324,17 @@ void i2cReceive(int number) {
     flags |= WRITETOPROM;
   }
 
-  if (i2cRegister == 7 && number == 2) {
+  if (i2cRegister == 6 && number == 2) {
     sleepTime = Wire.read();
     flags |= GOTOSLEEP;
+  }
+
+  if (i2cRegister == 7 && number == 5) { // read rope value
+    floatConv._bytes[0] = Wire.read();
+    floatConv._bytes[1] = Wire.read();
+    floatConv._bytes[2] = Wire.read();
+    floatConv._bytes[3] = Wire.read();
+    ropeValue = floatConv._float;
   }
 
   if (i2cRegister == 8 && number == 5) { // read gravity value
@@ -369,6 +379,9 @@ void i2cPushData() {
     i2cbuffer[0] = iVolts >> 8;
     i2cbuffer[1] = iVolts & 0x00FF;
     Wire.write((char *)i2cbuffer, 2);
+  } else if (i2cRegister == 7) { // send rope data
+    floatConv._float = ropeValue;
+    Wire.write((char *)floatConv._bytes, 4);
   } else if (i2cRegister == 8) { // send gravity data
     floatConv._float = gravityValue;
     Wire.write((char *)floatConv._bytes, 4);

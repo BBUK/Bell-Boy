@@ -72,6 +72,7 @@
 void setup(void);
 void start(uint32_t dataRate);
 void calculate(float gx, float gy, float gz, float ax, float ay, float az, float h);
+float calculateArea(float guess);
 float calculateError(float guess);
 void pushData(void);
 void doCalibration(void);
@@ -83,7 +84,7 @@ void writeRegister(uint8_t reg, uint8_t value);
 uint8_t readRegister(uint8_t reg);
 void writeRegisterBits(uint8_t reg, uint8_t mask, uint8_t value);
 uint16_t readFIFOcount();
-void pullData(void);
+void populateBuffer(void);
 float extractFloat(uint8_t index);
-float pullAndTransform(void);
+void pullAndTransform(void);
 unsigned int dingDong(void);

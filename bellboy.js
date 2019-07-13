@@ -92,7 +92,8 @@ var TchangeInterval = null;
 var TopenHandstroke = null;
 var TchangeStep = null;
 
-var gravityValue = 0;
+var gravityValue = 0.0;
+var ropeValue = 0.0;
 
 var currentStatus = 0;
 var DOWNLOADINGFILE=1;
@@ -244,7 +245,7 @@ function parseResult(dataBack) {
             var entries = sampArray[i].split(",");
             sample[sample.length] = [parseFloat(entries[0].slice(2)), parseFloat(entries[1].slice(2)), parseFloat(entries[2].slice(2)), parseFloat(entries[3].slice(2)), parseFloat(entries[4].slice(2))];
             var data = parseFloat(entries[3].slice(2));
-            if(data != 0 || sample.length <= 5 ){
+            if(data != 0 || sample.length <= 7){
                 var value = parseFloat(entries[4].slice(2));
                 if(data == 1 || data == 2) ringTimes[ringTimes.length] = [value,0];
                 if(data == 3 || data == 4) ringTimes[ringTimes.length] = [value,1]; // this signals that the strike was faked
@@ -275,7 +276,8 @@ function parseResult(dataBack) {
                         document.getElementById("chimeSelect").selectedIndex = Math.round(1+((value-250)/20));
                     }
                 }
-                // process other data values here if necessary
+                //skip tare value
+                if(sample.length == 7) ropeValue = value;
             }
         }
         setStatus("Loaded: " + sample.length.toString());
@@ -290,7 +292,7 @@ function parseResult(dataBack) {
             var entries = sampArray[i].split(",");
             sample[sample.length] = [parseFloat(entries[0].slice(2)), parseFloat(entries[1].slice(2)), parseFloat(entries[2].slice(2)), parseFloat(entries[3].slice(2)), parseFloat(entries[4].slice(2))];
             var data = parseFloat(entries[3].slice(2));
-            if(data != 0 || sample.length <= 5){
+            if(data != 0 || sample.length <= 7){
                 var value = parseFloat(entries[4].slice(2));
                 if(data == 1 || data == 2) ringTimes[ringTimes.length] = [value,0]; // need to check if this is zero length
                 if(data == 3 || data == 4) ringTimes[ringTimes.length] = [value,1]; // this signals that the strike was faked
@@ -321,6 +323,8 @@ function parseResult(dataBack) {
                         document.getElementById("chimeSelect").selectedIndex = Math.round(1+((value-250)/20));
                     }
                 }
+                //skip tare value
+                if(sample.length == 7) ropeValue = value;
             }
         }
         return;
@@ -415,8 +419,19 @@ function parseResult(dataBack) {
         return;
     }
 
-    if (dataBack.slice(0,5) == "ECAL:"){
-        setStatus("Now calibrating. Please continue to raise bell and set it normally...");
+    if (dataBack.slice(0,5) == "ESET:"){
+        setStatus("Now calibrating. Please set bell normally...");
+        return;
+    }
+
+    if (dataBack.slice(0,5) == "ESWI:"){
+        if(parseInt(dataBack.slice(5)) == 5) {
+            setStatus("Now calibrating. Please swing bell at least " + parseInt(dataBack.slice(5)) + " times...");
+        } else if (parseInt(dataBack.slice(5)) != 1){
+            setStatus("Now calibrating. Please swing bell at least " + parseInt(dataBack.slice(5)) + " more times...");
+        } else {
+            setStatus("Now calibrating. Please swing bell at least " + parseInt(dataBack.slice(5)) + " more time...");
+        }
         return;
     }
 
@@ -633,7 +648,7 @@ function drawStroke(){
         if(ringTimes[currentDrawRing][1] == 1) faked = 1;
         
         if(!(i%2)){
-            position = -range*(time - (changeInterval + (openHandstroke*changeStep)))/changeStep;
+            position = -range*(time - (changeInterval + (openHandstroke*changeStep)))/changeStep; // this does a full beat ? should this be half a beat
             rise = sample[switchPoints[currentDrawRing]][0] * (height/10.0); // show a rise of +-10 degrees (consider making this += 20)
         } else {
             position = -range*(time - changeInterval)/changeStep;
@@ -732,7 +747,7 @@ function TdrawStroke(){
         if(TringTimes[currentDrawRing][1]==1) faked = 1;
 
         if(!(i%2)){
-            position = -range*(time - (TchangeInterval + (TopenHandstroke*TchangeStep)))/TchangeStep;
+            position = -range*(time - (TchangeInterval + (TopenHandstroke*TchangeStep)))/TchangeStep; // this does a full beat ? should this be half a beat
             rise = template[TswitchPoints[currentDrawRing]][0] * (height/10.0); // show a rise of +-10 degrees (consider making this += 20)
         } else {
             position = -range*(time - TchangeInterval)/TchangeStep;
@@ -931,7 +946,7 @@ function drawLiveTime(time, HS, faked,currentPosition){
     var position = 0.0;
 
     if(HS) {
-        position = -range*(time - (changeInterval + (openHandstroke*changeStep)))/changeStep;
+        position = -range*(time - (changeInterval + (openHandstroke*changeStep)))/changeStep;  // this does a full beat ? should this be half a beat
     } else {
         position = -range*(time - changeInterval)/changeStep;
     }
@@ -1187,7 +1202,7 @@ document.getElementById('autoButton').onclick = function(){
     }
     calculateTimings();
     var impliedCPM = 60.0/averageBSTime;
-    var impliedOH = (averageHSTime-averageBSTime)/changeStep;
+    var impliedOH = (averageHSTime-averageBSTime)/changeStep; // this does a full beat ? should this be half a beat
     if(impliedOH < 0.0) impliedOH = 0.0;
     if(impliedOH > 2.2) impliedOH = 2.2;
     if(CPM < 20.0) CPM = 20.0;
@@ -1415,7 +1430,6 @@ function fillDiagnosticsModal(){
     ctxDiagnostics.fillText("180", 400, 311);
     ctxDiagnostics.fillText("360", 760, 311);
     
-    document.getElementById("gravityValue").innerHTML=gravityValue.toString();
     var BstrikeCount = 0;
     var HstrikeCount = 0;
     var averageBSTime = 0.0;
@@ -1453,8 +1467,8 @@ function fillDiagnosticsModal(){
         }
     }
     calculateTimings(); // should have already been updated
-    document.getElementById("gravityValue").innerHTML=gravityValue.toString();
-    document.getElementById("impliedTimings").innerHTML= (60.0/averageBSTime).toFixed(1) + " CPM " + ((averageHSTime-averageBSTime)/changeStep).toFixed(1) + "(open lead factor)";
+    document.getElementById("gravityValue").innerHTML= "Gravity: " + gravityValue.toString() + " Rope: " + ropeValue.toString();
+    document.getElementById("impliedTimings").innerHTML= "CPM: " + (60.0/averageBSTime).toFixed(1) + " Open Handstroke Factor: " + ((averageHSTime-averageBSTime)/changeStep).toFixed(1);
     var pealTime = 0.0;
     if((document.getElementById("bellsSelect").selectedIndex + 3) > 7){
         pealTime = (changeInterval * 5000.0);
@@ -1465,8 +1479,8 @@ function fillDiagnosticsModal(){
     var minutes = "0" + Math.round((pealTime % 3600)/60.0);
     
     document.getElementById("impliedTimings").title = "Peal time: " + hours + ":" + minutes.substr(minutes.length-2,2);
-    document.getElementById("averageStrikeAngles").innerHTML= averageHSStrikeAngle.toFixed(0) + " (handstroke) " + averageBSStrikeAngle.toFixed(0) + " (backstroke)";
-    document.getElementById("averageStrikeTimes").innerHTML= (averageHSStrikeTimeFromBDC*1000).toFixed(0) + " (handstroke) " + (averageBSStrikeTimeFromBDC * 1000).toFixed(0) + " (backstroke)";
+    document.getElementById("averageStrikeAngles").innerHTML= "Handstroke: " + averageHSStrikeAngle.toFixed(0) + " Backstroke: " + averageBSStrikeAngle.toFixed(0);
+    document.getElementById("averageStrikeTimes").innerHTML= "Handstroke: " + (averageHSStrikeTimeFromBDC*1000).toFixed(0) + " Backstroke: " + (averageBSStrikeTimeFromBDC * 1000).toFixed(0);
 }
 
 playbackButton.onclick = function() {

@@ -32,6 +32,7 @@ nano CMakeLists.txt
 mkdir build
 cd build
 cmake ..
+### if using gcc version > 6 (eg on Buster), install gcc-6 and g++-6 and run cmake something like this 'cmake -D CMAKE_C_COMPILER="/usr/bin/gcc-6" -D CMAKE_CXX_COMPILER="/usr/bin/g++-6" ..'
 make
 
 #install bcm2835 library - see setupBB.sh

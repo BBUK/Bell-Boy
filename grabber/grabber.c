@@ -114,9 +114,10 @@
 * (xvii) EYEC:[roll],[pitch].[yaw],[qw],[qx],[qy],[qz] returns angles and quaternion for eye candy demo 
 * (xviii)EWAI: Wait for initial calibration (zeroing)
 * (xix)  EPUL: Wait for bell to be rung up
-* (xx)   ECAL: Bell being pulled up - recording for gravity calibration
-* (xxi)  EFIL: end sending of FILE: data
-* (xxii) EDEF: Some problem with loading calibration data. Default (uncalibrated) valued used.
+* (xx)   ESWI: Bell being pulled up - recording for gravity calibration
+* (xxi)  ESET: Ask user to set bell
+* (xxii) EFIL: end sending of FILE: data
+* (xxiii)EDEF: Some problem with loading calibration data. Default (uncalibrated) valued used.
 */
 
 #include <math.h>
@@ -186,14 +187,17 @@ struct {
     float gyroTransformMatrix[9];
     float tareValue;
     unsigned int torn;
-    float *gravityData;
-    unsigned int gravityDataCount;
+    float *calibrationData;
+    unsigned int calibrationDataCount;
     float gravityValue;
+    float ropeValue;
     int direction;
-    unsigned int gravityCalibrationState;
+    unsigned int calibrationState;
+    unsigned int calibrationStrokeCount;
     unsigned int stable;
     unsigned int lastStrikeSamples;
     unsigned int lastBDC;
+    float lastAngularVelocity;
     unsigned int manualStrike;
     unsigned int manualTimefromBDC;
     unsigned int pushCounter;
@@ -207,9 +211,9 @@ struct {
                     .accTransformMatrix[8]=1, .gyroBiasX=0, .gyroBiasY=0, .gyroBiasZ=0, .gyroTransformMatrix[0]=1, 
                     .gyroTransformMatrix[1]=0, .gyroTransformMatrix[2]=0, .gyroTransformMatrix[3]=0, .gyroTransformMatrix[4]=1,
                     .gyroTransformMatrix[5]=0, .gyroTransformMatrix[6]=0, .gyroTransformMatrix[7]=0, .gyroTransformMatrix[8]=1,
-                    .tareValue = 0.0 , .torn = 0, .gravityValue = 0.0, .direction = 0, .gravityCalibrationState = 0, .gravityDataCount = 0,
-                    .stable = 0, .bellNumber = 6, .CPM = 31.0, .openHandstroke = 1.0, .manualStrike = 0, .manualTimefromBDC = 300,
-                    .lastStrike = 2};
+                    .tareValue = 0.0 , .torn = 0, .gravityValue = 0.0, .ropeValue = 0, .direction = 0, .calibrationState = 0, 
+                    .calibrationDataCount = 0, .calibrationStrokeCount = 0, .stable = 0, .bellNumber = 6, .CPM = 31.0, 
+                    .openHandstroke = 1.0, .manualStrike = 0, .manualTimefromBDC = 300, .lastStrike = 2};
 
 // only really important when run from command line
 volatile sig_atomic_t sig_exit = 0;
@@ -264,8 +268,7 @@ int main(int argc, char const *argv[]){
 			bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 2 (power)
 			bcm2835_i2c_read(I2C_BUFFER,2); usleep(100);
 			unsigned int result = (I2C_BUFFER[0]<<8)+I2C_BUFFER[1];
-            if(result & 0x8000) system("/usr/bin/sync && /usr/bin/shutdown -P now");
-
+            if(result & 0x8000) { system("/usr/bin/sync && /usr/bin/shutdown -P now"); system("/usr/bin/touch /boot/battlow");}
             if(LOOPCOUNT == 1) {
                 smoothedBattery = (result & 0x7FFF);
             } else {
@@ -298,7 +301,7 @@ int main(int argc, char const *argv[]){
 			}
 		}
       
-        if(grabberData.gravityCalibrationState == 4){
+        if(grabberData.calibrationState == 7){
             pushData();
         } else {
             doCalibration();
@@ -347,13 +350,13 @@ int main(int argc, char const *argv[]){
             }
             if(strcmp("STND:", command) == 0) {  // standalone operation
                 grabberData.gravityValue = 0;
-                grabberData.gravityCalibrationState = 4;
+                grabberData.calibrationState = 7;
                 grabberData.torn = 3;
                 continue;
             }
             if(strcmp("PLRD:", command) == 0) {  // play and record operation
                 grabberData.gravityValue = 0;
-                grabberData.gravityCalibrationState = 0;
+                grabberData.calibrationState = 0;
                 grabberData.torn = 0;
                 getSavedData();
                 continue;
@@ -381,8 +384,8 @@ int main(int argc, char const *argv[]){
             }
 
             if(strcmp("STRT:", command) == 0) {
-                if((grabberData.torn < 3) || (grabberData.gravityCalibrationState != 4)){
-                    fprintf(stderr, "Still calibrating...\n");
+                if((grabberData.torn < 3) || (grabberData.calibrationState != 7)){
+//                    fprintf(stderr, "Still calibrating...\n");
                     printf("ESTR:\n");
                     printf("STPD:\n");                    
                 }
@@ -451,6 +454,7 @@ int main(int argc, char const *argv[]){
             }
             if(strcmp("SHDN:", command) == 0) {
                 system("/usr/bin/sync && /usr/bin/shutdown -P now");
+                system("/usr/bin/touch /boot/shutdowncommand");
                 continue;
             }
             if(strcmp("SLEP:", command) == 0) {
@@ -459,7 +463,17 @@ int main(int argc, char const *argv[]){
                     float    _float;
                     uint8_t  _bytes[sizeof(float)];
                 } floatConv;
-                if(grabberData.gravityCalibrationState == 4){
+
+                floatConv._float = grabberData.ropeValue;
+                I2C_BUFFER[0]=7; // ropeValue
+                I2C_BUFFER[1] = floatConv._bytes[0];
+                I2C_BUFFER[2] = floatConv._bytes[1];
+                I2C_BUFFER[3] = floatConv._bytes[2];
+                I2C_BUFFER[4] = floatConv._bytes[3];
+                bcm2835_i2c_write(I2C_BUFFER,5); 
+                usleep(750000);
+
+                if(grabberData.calibrationState == 7){
                     floatConv._float = grabberData.gravityValue;
                 } else {
                     floatConv._float = -360; // nothing recorded, null value flagged
@@ -485,7 +499,7 @@ int main(int argc, char const *argv[]){
                 bcm2835_i2c_write(I2C_BUFFER,5); 
                 usleep(750000);
 
-                I2C_BUFFER[0]=7; // tareValue
+                I2C_BUFFER[0]=6; // go to sleep
                 I2C_BUFFER[1] = (char)sleepTime;
                 bcm2835_i2c_write(I2C_BUFFER,2); 
                 system("/usr/bin/sync && /usr/bin/shutdown -P now");
@@ -501,8 +515,7 @@ int main(int argc, char const *argv[]){
 }
 
 void doCalibration(void){
-    float angularVelocity;
-    
+    static unsigned int count = 0;
     int FIFOcount = readFIFOcount();
     if (FIFOcount > 4000){
         printf("\nEOVF:\n");
@@ -514,76 +527,119 @@ void doCalibration(void){
 
     if(FIFOcount < 48) return;
    
-    while(FIFOcount >=48){
-        FIFOcount -= 48;
-        angularVelocity = pullAndTransform();
-        switch (grabberData.gravityCalibrationState) {
+    while(FIFOcount >=12){
+        FIFOcount -= 12;
+        pullAndTransform();
+        count += 1;
+
+        switch (grabberData.calibrationState) {
             case 0:
-                if(grabberData.stable == 1 && grabberData.torn == 3){ // bell is stable and zeroed
-                    grabberData.gravityCalibrationState = 1;
+                if(grabberData.stable && grabberData.torn == 3){ // bell is stable and zeroed tell user to ring bell up
+                    grabberData.calibrationState = 1;
+                }
+                if(!(count % 2500)) printf("EWAI:\n");  // sends signal to browser to indicate that the sensor is still calibrating zero
+                break;
+            case 1:
+                if((roll-grabberData.tareValue) < -30.0 || (roll-grabberData.tareValue) > +30.0){ // bell is ringing up, tell user to set bell normally
+                    grabberData.calibrationState = 2;
+                }
+                if(!(count % 2500)) printf("EPUL:\n");  // sends signal to browser to indicate that bell needs to be pulled up
+                break;
+            case 2:
+                if(grabberData.stable && fabs(roll-grabberData.tareValue) > 160 && fabs(roll-grabberData.tareValue) < 178) {
+                    grabberData.calibrationState = 3; // bell now rung up and stable tell user to start ringing
+                    if(roll-grabberData.tareValue < 0) {
+                        grabberData.direction = -1;
+                    } else {
+                        grabberData.direction = +1;
+                    }
                     for(int i = 0; i< BUFFERSIZE; ++i){ // initialise with dummy data for savgol alignment
                         fifo.rateBuffer[i] = 0;
                         fifo.accelBuffer[i] = 0;
-                        fifo.angleBuffer[i] = 180.0+(roll-grabberData.tareValue);
+                        fifo.angleBuffer[i] = grabberData.direction*(roll-grabberData.tareValue)-180.0;
                     }
                     fifo.head = SAVGOLHALF;
                     fifo.tail = 0;
-                    fifo.available = SAVGOLHALF;
                 }
+                if(!(count % 2500)) printf("ESET:\n");  // sends signal to browser to indicate that the bell needs to be set at handstroke
                 break;
-            case 1:
-                if((roll-grabberData.tareValue) < -150.0 || (roll-grabberData.tareValue) > +150.0){ // bell now high enough to start accumulating gravity calibration data
-                    grabberData.gravityCalibrationState = 2;
+            case 3:
+                if(!grabberData.stable && grabberData.lastAngularVelocity > 100) {
+                    grabberData.calibrationState = 4; // bell now swinging, start collecting data
+                    grabberData.calibrationStrokeCount = 0; 
                 }
-                fifo.rateBuffer[fifo.head] = angularVelocity;
-                fifo.angleBuffer[fifo.head] = 180.0+(roll-grabberData.tareValue);
-                fifo.head = (fifo.head + 1) % BUFFERSIZE;
-                fifo.tail = (fifo.tail + 1) % BUFFERSIZE; // just ditch old data for the time being
+                if(!(count % 2500)) printf("ESWI:%d\n",(5-grabberData.calibrationStrokeCount) == 0 ? 1 : (5-grabberData.calibrationStrokeCount));  // sends signal to browser to indicate that bell needs to be swung
                 break;
-            case 2:
-                if(grabberData.stable == 1 && abs(roll-grabberData.tareValue) > 160 && abs(roll-grabberData.tareValue) < 178) {
-                    grabberData.gravityCalibrationState = 3; // bell now rung up proceed to calibration calculations
-                    break;
-                }
-                fifo.rateBuffer[fifo.head] = angularVelocity;
-                fifo.angleBuffer[fifo.head] = 180.0+(roll-grabberData.tareValue);
-                fifo.head = (fifo.head + 1) % BUFFERSIZE;
-                fifo.available += 1;
+            case 4:
+                populateBuffer();
+                if(!(count % 2500)) printf("ESWI:%d\n",(5-grabberData.calibrationStrokeCount) == 0 ? 1 : (5-grabberData.calibrationStrokeCount));  // sends signal to browser to indicate that swings need to continue
                 if(fifo.available < SAVGOLLENGTH) break;
                 for(int counter = fifo.available; counter > SAVGOLHALF; --counter){
-                    // Record only a range of angles as the bell is being pulled up.  See calculateError() for justification  
-                    // At this stage we don't know which is handstroke and which is backstroke so record both sides and both directions.  
-                    if((fifo.angleBuffer[fifo.tail] < 275 && fifo.angleBuffer[fifo.tail] > 260) ||
-                        (fifo.angleBuffer[fifo.tail] < 100 && fifo.angleBuffer[fifo.tail] > 85)){
-                        if(grabberData.gravityDataCount < 8000){
-                            grabberData.gravityData[grabberData.gravityDataCount*3] = fifo.angleBuffer[fifo.tail];
-                            grabberData.gravityData[(grabberData.gravityDataCount*3)+1] = fifo.rateBuffer[fifo.tail];
-                            grabberData.gravityData[(grabberData.gravityDataCount*3)+2] = savGol(fifo.tail);
-                            grabberData.gravityDataCount += 1;
+                    if((fifo.angleBuffer[fifo.tail] < 351 && fifo.angleBuffer[fifo.tail] > 313 && fifo.rateBuffer[fifo.tail] < 0) ||
+                        (fifo.angleBuffer[fifo.tail] < 100 && fifo.angleBuffer[fifo.tail] > 85 && fifo.rateBuffer[fifo.tail] > 0) ||
+                        (fifo.angleBuffer[fifo.tail] < 47 && fifo.angleBuffer[fifo.tail] > 9 && fifo.rateBuffer[fifo.tail] > 0)){
+                        if(grabberData.calibrationDataCount < 24000){
+                            grabberData.calibrationData[grabberData.calibrationDataCount*3] = fifo.angleBuffer[fifo.tail];
+                            grabberData.calibrationData[(grabberData.calibrationDataCount*3)+1] = fifo.rateBuffer[fifo.tail];
+                            grabberData.calibrationData[(grabberData.calibrationDataCount*3)+2] = fifo.accelBuffer[fifo.tail];
+                            grabberData.calibrationDataCount += 1;
                         }
+                    }
+                    if(fifo.accelBuffer[fifo.tail] * fifo.accelBuffer[(fifo.tail == 0) ? BUFFERSIZE-1 : fifo.tail -1] <= 0.0 && 
+                        fifo.angleBuffer[fifo.tail] > 170.0 && fifo.angleBuffer[fifo.tail] < 190.0) {
+                        grabberData.calibrationStrokeCount +=1;
+                        if(grabberData.calibrationStrokeCount > 5) grabberData.calibrationState = 5;  // requisite number of strokes done, tell user to set bell
                     }
                     fifo.tail = (fifo.tail + 1) % BUFFERSIZE;
                     fifo.available -= 1;
                 }
                 break;
-            case 3:
-                if((roll-grabberData.tareValue) < 0.0) {  // Work out which way the bell rose and adjust accordingly (we now know which is handstroke and backstroke)
-                    for (unsigned int j = 0; j < grabberData.gravityDataCount; ++j){
-                        grabberData.gravityData[j*3] = 360.0-grabberData.gravityData[j*3]; // swap angle
-                        grabberData.gravityData[(j*3)+1] *= -1; // swap rate
-                        grabberData.gravityData[(j*3)+2] *= -1; // flip accn
-                    }
+            case 5:
+                if(grabberData.stable && fabs(roll-grabberData.tareValue) > 160 && fabs(roll-grabberData.tareValue) < 178) {
+                    grabberData.calibrationState = 6; // bell now set again, proceed to calculations
                 }
+                if(!(count % 2500)) printf("ESET:\n");  // sends signal to browser to indicate that the bell can be set at handstroke
+                break;
+            case 6:
                 grabberData.gravityValue = 0;
                 for(int guessLog = 14; guessLog >= 0; --guessLog){
                     if(calculateError(grabberData.gravityValue + pow(2,guessLog)) < 0) grabberData.gravityValue += pow(2,guessLog);
                 }
-                grabberData.gravityCalibrationState = 4;
-                if(grabberData.gravityData) {free(grabberData.gravityData); grabberData.gravityData = NULL;}
+                pullAndTransform(); // just to empty any data held on IMU
+                float currentBestArea=calculateArea(64);
+                float high,low;
+                grabberData.ropeValue = 64.0;
+                for(int guessLog = 5; guessLog >= 0; --guessLog){
+                    high = calculateArea(grabberData.ropeValue + pow(2,guessLog));
+                    low  = calculateArea(grabberData.ropeValue - pow(2,guessLog));
+                    if(low <= high){
+                        if(low <= currentBestArea){
+                            grabberData.ropeValue -= pow(2,guessLog);
+                            currentBestArea = low;
+                        }
+                    } else {
+                        if(high < currentBestArea){
+                            grabberData.ropeValue += pow(2,guessLog);
+                            currentBestArea = high;
+                        }
+                    }
+//                    printf("L: %f, H: %f, V: %f\n",low,high,grabberData.ropeValue);
+                }
+                grabberData.calibrationState = 7;
+//                pullAndTransform();
+//                FILE *fdDump;
+//                fdDump = fopen("/data/samples/dump","w");
+//                if(fdDump != NULL) {
+//                    for(int i = 0; i<grabberData.calibrationDataCount; ++i){
+//                        fprintf(fdDump,"A:%+09.1f,R:%+09.1f,C:%+07.1f\n", grabberData.calibrationData[(i*3)], grabberData.calibrationData[(i*3)+1], grabberData.calibrationData[(i*3)+2]);
+//                    }
+//                    fclose(fdDump);
+//                }
+                if(grabberData.calibrationData) {free(grabberData.calibrationData); grabberData.calibrationData = NULL;}
                 FILE *fdGravity;
                 fdGravity = fopen("/tmp/BBgravity","w");
                 if(fdGravity != NULL) {
-                    fprintf(fdGravity,"%+08.1f\n", grabberData.gravityValue);
+                    fprintf(fdGravity,"%+08.1f,%+08.1f\n", grabberData.gravityValue, grabberData.ropeValue);
                     fclose(fdGravity);
                 }
         }
@@ -591,12 +647,12 @@ void doCalibration(void){
 }
 
 void startRun(void){
-    if(abs(roll-grabberData.tareValue) < 160 || abs(roll-grabberData.tareValue) > 178){
+    if(fabs(roll-grabberData.tareValue) < 160 || fabs(roll-grabberData.tareValue) > 178){
         printf("ESTD:%+07.1f\n",roll-grabberData.tareValue); // bell not at stand
         return;
     }
 
-    if(roll < 0) {  // this bit works out which way the bell rose and adjusts accordingly
+    if((roll-grabberData.tareValue) < 0) {  // this bit works out which way the bell rose and adjusts accordingly
         grabberData.direction = -1;
     } else {
         grabberData.direction = +1;
@@ -634,7 +690,26 @@ void pushData(void){
     static unsigned int data = 0;
     static float value = 0.0;
 
-    pullData();
+    int count = readFIFOcount();
+
+    if (count > 4000){ // overflow (or nearly so)
+        printf("\nEOVF:\n"); //shouldn't happen
+        //clear data paths and reset FIFO (keep i2c disabled)
+        writeRegister(ICM20689_USER_CTRL,0x15);
+        usleep(1000);
+ 
+        //restart FIFO - keep i2c disabled
+        writeRegister(ICM20689_USER_CTRL,0x50);
+        return;
+    }
+
+    if(count < 12) return;
+
+    while(count >=12){
+        count -= 12;
+        pullAndTransform();
+        if(RUNNING) populateBuffer();
+    }
 
     if(!RUNNING) return;
 
@@ -648,13 +723,13 @@ void pushData(void){
     if(fifo.available <= PUSHBATCH + SAVGOLHALF) return;
 
     for(int counter = fifo.available; counter > SAVGOLHALF; --counter){ // always leave SAVGOLHALF in fifo because acceleration data is that amount behind the other data
+
+        unsigned int lastTail = (fifo.tail == 0) ? BUFFERSIZE-1 : fifo.tail -1;
+
         // This bit allowed for slight angle drift.  It does this knowing that BDC = 180 degrees.
         // and that is the point when the bell's angular acceleration is zero.  Drift is so low
         // that this is more trouble than it's worth.  Left in and reported but not used.
         // Also testing shows BDC angle is slightly off that recorded when the bell is at rest.  Rope weight?
-
-        unsigned int lastTail = (fifo.tail == 0) ? BUFFERSIZE-1 : fifo.tail -1;
-
         taccn = fifo.accelBuffer[fifo.tail];
         accn = fifo.accelBuffer[lastTail];
         if(taccn * accn <= 0.0 && fifo.angleBuffer[fifo.tail] > 170.0 && fifo.angleBuffer[fifo.tail] < 190.0  && nudgeCount == 0) {
@@ -667,14 +742,14 @@ void pushData(void){
             data = 8;
         } 
         if(nudgeCount != 0) nudgeCount -= 1; // don't do this twice in one half stroke - allows for a bit of noise
-        float raccn = taccn - grabberData.gravityValue*sin(fifo.angleBuffer[fifo.tail]*DEGREES_TO_RADIANS_MULTIPLIER);
+        float raccn = taccn - grabberData.gravityValue*sin(fifo.angleBuffer[fifo.tail]*DEGREES_TO_RADIANS_MULTIPLIER) - ((90.0-fifo.angleBuffer[fifo.tail])*grabberData.ropeValue/360.0);
         
         if(fifo.rateBuffer[fifo.tail] * fifo.rateBuffer[lastTail] <= 0.0 && switchCount == 0 && grabberData.pushCounter > 40  && (fifo.angleBuffer[fifo.tail] > 270 || fifo.angleBuffer[fifo.tail] < 90)) { // detect when bell changes direction
             data = 7;
             value = (grabberData.pushCounter)/4;
             switchCount = 5;
         } 
-        if (switchCount != 0 && abs(fifo.rateBuffer[fifo.tail]) > 100.0) switchCount -= 1;
+        if (switchCount != 0 && fabs(fifo.rateBuffer[fifo.tail]) > 100.0) switchCount -= 1;
 
         strike = dingDong();
         if(strike != 0){
@@ -710,6 +785,10 @@ void pushData(void){
                     value = grabberData.tareValue;
                     break;
                 case 6:
+                    strcpy(detailsString, ", #Rope value");
+                    value = grabberData.ropeValue;
+                    break;
+                case 7:
                     strcpy(detailsString, "");
             }
 
@@ -740,64 +819,41 @@ void pushData(void){
     if(remote_count != 0) {printf("%s",remote_outbuf); remote_count = 0;}
 }
 
-void pullData(void){
-    float angularVelocity;
+void populateBuffer(void){
     static unsigned int angleCorrection = 0;
 
-    int count = readFIFOcount();
+    // need to correct reported angles to match the system we are 
+    // using 0 degrees = bell at balance at handstroke, 
+    // 360 degrees = bell at balance at backstroke. 180 degrees = BDC. 
 
-    if (count > 4000){ // overflow (or nearly so)
-        printf("\nEOVF:\n"); //shouldn't happen
-        //clear data paths and reset FIFO (keep i2c disabled)
-        writeRegister(ICM20689_USER_CTRL,0x15);
-        usleep(1000);
- 
-        //restart FIFO - keep i2c disabled
-        writeRegister(ICM20689_USER_CTRL,0x50);
-        return;
+    unsigned int lastHead = (fifo.head == 0) ? BUFFERSIZE-1 : fifo.head -1;
+    float angle = grabberData.direction*(roll-grabberData.tareValue)-180.0;
+    angle += angleCorrection;
+    if((fifo.angleBuffer[lastHead] - angle) > 270){
+        if(angleCorrection < 720 ) { // should always be true
+            angleCorrection += 360; 
+            angle += 360;
+        }
+    } else if ((fifo.angleBuffer[lastHead] - angle) < -270){
+        if(angleCorrection > 0){ // should always be true
+        angleCorrection -= 360; 
+        angle -= 360;
+        }
     }
 
-    if(count < 12) return;
-
-    while(count >=12){
-        count -= 12;
-        angularVelocity = pullAndTransform();
-
-        if(!RUNNING) continue;
-
-        // need to correct reported angles to match the system we are 
-        // using 0 degrees = bell at balance at handstroke, 
-        // 360 degrees = bell at balance at backstroke. 180 degrees = BDC. 
-
-        unsigned int lastHead = (fifo.head == 0) ? BUFFERSIZE-1 : fifo.head -1;
-        float angle = grabberData.direction*(roll-grabberData.tareValue)-180.0;
-        angle += angleCorrection;
-        if((fifo.angleBuffer[lastHead] - angle) > 270){
-            if(angleCorrection < 720 ) { // should always be true
-                angleCorrection += 360; 
-                angle += 360;
-            }
-        } else if ((fifo.angleBuffer[lastHead] - angle) < -270){
-            if(angleCorrection > 0){ // should always be true
-            angleCorrection -= 360; 
-            angle -= 360;
-            }
-        }
-
-        fifo.rateBuffer[fifo.head] = angularVelocity * grabberData.direction;
-        fifo.angleBuffer[fifo.head] = angle;
-        unsigned int currentAccelPosition = (fifo.head < SAVGOLHALF) ? (fifo.head + BUFFERSIZE) - SAVGOLHALF: fifo.head - SAVGOLHALF;
-        fifo.accelBuffer[currentAccelPosition] = savGol(currentAccelPosition);
-        fifo.head = (fifo.head + 1) % BUFFERSIZE;
-        fifo.available += 1;
-        if(fifo.available >= BUFFERSIZE) {
-            printf("EOVF:\n");  // circular buffer full - should never happen
-            fifo.available -= 1;
-        }
+    fifo.rateBuffer[fifo.head] = grabberData.lastAngularVelocity * grabberData.direction;
+    fifo.angleBuffer[fifo.head] = angle;
+    unsigned int currentAccelPosition = (fifo.head < SAVGOLHALF) ? (fifo.head + BUFFERSIZE) - SAVGOLHALF: fifo.head - SAVGOLHALF;
+    fifo.accelBuffer[currentAccelPosition] = savGol(currentAccelPosition);
+    fifo.head = (fifo.head + 1) % BUFFERSIZE;
+    fifo.available += 1;
+    if(fifo.available >= BUFFERSIZE) {
+        printf("EOVF:\n");  // circular buffer full - should never happen
+        fifo.available -= 1;
     }
 }
 
-float pullAndTransform(){
+void pullAndTransform(void){
     static float peaks[3] = {0};
     static float averages[3] = {0};
     static unsigned int count = 0;
@@ -828,7 +884,7 @@ float pullAndTransform(){
     // used for bias compensation calculation, checks to see if bell is at rest
     // by recording a peak gyro movement over the measurement period (4000 samples = 8 secs)
     for(int k = 0; k < 3; ++k){
-        if(abs(fifoData[3+k]) > peaks[k]) peaks[k] = abs(fifoData[3+k]);
+        if(fabs(fifoData[3+k]) > peaks[k]) peaks[k] = fabs(fifoData[3+k]);
         if(peaks[k] > 2.1) grabberData.stable = 0;
     }
 
@@ -858,11 +914,8 @@ float pullAndTransform(){
                 + fifoData[5]*grabberData.gyroTransformMatrix[8];
 
     count +=1;
-    if((count % 2500) == 0 && grabberData.torn < 3) printf("EWAI:\n");  // sends signal to browser to indicate that the sensor is still calibrating zero
-    if((count % 2500) == 0 && grabberData.gravityCalibrationState == 1) printf("EPUL:\n");  // sends signal to browser to indicate that bell needs to be pulled up
-    if((count % 2500) == 0 && grabberData.gravityCalibrationState == 2) printf("ECAL:\n");  // sends signal to browser to indicate that the bell is high enough to start gravity calibration
 
-    if((count % 4000) == 0){ // check bias every 8 seconds
+    if(!(count % 4000)){ // check bias every 8 seconds
         if(peaks[0] < 2.1 && peaks[1] < 2.1 && peaks[2] < 2.1){  // no peaks in gyro rate so can take the last 8 seconds as stationary
             grabberData.gyroBiasX = averages[0]/4000.0;  // adjust biasses
             grabberData.gyroBiasY = averages[1]/4000.0;
@@ -875,7 +928,7 @@ float pullAndTransform(){
             // Fourth, take "zero" tare value and save.
             // The measured angles take a few seconds to settle down once the biasses are applied, hence the third stage.
 
-            if (grabberData.torn < 3 && abs(roll) < 20.0) { // if bell is down (or within 20 degrees of vertical) take that as the tare value
+            if (grabberData.torn < 3 && fabs(roll) < 20.0) { // if bell is down (or within 20 degrees of vertical) take that as the tare value
                 grabberData.torn +=1;
                 if (grabberData.torn == 3) {
                     grabberData.tareValue = roll;
@@ -894,7 +947,8 @@ float pullAndTransform(){
     // This function calculates angles and a quaternion from the gyro and accelerometer measurements. The q0, q1,q2,q3, roll, pitch and yaw globals
     // are updated by this function (hence no return value)
     calculate(fifoData[3],fifoData[4],fifoData[5], fifoData[0],fifoData[1],fifoData[2],grabberData.samplePeriod);
-    return(fifoData[3]);  // Just "x" gyro rate needed by the calling function (pullData).
+    grabberData.lastAngularVelocity = fifoData[3]; // "x" gyro rate (roll) needed elsewhere (which is either pushData() or doCalibration()).
+    return;  
 }
 
 float savGol(unsigned int currentPosition){
@@ -946,21 +1000,37 @@ static float savGolCoefficients[] = {
     return(savGolResult);
 }
 
+// This function calculates the area under the acceleration profile of the bell.  There is an effect (probably) caused by the 
+// weight of the rope.  the difference (error) between a sine wave of amplitude "guess" and the
+// acceleration profile of the bell.  Used for calibration during ringing-up.
+float calculateArea(float guess){
+    float area = 0.0;
+    float angleWidth,adjustedHeight;
+    for(unsigned int i = 0; i < grabberData.calibrationDataCount-1; ++i){
+        // Only calculate the rope weight effect going down at backstroke 
+        if(grabberData.calibrationData[(i*3)] < 345 && grabberData.calibrationData[(i*3)] > 320 && grabberData.calibrationData[(i*3)+1] < 0){
+            angleWidth = fabs(grabberData.calibrationData[(i*3)] - grabberData.calibrationData[(i*3)+3]);
+            adjustedHeight = grabberData.calibrationData[(i*3)+2] - grabberData.gravityValue*sin(grabberData.calibrationData[(i*3)]*DEGREES_TO_RADIANS_MULTIPLIER) - (90.0-grabberData.calibrationData[(i*3)])*guess/360.0;
+            if(adjustedHeight > 0) adjustedHeight *= 100.0;
+//            printf("%d, %f, %f, %f, %f %f\n", i, angleWidth,adjustedHeight, grabberData.calibrationData[(i*3)], grabberData.calibrationData[(i*3)+3], grabberData.calibrationData[(i*3)] - grabberData.calibrationData[(i*3)+3]);
+            area += fabs(angleWidth*adjustedHeight);
+        }
+    }
+    return area;
+}
+
 // This function calculates the difference (error) between a sine wave of amplitude "guess" and the
 // acceleration profile of the bell.  Used for calibration during ringing-up.
 float calculateError(float guess){
     float count = 0.0;
     float error = 0.0;
-    for(unsigned int i = 0; i < grabberData.gravityDataCount; ++i){
-        // Only calculate gravity effect going up at backstroke because of fewer other effects such as vibration from strike and pulley/garter hole interaction.
-        // Because this is intended to be used as the bell is being pulled up - best to do measurement when bell is rising - the ringer could be pulling quite
-        // hard as the bell is falling (in order to get the bell up) and that skews the measurement.
-        // Measure between angles 260 and 275 as we need to avoid the strike (could be as early as 280 degrees on light bells) 
-        if(grabberData.gravityData[(i*3)] < 275 && grabberData.gravityData[(i*3)] > 260 && grabberData.gravityData[(i*3)+1] > 0){
+    for(unsigned int i = 0; i < grabberData.calibrationDataCount; ++i){
+        // Only calculate gravity effect going down at handstroke about where the rope is fully unwound because of fewer other effects.
+        // such as vibration from strike and pulley/garter hole/rope weight interaction. 
+        if(grabberData.calibrationData[(i*3)] < 100 && grabberData.calibrationData[(i*3)] > 85 && grabberData.calibrationData[(i*3)+1] > 0){
             count += 1;
-            error += -guess*sin(grabberData.gravityData[(i*3)]*DEGREES_TO_RADIANS_MULTIPLIER) + grabberData.gravityData[(i*3)+2];
+            error += guess*sin(grabberData.calibrationData[(i*3)]*DEGREES_TO_RADIANS_MULTIPLIER) - grabberData.calibrationData[(i*3)+2];
         }
-        if(count > 4000) break; // should be enough
     }
     if(count != 0){
         error /= count;
@@ -1109,12 +1179,15 @@ void getSavedData(){
     fdGravity = fopen("/tmp/BBgravity","r");
     if(fdGravity != NULL) {
         if (fgets(linein, sizeof(linein), fdGravity) != NULL) {
-            grabberData.gravityValue = atof(linein);
-            grabberData.gravityCalibrationState = 4;
+            char *ent = strtok(linein,","); 
+            if(ent) grabberData.gravityValue = atof(ent);
+            ent = strtok(NULL,",");
+            if(ent) grabberData.ropeValue = atof(ent);
+            grabberData.calibrationState = 7;
         }
         fclose(fdGravity);
     } else {
-        if(!grabberData.gravityData) grabberData.gravityData = (float *)malloc(sizeof(float) * 8000 * 3);
+        if(!grabberData.calibrationData) grabberData.calibrationData = (float *)malloc(sizeof(float) * 24000 * 3);
     }
 
 }
@@ -1131,7 +1204,7 @@ void setup(void){
         exit(1);
     }
 	
-    bcm2835_i2c_set_baudrate(100000);
+    bcm2835_i2c_set_baudrate(100000); // change to 50000 for more reliable comms, saw occasional poweroff which was possibly caused by i2c lockup causing 0x8000 test in battery monitor to be true
     bcm2835_i2c_setSlaveAddress(0x10);
 	
 	//  setup SPI
@@ -1349,13 +1422,20 @@ void setup(void){
     bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 8 (gravityValue)
     bcm2835_i2c_read(I2C_BUFFER,4); usleep(100);
     result = extractFloat(0);
-    if(!isnan(result) && result != -360){
+    
+    I2C_BUFFER[0]=7;
+    bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 7 (ropeValue)
+    bcm2835_i2c_read(I2C_BUFFER,4); usleep(100);
+    float result2 = extractFloat(0);
+
+    if(!isnan(result) && !isnan(result2) && result != -360){
         grabberData.gravityValue = result;
-        grabberData.gravityCalibrationState = 4;
+        grabberData.ropeValue = result2;
+        grabberData.calibrationState = 7;
         FILE *fdGravity;
         fdGravity = fopen("/tmp/BBgravity","w");
         if(fdGravity != NULL) {
-            fprintf(fdGravity,"%+08.1f\n", grabberData.gravityValue);
+            fprintf(fdGravity,"%+08.1f,%+08.1f\n", grabberData.gravityValue, grabberData.ropeValue);
             fclose(fdGravity);
         }
     }
