@@ -30,7 +30,7 @@ var nonLive=false;
 var wsHost="10.0.0.1"
 
 var sampleInterval = 0.008;  // seconds for each sample (default 125 times/sec).  Updated by SAMP: command
-var collectInterval = 0.08; // update display in ms - here 10 times/sec
+var collectInterval = 0.1; // update display in ms - here 10 times/sec
 var batteryLevel = 100;
 var sleepTime = 0.5;
 
@@ -93,7 +93,8 @@ var TopenHandstroke = null;
 var TchangeStep = null;
 
 var gravityValue = 0.0;
-var ropeValue = 0.0;
+var ropeValueB = 0.0;
+var ropeValueH = 0.0;
 
 var currentStatus = 0;
 var DOWNLOADINGFILE=1;
@@ -245,10 +246,9 @@ function parseResult(dataBack) {
             var entries = sampArray[i].split(",");
             sample[sample.length] = [parseFloat(entries[0].slice(2)), parseFloat(entries[1].slice(2)), parseFloat(entries[2].slice(2)), parseFloat(entries[3].slice(2)), parseFloat(entries[4].slice(2))];
             var data = parseFloat(entries[3].slice(2));
-            if(data != 0 || sample.length <= 7){
+            if(data != 0 || sample.length <= 8){
                 var value = parseFloat(entries[4].slice(2));
-                if(data == 1 || data == 2) ringTimes[ringTimes.length] = [value,0];
-                if(data == 3 || data == 4) ringTimes[ringTimes.length] = [value,1]; // this signals that the strike was faked
+                if(data == 1 || data == 2) ringTimes[ringTimes.length] = value;
                 if(data == 7) switchPoints[switchPoints.length] = value;
                 if(sample.length == 1) gravityValue = value;
                 if(sample.length == 2)  {
@@ -277,7 +277,8 @@ function parseResult(dataBack) {
                     }
                 }
                 //skip tare value
-                if(sample.length == 7) ropeValue = value;
+                if(sample.length == 7) ropeValueB = value;
+                if(sample.length == 8) ropeValueH = value;
             }
         }
         setStatus("Loaded: " + sample.length.toString());
@@ -285,17 +286,16 @@ function parseResult(dataBack) {
     }
     
     if (dataBack.slice(0,5) == "LIVE:"){
-        if ((currentStatus & RECORDINGSESSION) == 0) return;  // server may push data after stopping
+        if (!(currentStatus & RECORDINGSESSION)) return;  // server may push data after stopping
         var sampArray = dataBack.split("LIVE:");
         for (var i = 0; i < sampArray.length; i++) {
             if (sampArray[i].length < 20) continue; // have more checks for good data
             var entries = sampArray[i].split(",");
             sample[sample.length] = [parseFloat(entries[0].slice(2)), parseFloat(entries[1].slice(2)), parseFloat(entries[2].slice(2)), parseFloat(entries[3].slice(2)), parseFloat(entries[4].slice(2))];
             var data = parseFloat(entries[3].slice(2));
-            if(data != 0 || sample.length <= 7){
+            if(data != 0 || sample.length <= 8){
                 var value = parseFloat(entries[4].slice(2));
-                if(data == 1 || data == 2) ringTimes[ringTimes.length] = [value,0]; // need to check if this is zero length
-                if(data == 3 || data == 4) ringTimes[ringTimes.length] = [value,1]; // this signals that the strike was faked
+                if(data == 1 || data == 2) ringTimes[ringTimes.length] = value; // need to check if this is zero length
                 if(data == 7) switchPoints[switchPoints.length] = value;
                 if(sample.length == 1) gravityValue = value;
                 if(sample.length == 2)  {
@@ -324,7 +324,8 @@ function parseResult(dataBack) {
                     }
                 }
                 //skip tare value
-                if(sample.length == 7) ropeValue = value;
+                if(sample.length == 7) ropeValueB = value;
+                if(sample.length == 8) ropeValueH = value;
             }
         }
         return;
@@ -333,7 +334,7 @@ function parseResult(dataBack) {
     if ((dataBack.slice(0,5) == "LFIN:") || (dataBack.slice(0,5) == "STPD:")) {
         if ((currentStatus & DOWNLOADINGFILE) !=0){
             currentStatus &= ~DOWNLOADINGFILE;
-        } else if ((currentStatus & RECORDINGSESSION) !=0) {
+        } else if (currentStatus & RECORDINGSESSION) {
             currentStatus &= ~RECORDINGSESSION;
         }
         if ((currentStatus & ABORTFLAG) !=0) {
@@ -354,6 +355,10 @@ function parseResult(dataBack) {
         currentPlaybackPosition = 1;
         currentSwingDisplayed = null;
         if((currentStatus & TEMPLATEDISPLAYED) && (dataBack.slice(0,5) == "LFIN:")) { clearAT(); TdrawStroke(); }
+        if(sample.length < 100){
+            setStatus("Insufficient data found!");
+            return;
+        }
         var j=0;
         var arrayLength = sample.length;
         while (j < arrayLength && sample[j][0] < 90.0) j++;  // move forward through sample to next swing
@@ -366,15 +371,7 @@ function parseResult(dataBack) {
             }
         }
         if (switchPoints.length == 0 || sample[switchPoints[0]][0] > 180) switchPoints.unshift(3); // a "just in case" should start at stand not be detected
-        var k = 0;
-        for(j=0; j< ringTimes.length; ++j){
-            if(ringTimes[j][1] == 1) k += 1;
-        }
-        if(k==0){
-            setStatus(swingStarts.length.toString() + " strokes found.");
-        } else {
-            setStatus("Loaded: " + sample.length.toString() + " samples. Should Have: " + dataBack.slice(5) + ". " + swingStarts.length.toString() + " strokes found. " + k + " strikes faked.");
-        }
+        setStatus(swingStarts.length.toString() + " strokes found.");
         getAveragePullStrengths();
         document.getElementById("openSelect").options.length = 0;
         ws.send("FILE:");
@@ -386,15 +383,15 @@ function parseResult(dataBack) {
     }
     if (dataBack.slice(0,5) == "EIMU:"){
         setStatus("IMU not active.  Is one connected to device? Aborting");
-        if ((currentStatus & RECORDINGSESSION) != 0) {
+        if (currentStatus & RECORDINGSESSION) {
             document.getElementById("recordIcon").onclick()
+            ws.send("STOP:");
         }
         currentStatus |= ABORTFLAG;
         return;
     }
     if (dataBack.slice(0,5) == "SAMP:"){
         sampleInterval = parseFloat(dataBack.slice(5));
-//        setStatus("Received sample period of " + sampleInterval.toFixed(3) + "s");
         return;
     }
 	
@@ -467,7 +464,6 @@ function parseResult(dataBack) {
         var wz = w * z2;
         document.querySelector("section").style.transform= "matrix3D(" + (1 - (yy + zz)) + "," + (xy + wz) + "," + (xz - wy) + "," + 0 + "," + (xy - wz) + "," + (1 - (xx + zz)) + "," + (yz + wx) + "," + 0 + "," + (xz + wy) + "," + (yz - wx) + "," + (1-(xx + yy)) + "," + 0 + "," + 0 + "," + 0 + "," + 0 + "," + 1 +")";
 //        document.querySelector("section").style.transform= "matrix3D(" + (1 - (yy + zz)) + "," + (xy - wz) + "," + (xz + wy) + "," + 0 + "," + (xy + wz) + "," + (1 - (xx + zz)) + "," + (yz - wx) + "," + 0 + "," + (xz - wy) + "," + (yz + wx) + "," + (1-(xx + yy)) + "," + 0 + "," + 0 + "," + 0 + "," + 0 + "," + 1 +")";
-
         return;
     }
 
@@ -476,6 +472,7 @@ function parseResult(dataBack) {
         if ((currentStatus & RECORDINGSESSION) != 0) {
             document.getElementById("recordIcon").onclick()
         }
+        ws.send("STOP:");
         currentStatus |= ABORTFLAG;
         return;
     }
@@ -484,6 +481,7 @@ function parseResult(dataBack) {
         if ((currentStatus & RECORDINGSESSION) != 0) {
             document.getElementById("recordIcon").onclick()
         }
+        ws.send("STOP:");
         currentStatus |= ABORTFLAG;
         return;
     }
@@ -535,6 +533,7 @@ function playbackSample(){
 function getAveragePullStrengths(){
     averagePullStrength=[];
     var totalPull = 0.0;
+    if(switchPoints.length == 0) return;
     var i = null, j=null, k=null,m = null;
     for (j=0; j<switchPoints.length; ++j){
         i=sample[switchPoints[j]][0]; // angle at direction change
@@ -596,8 +595,8 @@ function drawStroke(){
     ctxBD.fillStyle = "white";
     var handstrokelength = 0.0;
     var backstrokelength = 0.0;
-    if(ringTimes.length > (currentSwingDisplayed * 2)) handstrokelength = ringTimes[(currentSwingDisplayed * 2)][0];
-    if(ringTimes.length > (currentSwingDisplayed * 2)+1) backstrokelength = ringTimes[(currentSwingDisplayed * 2)+1][0];
+    if(ringTimes.length > (currentSwingDisplayed * 2)) handstrokelength = ringTimes[(currentSwingDisplayed * 2)];
+    if(ringTimes.length > (currentSwingDisplayed * 2)+1) backstrokelength = ringTimes[(currentSwingDisplayed * 2)+1];
     if(handstrokelength != 0.0){
         ctxBD.fillText("H " + handstrokelength.toFixed(2)+"s", 2*BDwidth + 32, ctxBD.canvas.height-20);
     }
@@ -617,7 +616,6 @@ function drawStroke(){
     var colour = "white";
     var time = 0;
     var cross = 0;
-    var faked = 0;
     var currentDrawRing = 0;
     var overflow = 0;
     var time = 0;
@@ -629,7 +627,6 @@ function drawStroke(){
 
     for(;;i++){
         cross = 0;
-        faked = 0;
         overflow = 0;
         currentDrawRing = (currentSwingDisplayed*2)+i;
 //        if((Math.floor(i/2)+currentSwingDisplayed)+1 > swingStarts.length -1) break;
@@ -641,15 +638,13 @@ function drawStroke(){
         offset = (i*ATstepWidth)+ctxATt.canvas.width/2;
         if(offset > ctxATt.canvas.width) break;
         if(offset < -ATstepWidth) continue;
-        time = ringTimes[currentDrawRing][0];
+        time = ringTimes[currentDrawRing];
         height = 10 + 25 * (averagePullStrength[currentDrawRing]/scaleValue);
         if(height > 30) height = 30;
-
-        if(ringTimes[currentDrawRing][1] == 1) faked = 1;
         
         if(!(i%2)){
-            position = -range*(time - (changeInterval + (openHandstroke*changeStep)))/changeStep; // this does a full beat ? should this be half a beat
-            rise = sample[switchPoints[currentDrawRing]][0] * (height/10.0); // show a rise of +-10 degrees (consider making this += 20)
+            position = -range*(time - (changeInterval + (openHandstroke*changeStep)))/changeStep;
+            rise = sample[switchPoints[currentDrawRing]][0] * (height/10.0); // show a rise of +-10 degrees (consider making this +- 20)
         } else {
             position = -range*(time - changeInterval)/changeStep;
             rise = (360-sample[switchPoints[currentDrawRing]][0]) * (height/10.0); // show a rise of +-10 degrees (consider making this += 20)
@@ -669,7 +664,7 @@ function drawStroke(){
         }
         position += (ATtopMargin + totalHeight/2.0);
         colour = "white";
-        if(faked || overflow) {colour = "rgba(240,128,128,1)"; cross = 1; }
+        if(overflow) {colour = "rgba(240,128,128,1)"; cross = 1; }
         drawBar(offset,ctxAT,!(i%2),position,height,rise,cross,colour);
         if(!(i%2)){
             ctxAT.fillText((Math.floor(i/2)+currentSwingDisplayed+1).toFixed(0), offset-20, ctxAT.canvas.height);
@@ -697,8 +692,8 @@ function TdrawStroke(){
     ctxBD.fillStyle = "rgba(240,240,0,1)";
     var handstrokelength = 0.0;
     var backstrokelength = 0.0;
-    if(TringTimes.length > (TcurrentSwingDisplayed * 2)) handstrokelength = TringTimes[(TcurrentSwingDisplayed * 2)][0];
-    if(TringTimes.length > (TcurrentSwingDisplayed * 2)+1) backstrokelength = TringTimes[(TcurrentSwingDisplayed * 2)+1][0];
+    if(TringTimes.length > (TcurrentSwingDisplayed * 2)) handstrokelength = TringTimes[(TcurrentSwingDisplayed * 2)];
+    if(TringTimes.length > (TcurrentSwingDisplayed * 2)+1) backstrokelength = TringTimes[(TcurrentSwingDisplayed * 2)+1];
     if(handstrokelength != 0.0){
         ctxBD.fillText("H " + handstrokelength.toFixed(2)+"s", 2*BDwidth + 32, ctxBD.canvas.height-50);
     }
@@ -728,7 +723,6 @@ function TdrawStroke(){
 
     for(;;i++){
         cross = 0;
-        faked = 0;
         overflow = 0;
         currentDrawRing = (TcurrentSwingDisplayed*2)+i;
 //        if((Math.floor(i/2)+currentSwingDisplayed)+1 > swingStarts.length -1) break;
@@ -740,14 +734,12 @@ function TdrawStroke(){
         offset = (i*ATstepWidth)+ctxATt.canvas.width/2;
         if(offset > ctxATt.canvas.width) break;
         if(offset < -ATstepWidth) continue;
-        time = TringTimes[currentDrawRing][0];
+        time = TringTimes[currentDrawRing];
         height = 10 + 25 * (TaveragePullStrength[currentDrawRing]/scaleValue);
         if(height > 30) height = 30;
 
-        if(TringTimes[currentDrawRing][1]==1) faked = 1;
-
         if(!(i%2)){
-            position = -range*(time - (TchangeInterval + (TopenHandstroke*TchangeStep)))/TchangeStep; // this does a full beat ? should this be half a beat
+            position = -range*(time - (TchangeInterval + (TopenHandstroke*TchangeStep)))/TchangeStep;
             rise = template[TswitchPoints[currentDrawRing]][0] * (height/10.0); // show a rise of +-10 degrees (consider making this += 20)
         } else {
             position = -range*(time - TchangeInterval)/TchangeStep;
@@ -765,7 +757,7 @@ function TdrawStroke(){
             position = totalHeight/2.0
         }
         position += (ATtopMargin + totalHeight/2.0);
-        if(faked || overflow) {cross = 1; height = 3;}
+        if(overflow) {cross = 1; height = 3;}
         if(!(i%2)){
             if(cross){
                 ctxAT.moveTo(offset-12, position-height);
@@ -825,10 +817,8 @@ function drawSamples(position,iterations){
         var dataEntryCurrent = sample[position + i].slice();
         var dataEntryNext = sample[position + i + 1].slice();
         if((currentStatus & RECORDINGSESSION) != 0 || (currentStatus & PLAYBACK) != 0 ) {
-            if(dataEntryCurrent[3] == 2) drawLiveTime(dataEntryCurrent[4],false,false,position+i);
-            if(dataEntryCurrent[3] == 4) drawLiveTime(dataEntryCurrent[4],false,true,position+i);
-            if(dataEntryCurrent[3] == 1) drawLiveTime(dataEntryCurrent[4],true,false,position+i);
-            if(dataEntryCurrent[3] == 3) drawLiveTime(dataEntryCurrent[4],true,true,position+i);
+            if(dataEntryCurrent[3] == 2) drawLiveTime(dataEntryCurrent[4],false,position+i);
+            if(dataEntryCurrent[3] == 1) drawLiveTime(dataEntryCurrent[4],true,position+i);
             drawBell(180-dataEntryCurrent[0]);
         }
 //        drawAT(dataEntryCurrent[2]);
@@ -934,7 +924,7 @@ function drawSamples(position,iterations){
     }
 }
 
-function drawLiveTime(time, HS, faked,currentPosition){
+function drawLiveTime(time, HS, currentPosition){
     currentATmargin += ATstepWidth;
     if (currentATmargin >= ctxAT.canvas.width/2) currentATmargin -= ctxAT.canvas.width/2;
     ctxAT.clearRect(currentATmargin-20                     ,0,ATstepWidth,ctxAT.canvas.height);
@@ -963,7 +953,6 @@ function drawLiveTime(time, HS, faked,currentPosition){
     position += (ATtopMargin + totalHeight/2.0);
 
     var colour = "white";
-    if(faked) colour = "red";
     if(overflow) colour = "red";
     
     var height = 0;
@@ -973,7 +962,7 @@ function drawLiveTime(time, HS, faked,currentPosition){
         for(j = switchPoints.length - 1; j >= 0 && switchPoints[j] > currentPosition; j--); // find switchpoint preceding the current position
         j = switchPoints[j];
     }
-    if (currentPosition - j > 300){ // 300 = 2.4 seconds worth of samples - not possible to ring this slowly unless really holding up - assume bad data
+    if (currentPosition - j > 300 || !switchPoints.length){ // 300 = 2.4 seconds worth of samples - not possible to ring this slowly unless really holding up - assume bad data
         height = 10; //default height because the switchPoint is not close enough
         cross = 1;
     } else {
@@ -1202,7 +1191,7 @@ document.getElementById('autoButton').onclick = function(){
     }
     calculateTimings();
     var impliedCPM = 60.0/averageBSTime;
-    var impliedOH = (averageHSTime-averageBSTime)/changeStep; // this does a full beat ? should this be half a beat
+    var impliedOH = (averageHSTime-averageBSTime)/changeStep;
     if(impliedOH < 0.0) impliedOH = 0.0;
     if(impliedOH > 2.2) impliedOH = 2.2;
     if(CPM < 20.0) CPM = 20.0;
@@ -1231,15 +1220,6 @@ calibButton.onclick = function() {
     demoModal.style.display = "block";
     settingsModal.style.display = "none";
     ws.send("EYEC:");
-};
-
-adjustButton.onclick = function() {
-    if (currentStatus & DOWNLOADINGFILE) return;
-    if (currentStatus & PLAYBACK) return;
-    if (currentStatus & HELPDISPLAYED) return;
-    if (currentStatus & RECORDINGSESSION) return;
-    adjustModal.style.display = "block";
-    settingsModal.style.display = "none";
 };
 
 plusCPMButton.onclick = function(){
@@ -1467,7 +1447,7 @@ function fillDiagnosticsModal(){
         }
     }
     calculateTimings(); // should have already been updated
-    document.getElementById("gravityValue").innerHTML= "Gravity: " + gravityValue.toString() + " Rope: " + ropeValue.toString();
+    document.getElementById("gravityValue").innerHTML= "Gravity: " + gravityValue.toString() + " Rope(H): " + ropeValueH.toString() + " Rope(B): " + ropeValueB.toString();
     document.getElementById("impliedTimings").innerHTML= "CPM: " + (60.0/averageBSTime).toFixed(1) + " Open Handstroke Factor: " + ((averageHSTime-averageBSTime)/changeStep).toFixed(1);
     var pealTime = 0.0;
     if((document.getElementById("bellsSelect").selectedIndex + 3) > 7){
@@ -1877,14 +1857,6 @@ function updateIcons(){
         document.getElementById("powerIcon").src = "circle-power-active.png";
     }
 
-    // settings icon
-    if ((currentStatus & DOWNLOADINGFILE) ||
-        (currentStatus & HELPDISPLAYED)) {
-        document.getElementById("settingsIcon").src = "settings-inactive.png";
-    } else {
-        document.getElementById("settingsIcon").src = "settings-active.png";
-    }
-
     //downloadIcon
     if ((currentStatus & DOWNLOADINGFILE) ||
         (currentStatus & PLAYBACK) ||
@@ -2000,16 +1972,17 @@ function updateIcons(){
         }
     }
 
-    // settingsicon
+    // settingsicon and timingsicon
        if ((currentStatus & DOWNLOADINGFILE) ||
         (currentStatus & PLAYBACK) ||
         (currentStatus & RECORDINGSESSION) ||
         (currentStatus & HELPDISPLAYED)) {
         document.getElementById("settingsIcon").src = "settings-inactive.png";
+        document.getElementById("timingsIcon").src = "timings-inactive.png";
     } else {
         document.getElementById("settingsIcon").src = "settings-active.png";
+        document.getElementById("timingsIcon").src = "timings-active.png";
     }
-
 
 }
 ////////////////////////////////////////////////////////////////
@@ -2034,8 +2007,9 @@ var settingsSpan = document.getElementsByClassName("close")[3];
 var demoModal = document.getElementById("demoModal");
 var demoSpan = document.getElementsByClassName("close")[4];
 
-var adjustModal = document.getElementById("adjustModal");
-var adjustSpan = document.getElementsByClassName("close")[5];
+var timingsModal = document.getElementById("timingsModal");
+var timingsBtn = document.getElementById("timingsIcon");
+var timingsSpan = document.getElementsByClassName("close")[5];
 
 openBtn.onclick = function() {
     if ((currentStatus & DOWNLOADINGFILE) != 0) return;
@@ -2054,6 +2028,14 @@ settingsBtn.onclick = function() {
     recalculateSize();// useful for ipad resizing
     drawTDCs();
     foreclick(0);
+};
+
+timingsBtn.onclick = function() {
+    if ((currentStatus & DOWNLOADINGFILE) != 0) return;
+    if ((currentStatus & PLAYBACK) != 0) return;
+    if ((currentStatus & HELPDISPLAYED) != 0) return;
+    if ((currentStatus & RECORDINGSESSION) != 0) return;
+    timingsModal.style.display = "block";
 };
 
 // record button onclick is is main onclick area
@@ -2080,10 +2062,9 @@ demoSpan.onclick = function() {
     ws.send("STEC:");
 };
 
-adjustSpan.onclick = function() {
-    adjustModal.style.display = "none";
+timingsSpan.onclick = function() {
+    timingsModal.style.display = "none";
 };
-
 
 // When the user clicks anywhere outside of the modal, close it
 window.onclick = function(event) {
@@ -2103,8 +2084,8 @@ window.onclick = function(event) {
         demoModal.style.display = "none";
         ws.send("STEC:");
     }
-    if (event.target == adjustModal) {
-        adjustModal.style.display = "none";
+    if (event.target == timingsModal) {
+        timingsModal.style.display = "none";
     }
 };
 

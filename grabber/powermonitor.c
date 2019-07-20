@@ -1,4 +1,4 @@
-//gcc powermonitor.c -o pm -lbcm2835
+//gcc powermonitor.c -o powermonitor -lbcm2835
 
 /*
  * Copyright (c) 2018,2019 Peter Budd. All rights reserved
@@ -71,7 +71,7 @@ int main(int argc, char const *argv[]){
         printf("Unable to inititalise i2c\n");
         exit(1);
     }
-    bcm2835_i2c_set_baudrate(100000);
+    bcm2835_i2c_set_baudrate(50000);
     bcm2835_i2c_setSlaveAddress(0x10);
 
     i2cBuffer[0]=2;

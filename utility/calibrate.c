@@ -542,7 +542,7 @@ void setup(void){
         printf("Unable to inititalise i2c\n");
         exit(1);
     }
-    bcm2835_i2c_set_baudrate(100000);
+    bcm2835_i2c_set_baudrate(50000);
     bcm2835_i2c_setSlaveAddress(0x10);
 	
 	//  setup SPI

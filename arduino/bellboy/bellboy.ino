@@ -20,7 +20,8 @@ volatile uint8_t sleepTime = 0;
 
 volatile float gravityValue = -360;
 volatile float tareValue  = -360;
-volatile float ropeValue  = 0;
+volatile float ropeValueB  = 0;
+volatile float ropeValueH = 0;
 
 union {
   float    _float;
@@ -66,7 +67,7 @@ void setup() {
   pinMode(piRunPin, OUTPUT);
   digitalWrite(piRunPin, LOW); // stop pi running
   Wire.begin(16);
-  Wire.setClock(100000);  // TODO: more reliable comms, drop this to 50,000 and also on grabber.c (wire.setclock(50000) will set TWBR to 72 which should work OK).
+  Wire.setClock(50000);  // set to 50,000 for more reliable comms also on grabber.c, getcalibration.c, powermonitor.c and calibrate.c.  (wire.setclock(50000) will set TWBR to 72 which should work OK).
   Wire.onReceive(i2cReceive);
   Wire.onRequest(i2cPushData);
   ADMUX = _BV(REFS0); // reference to VCC (PC0/ADC0 being measured)
@@ -260,7 +261,8 @@ void loop() {
         if (volts < 395 && volts > 200){ // plugged in - give up on sleep and start charging
             gravityValue = -360;
             tareValue  = -360;
-            ropeValue = 0;
+            ropeValueH = 0;
+            ropeValueB = 0;
             STATE = 0;
         }
         if(STATE !=9) break;
@@ -324,9 +326,17 @@ void i2cReceive(int number) {
     flags |= WRITETOPROM;
   }
 
-  if (i2cRegister == 6 && number == 2) {
+  if (i2cRegister == 2 && number == 2) { // got a sleep command
     sleepTime = Wire.read();
     flags |= GOTOSLEEP;
+  }
+
+  if (i2cRegister == 6 && number == 5) { // read rope value
+    floatConv._bytes[0] = Wire.read();
+    floatConv._bytes[1] = Wire.read();
+    floatConv._bytes[2] = Wire.read();
+    floatConv._bytes[3] = Wire.read();
+    ropeValueH = floatConv._float;
   }
 
   if (i2cRegister == 7 && number == 5) { // read rope value
@@ -334,7 +344,7 @@ void i2cReceive(int number) {
     floatConv._bytes[1] = Wire.read();
     floatConv._bytes[2] = Wire.read();
     floatConv._bytes[3] = Wire.read();
-    ropeValue = floatConv._float;
+    ropeValueB = floatConv._float;
   }
 
   if (i2cRegister == 8 && number == 5) { // read gravity value
@@ -352,7 +362,6 @@ void i2cReceive(int number) {
     tareValue = floatConv._float;
   }
 }
-
 
 /*
     (registers   10=samplePeriod, 11=accBiasX,
@@ -379,8 +388,11 @@ void i2cPushData() {
     i2cbuffer[0] = iVolts >> 8;
     i2cbuffer[1] = iVolts & 0x00FF;
     Wire.write((char *)i2cbuffer, 2);
+  } else if (i2cRegister == 6) { // send rope data
+    floatConv._float = ropeValueH;
+    Wire.write((char *)floatConv._bytes, 4);
   } else if (i2cRegister == 7) { // send rope data
-    floatConv._float = ropeValue;
+    floatConv._float = ropeValueB;
     Wire.write((char *)floatConv._bytes, 4);
   } else if (i2cRegister == 8) { // send gravity data
     floatConv._float = gravityValue;
@@ -442,7 +454,7 @@ void populateBuffer(uint8_t reg) {
 // (1.65/4.2)*1024 = 402 = internal power battery full
 // (1.65/3.5)*1024 = 482 = internal power battery low
 // (1.65/3.4)*1024 = 496 = internal power battery empty
-//                    0 = pi not powered
+//                     0 = pi not powered
 
 uint16_t measureVcc(void) {
   uint8_t low;

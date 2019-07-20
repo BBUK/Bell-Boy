@@ -24,27 +24,28 @@
 * The results of the "engineering" and "experimentation" work on the bell system are described here.
 * In essence, although it will work straight from the command line, this program is intended to be started 
 * by Websocketd https://github.com/joewalnes/websocketd
-* On startup, it initialises the IMU (setup function), checks if the device is already calibrated and the main loop
-* is entered. The main loop starts calling doCalibration() if the device is uncalibrated and pullData() if it is.
-* If uncalibrated, there is first a zero calibration (needs about 20 seconds of stability
-* and this is done by the pullAndTransform() function, called by doCalibration()). After zeroing, 
-* the user is invited to pull up the bell.  Once the bell is high enough, doCalibration() starts saving data.
-* Once the bell is up and stable, doCalibration() calculates the effect of gravity on the bell.  See calculateError().
-* Once this calibration is complete pullData() is called in the main loop.  pullData() takes data from the IMU and converts it
-* to calibrated orientation and rotational velocity.  This data is not pushed to the browser until the user signals that it is starting a run.
-* The data is always pulled as it allows for some gyro calibration (pullAndTransform function) and for the filters to settle down.
+* On startup, it initialises the IMU (setup() function), checks if the device is already calibrated (getSavedSata() function) 
+* and the main loop is entered. The main loop starts calling doCalibration() if the device is uncalibrated and pushData() if it is.
+* If uncalibrated, there is first a zero calibration (needs about 30 seconds of stability to bias-adjust the gyros and to zero
+* the bell position (this is done by the pullAndTransform() function, called by doCalibration()). After zeroing, 
+* the user is invited to pull up the bell.  Once the bell is being rung full circle, doCalibration() starts saving data.
+* Once the bell has gone through the calibration routine, doCalibration() calculates the effect of gravity and the rope on the bell.
+* See calculateError() and calculateArea(). Once this calibration is complete pushData() is called in the main loop.  pullData() calls
+* populateBuffer() which takes data from the IMU and converts it to calibrated orientation and rotational velocity.
+* Although this data is not pushed to the browser until the user signals that they want to record a run, 
+* the data is always processed as it allows for some gyro calibration (pullAndTransform() function) and for the filters to settle down.
 *  
 * The main loop:
 *       *  checks the Arduino for battery life and reports this to the browser
 *       *  checks stdin for commands from the browser (see below) and processes these commands
-*       *  calls pushData to see if any data needs pushing to the browser (pushData calls pullData to pull data from the IMUs
+*       *  calls pushData() to see if any data needs processing and (if a run is being recorded), pushing samples to the browser
 * setup:
 *       * configures the IMU device over SPI
 *       * pulls calibration data from the Arduino over I2C
 * pushData
 *       * calls pullData
 *       * pushes angle, rate and acceleration to the browser
-* pullData is called by pushData
+* populateBuffer is called by pushData
 *       * checks to see if enough data is in the two IMUs' FIFOs to be pulled and processed
 *       * calls pullAndTransform to actually pull the data and process it into angles
 *       * puts processed data (angle, angular rate and acceleration) into a circular buffer
@@ -149,7 +150,7 @@
 
 FILE *fd_write_out;
 
-// calculated by calculate function
+// calculated by calculate() function
 float q0 = 1;
 float q1 = 0;
 float q2 = 0;
@@ -164,12 +165,14 @@ int EYECANDY = 0;
 char SPI_BUFFER[256];
 char I2C_BUFFER[16];
 
+// used by pushData() to create a single string to push to the browser and to save locally
 char READ_OUTBUF[1500];
 char READ_OUTBUF_LINE[150];
 int READ_OUTBUF_COUNT;
 char local_outbuf[4000];
 int local_count = 0;
 
+// used to hold the filename of the session that the user wants to load
 char FILENAME[60];
 
 const unsigned int LOOPSLEEP = 50000;  // main loop processes every 0.05 sec.  25 samples should be in FIFO.  Max number of samples in FIFO is 341.  Should be OK.
@@ -190,7 +193,8 @@ struct {
     float *calibrationData;
     unsigned int calibrationDataCount;
     float gravityValue;
-    float ropeValue;
+    float ropeValueH;
+    float ropeValueB;
     int direction;
     unsigned int calibrationState;
     unsigned int calibrationStrokeCount;
@@ -198,6 +202,8 @@ struct {
     unsigned int lastStrikeSamples;
     unsigned int lastBDC;
     float lastAngularVelocity;
+    float predictedHandstrokeStrikeAngle;
+    float predictedBackstrokeStrikeAngle;
     unsigned int manualStrike;
     unsigned int manualTimefromBDC;
     unsigned int pushCounter;
@@ -211,9 +217,10 @@ struct {
                     .accTransformMatrix[8]=1, .gyroBiasX=0, .gyroBiasY=0, .gyroBiasZ=0, .gyroTransformMatrix[0]=1, 
                     .gyroTransformMatrix[1]=0, .gyroTransformMatrix[2]=0, .gyroTransformMatrix[3]=0, .gyroTransformMatrix[4]=1,
                     .gyroTransformMatrix[5]=0, .gyroTransformMatrix[6]=0, .gyroTransformMatrix[7]=0, .gyroTransformMatrix[8]=1,
-                    .tareValue = 0.0 , .torn = 0, .gravityValue = 0.0, .ropeValue = 0, .direction = 0, .calibrationState = 0, 
+                    .tareValue = 0.0 , .torn = 0, .gravityValue = 0.0, .ropeValueH = 0, .ropeValueB = 0, .direction = 0, .calibrationState = 0, 
                     .calibrationDataCount = 0, .calibrationStrokeCount = 0, .stable = 0, .bellNumber = 6, .CPM = 31.0, 
-                    .openHandstroke = 1.0, .manualStrike = 0, .manualTimefromBDC = 300, .lastStrike = 2};
+                    .openHandstroke = 1.0, .manualStrike = 0, .manualTimefromBDC = 300, .lastStrike = 2, .predictedHandstrokeStrikeAngle=300.0,
+                    .predictedBackstrokeStrikeAngle=60.0};
 
 // only really important when run from command line
 volatile sig_atomic_t sig_exit = 0;
@@ -224,9 +231,11 @@ void sig_handler(int signum) {
 }
 
 // number of samples taken before pushing out - only a quarter of these are actually pushed out
+// because the sample rate here (500Hz) is four times larger than the rate data is sent to the browser
 #define PUSHBATCH 80
-// must be bigger than SAVGOLLENGTH + SAVGOLHALF
+// must be bigger than SAVGOLHALF + PUSHBATCH
 #define BUFFERSIZE 512
+// circulat buffer used by populateBuffer() to add samples and pushData() or doCalibration() to consume them
 struct {
     unsigned int head;
     unsigned int tail;
@@ -236,8 +245,10 @@ struct {
     float accelBuffer[BUFFERSIZE];
 } fifo;
 
-#define SAVGOLLENGTH  51
-#define SAVGOLHALF 25 // = math.floor(SAVGOLLENGTH/2.0)
+// used in savGol() (called by the populateBuffer() function) and doCalibration() and pushData()
+// see savGol() for coefficients and justification for this particular filter length.  
+#define SAVGOLLENGTH  61
+#define SAVGOLHALF 30 // = floor(SAVGOLLENGTH/2.0)
 
 int main(int argc, char const *argv[]){
     char linein[50];
@@ -464,8 +475,18 @@ int main(int argc, char const *argv[]){
                     uint8_t  _bytes[sizeof(float)];
                 } floatConv;
 
-                floatConv._float = grabberData.ropeValue;
-                I2C_BUFFER[0]=7; // ropeValue
+
+                floatConv._float = grabberData.ropeValueH;
+                I2C_BUFFER[0]=6; // ropeValueH
+                I2C_BUFFER[1] = floatConv._bytes[0];
+                I2C_BUFFER[2] = floatConv._bytes[1];
+                I2C_BUFFER[3] = floatConv._bytes[2];
+                I2C_BUFFER[4] = floatConv._bytes[3];
+                bcm2835_i2c_write(I2C_BUFFER,5); 
+                usleep(750000);
+
+                floatConv._float = grabberData.ropeValueB;
+                I2C_BUFFER[0]=7; // ropeValueB
                 I2C_BUFFER[1] = floatConv._bytes[0];
                 I2C_BUFFER[2] = floatConv._bytes[1];
                 I2C_BUFFER[3] = floatConv._bytes[2];
@@ -499,7 +520,7 @@ int main(int argc, char const *argv[]){
                 bcm2835_i2c_write(I2C_BUFFER,5); 
                 usleep(750000);
 
-                I2C_BUFFER[0]=6; // go to sleep
+                I2C_BUFFER[0]=2; // go to sleep
                 I2C_BUFFER[1] = (char)sleepTime;
                 bcm2835_i2c_write(I2C_BUFFER,2); 
                 system("/usr/bin/sync && /usr/bin/shutdown -P now");
@@ -575,9 +596,9 @@ void doCalibration(void){
                 if(!(count % 2500)) printf("ESWI:%d\n",(5-grabberData.calibrationStrokeCount) == 0 ? 1 : (5-grabberData.calibrationStrokeCount));  // sends signal to browser to indicate that swings need to continue
                 if(fifo.available < SAVGOLLENGTH) break;
                 for(int counter = fifo.available; counter > SAVGOLHALF; --counter){
-                    if((fifo.angleBuffer[fifo.tail] < 351 && fifo.angleBuffer[fifo.tail] > 313 && fifo.rateBuffer[fifo.tail] < 0) ||
-                        (fifo.angleBuffer[fifo.tail] < 100 && fifo.angleBuffer[fifo.tail] > 85 && fifo.rateBuffer[fifo.tail] > 0) ||
-                        (fifo.angleBuffer[fifo.tail] < 47 && fifo.angleBuffer[fifo.tail] > 9 && fifo.rateBuffer[fifo.tail] > 0)){
+                    if((fifo.angleBuffer[fifo.tail] < 355 && fifo.angleBuffer[fifo.tail] > 325 && fifo.rateBuffer[fifo.tail] < 0) ||
+                        (fifo.angleBuffer[fifo.tail] < 280 && fifo.angleBuffer[fifo.tail] > 260 && fifo.rateBuffer[fifo.tail] < 0) ||
+                        (fifo.angleBuffer[fifo.tail] < 35 && fifo.angleBuffer[fifo.tail] > 5 && fifo.rateBuffer[fifo.tail] > 0)){
                         if(grabberData.calibrationDataCount < 24000){
                             grabberData.calibrationData[grabberData.calibrationDataCount*3] = fifo.angleBuffer[fifo.tail];
                             grabberData.calibrationData[(grabberData.calibrationDataCount*3)+1] = fifo.rateBuffer[fifo.tail];
@@ -606,40 +627,63 @@ void doCalibration(void){
                     if(calculateError(grabberData.gravityValue + pow(2,guessLog)) < 0) grabberData.gravityValue += pow(2,guessLog);
                 }
                 pullAndTransform(); // just to empty any data held on IMU
-                float currentBestArea=calculateArea(64);
+                float currentBestArea=calculateAreaB(64);
                 float high,low;
-                grabberData.ropeValue = 64.0;
+                grabberData.ropeValueB = 64.0;
                 for(int guessLog = 5; guessLog >= 0; --guessLog){
-                    high = calculateArea(grabberData.ropeValue + pow(2,guessLog));
-                    low  = calculateArea(grabberData.ropeValue - pow(2,guessLog));
+                    high = calculateAreaB(grabberData.ropeValueB + pow(2,guessLog));
+                    low  = calculateAreaB(grabberData.ropeValueB - pow(2,guessLog));
                     if(low <= high){
                         if(low <= currentBestArea){
-                            grabberData.ropeValue -= pow(2,guessLog);
+                            grabberData.ropeValueB -= pow(2,guessLog);
                             currentBestArea = low;
                         }
                     } else {
                         if(high < currentBestArea){
-                            grabberData.ropeValue += pow(2,guessLog);
+                            grabberData.ropeValueB += pow(2,guessLog);
                             currentBestArea = high;
                         }
                     }
-//                    printf("L: %f, H: %f, V: %f\n",low,high,grabberData.ropeValue);
+//                    printf("L: %f, H: %f, V: %f\n",low,high,grabberData.ropeValueB);
+                }
+
+                pullAndTransform();
+
+                currentBestArea=calculateAreaH(64);
+                grabberData.ropeValueH = 64.0;
+                for(int guessLog = 5; guessLog >= 0; --guessLog){
+                    high = calculateAreaH(grabberData.ropeValueH + pow(2,guessLog));
+                    low  = calculateAreaH(grabberData.ropeValueH - pow(2,guessLog));
+                    if(low <= high){
+                        if(low <= currentBestArea){
+                            grabberData.ropeValueH -= pow(2,guessLog);
+                            currentBestArea = low;
+                        }
+                    } else {
+                        if(high < currentBestArea){
+                            grabberData.ropeValueH += pow(2,guessLog);
+                            currentBestArea = high;
+                        }
+                    }
+                    printf("L: %f, H: %f, V: %f\n",low,high,grabberData.ropeValueH);
+
                 }
                 grabberData.calibrationState = 7;
-//                pullAndTransform();
-//                FILE *fdDump;
-//                fdDump = fopen("/data/samples/dump","w");
-//                if(fdDump != NULL) {
-//                    for(int i = 0; i<grabberData.calibrationDataCount; ++i){
-//                        fprintf(fdDump,"A:%+09.1f,R:%+09.1f,C:%+07.1f\n", grabberData.calibrationData[(i*3)], grabberData.calibrationData[(i*3)+1], grabberData.calibrationData[(i*3)+2]);
-//                    }
-//                    fclose(fdDump);
-//                }
+                pullAndTransform();
+
+                FILE *fdDump;
+                fdDump = fopen("/data/samples/dump","w");
+                if(fdDump != NULL) {
+                    for(int i = 0; i<grabberData.calibrationDataCount; ++i){
+                        fprintf(fdDump,"A:%+09.1f,R:%+09.1f,C:%+07.1f\n", grabberData.calibrationData[(i*3)], grabberData.calibrationData[(i*3)+1], grabberData.calibrationData[(i*3)+2]);
+                    }
+                    fclose(fdDump);
+                }
                 if(grabberData.calibrationData) {free(grabberData.calibrationData); grabberData.calibrationData = NULL;}
                 FILE *fdGravity;
                 fdGravity = fopen("/tmp/BBgravity","w");
                 if(fdGravity != NULL) {
-                    fprintf(fdGravity,"%+08.1f,%+08.1f\n", grabberData.gravityValue, grabberData.ropeValue);
+                    fprintf(fdGravity,"%+08.1f,%+08.1f,%+08.1f\n", grabberData.gravityValue, grabberData.ropeValueB, grabberData.ropeValueH);
                     fclose(fdGravity);
                 }
         }
@@ -713,13 +757,12 @@ void pushData(void){
 
     if(!RUNNING) return;
 
-    // I calculate angular accelerations from the rates reported by gyro using a Savitsky Golay
-    // filter set to differentiate.  Optimal filter length determined by experiment.
-    // Need to have at least SAVGOLLENGTH samples ready in buffer but don't go through this unless there are also
-    // an additional PUSHBATCH samples available (PUSHBATCH is the number of samples pushed to the browser in each batch).
-    // Samples are pushed into the rateBuffer and angleBuffer circular buffers by pullData function.
-    // available and tail variables are global and are used to keep track of circular buffer (as is the head
-    // variable but that is updated by the pullData function)
+    // Need to have at least SAVGOLHALF + 1 samples ready in buffer before sending anything out (see populateBuffer() for reasoning) 
+    // but don't go through this unless there are also an additional PUSHBATCH samples available (the value of PUSHBATCH has been 
+    // chosen to minimise processor usage, by sending data in batches rather than piecemeal).
+    // Samples are pushed into the rateBuffer and angleBuffer circular buffers by populateBuffer() function.
+    // Available and tail variables are are used to keep track of circular buffer (as is the head
+    // variable but that is updated by the populateBuffer() function)
     if(fifo.available <= PUSHBATCH + SAVGOLHALF) return;
 
     for(int counter = fifo.available; counter > SAVGOLHALF; --counter){ // always leave SAVGOLHALF in fifo because acceleration data is that amount behind the other data
@@ -729,20 +772,27 @@ void pushData(void){
         // This bit allowed for slight angle drift.  It does this knowing that BDC = 180 degrees.
         // and that is the point when the bell's angular acceleration is zero.  Drift is so low
         // that this is more trouble than it's worth.  Left in and reported but not used.
-        // Also testing shows BDC angle is slightly off that recorded when the bell is at rest.  Rope weight?
+        // Also testing shows BDC angle is slightly off (0.5 degree) than that recorded when the bell is at rest.  Rope weight?
         taccn = fifo.accelBuffer[fifo.tail];
         accn = fifo.accelBuffer[lastTail];
         if(taccn * accn <= 0.0 && fifo.angleBuffer[fifo.tail] > 170.0 && fifo.angleBuffer[fifo.tail] < 190.0  && nudgeCount == 0) {
             float nudgeFactor = accn /(accn - taccn);
-            float angleDiffFrom180 = (fifo.angleBuffer[lastTail] + nudgeFactor*(fifo.angleBuffer[fifo.tail]-fifo.angleBuffer[lastTail])) - 180.0;
-            nudgeAngle = angleDiffFrom180;
+            nudgeAngle = (fifo.angleBuffer[lastTail] + nudgeFactor*(fifo.angleBuffer[fifo.tail]-fifo.angleBuffer[lastTail])) - 180.0;
             nudgeCount = 10;
             grabberData.lastBDC = grabberData.pushCounter;
-            value = nudgeAngle; // report 180 degree point
+            value = nudgeAngle; // report BDC point
             data = 8;
         } 
-        if(nudgeCount != 0) nudgeCount -= 1; // don't do this twice in one half stroke - allows for a bit of noise
-        float raccn = taccn - grabberData.gravityValue*sin(fifo.angleBuffer[fifo.tail]*DEGREES_TO_RADIANS_MULTIPLIER) - ((90.0-fifo.angleBuffer[fifo.tail])*grabberData.ropeValue/360.0);
+        if(nudgeCount != 0) nudgeCount -= 1; // don't do this twice in one half stroke - allows for a bit of noise, not really needed
+        
+        float raccn = 0.0;
+        if (fifo.angleBuffer[fifo.tail] > 270.0) {
+            raccn = taccn - grabberData.gravityValue*sin(fifo.angleBuffer[fifo.tail]*DEGREES_TO_RADIANS_MULTIPLIER) - ((270.0-fifo.angleBuffer[fifo.tail])*grabberData.ropeValueB/180.0);
+        } else if (fifo.angleBuffer[fifo.tail] < 90.0){
+            raccn = taccn - grabberData.gravityValue*sin(fifo.angleBuffer[fifo.tail]*DEGREES_TO_RADIANS_MULTIPLIER) - ((90.0 -fifo.angleBuffer[fifo.tail])*grabberData.ropeValueH/180.0);
+        } else {
+            raccn = taccn - grabberData.gravityValue*sin(fifo.angleBuffer[fifo.tail]*DEGREES_TO_RADIANS_MULTIPLIER);
+        }
         
         if(fifo.rateBuffer[fifo.tail] * fifo.rateBuffer[lastTail] <= 0.0 && switchCount == 0 && grabberData.pushCounter > 40  && (fifo.angleBuffer[fifo.tail] > 270 || fifo.angleBuffer[fifo.tail] < 90)) { // detect when bell changes direction
             data = 7;
@@ -785,10 +835,14 @@ void pushData(void){
                     value = grabberData.tareValue;
                     break;
                 case 6:
-                    strcpy(detailsString, ", #Rope value");
-                    value = grabberData.ropeValue;
+                    strcpy(detailsString, ", #Rope value back");
+                    value = grabberData.ropeValueB;
                     break;
                 case 7:
+                    strcpy(detailsString, ", #Rope value hand");
+                    value = grabberData.ropeValueH;
+                    break;
+                case 8:
                     strcpy(detailsString, "");
             }
 
@@ -841,6 +895,13 @@ void populateBuffer(void){
         }
     }
 
+    // I calculate angular accelerations from the rates reported by gyro using a Savitsky Golay
+    // filter set to differentiate.  Optimal filter length determined by experiment.
+    // Use of S-G filters means that the acceleration measurement is SAVGOLHALF
+    // behind the angle and rate measurements.  As a result the fifo buffer should not be emptied
+    // so that there are fewer than SAVGOLHALF samples left in it ( see pushBatch() and doCalibration() )
+    // In addition there is a delay introduced between the bell moving and an acceleration result 
+    // being available for sending to the browser of (mean average) 0.002s * SAVGOLHALF.
     fifo.rateBuffer[fifo.head] = grabberData.lastAngularVelocity * grabberData.direction;
     fifo.angleBuffer[fifo.head] = angle;
     unsigned int currentAccelPosition = (fifo.head < SAVGOLHALF) ? (fifo.head + BUFFERSIZE) - SAVGOLHALF: fifo.head - SAVGOLHALF;
@@ -953,43 +1014,25 @@ void pullAndTransform(void){
 
 float savGol(unsigned int currentPosition){
 
-
 // from scipy.signal import savgol_coeffs
-// savgol_coeffs(51,2,deriv=1,use="dot")
+// savgol_coeffs(61,2,deriv=1,use="dot")
 static float savGolCoefficients[] = {
-       -2.26244344e-03, -2.17194570e-03, -2.08144796e-03, -1.99095023e-03,
-       -1.90045249e-03, -1.80995475e-03, -1.71945701e-03, -1.62895928e-03,
-       -1.53846154e-03, -1.44796380e-03, -1.35746606e-03, -1.26696833e-03,
-       -1.17647059e-03, -1.08597285e-03, -9.95475113e-04, -9.04977376e-04,
-       -8.14479638e-04, -7.23981900e-04, -6.33484163e-04, -5.42986425e-04,
-       -4.52488688e-04, -3.61990950e-04, -2.71493213e-04, -1.80995475e-04,
-       -9.04977376e-05, -5.69095717e-19,  9.04977376e-05,  1.80995475e-04,
-        2.71493213e-04,  3.61990950e-04,  4.52488688e-04,  5.42986425e-04,
-        6.33484163e-04,  7.23981900e-04,  8.14479638e-04,  9.04977376e-04,
-        9.95475113e-04,  1.08597285e-03,  1.17647059e-03,  1.26696833e-03,
-        1.35746606e-03,  1.44796380e-03,  1.53846154e-03,  1.62895928e-03,
-        1.71945701e-03,  1.80995475e-03,  1.90045249e-03,  1.99095023e-03,
-        2.08144796e-03,  2.17194570e-03,  2.26244344e-03};
-
-// from scipy.signal import savgol_coeffs
-// savgol_coeffs(31,2,deriv=1,use="dot")
-//static float savGolCoefficients[] = {
-//        -6.04838710e-03, -5.64516129e-03, -5.24193548e-03, -4.83870968e-03,
-//        -4.43548387e-03, -4.03225806e-03, -3.62903226e-03, -3.22580645e-03,
-//        -2.82258065e-03, -2.41935484e-03, -2.01612903e-03, -1.61290323e-03,
-//        -1.20967742e-03, -8.06451613e-04, -4.03225806e-04,  3.68916842e-20,
-//        4.03225806e-04,  8.06451613e-04,  1.20967742e-03,  1.61290323e-03,
-//        2.01612903e-03,  2.41935484e-03,  2.82258065e-03,  3.22580645e-03,
-//        3.62903226e-03,  4.03225806e-03,  4.43548387e-03,  4.83870968e-03,
-//        5.24193548e-03,  5.64516129e-03,  6.04838710e-03};
-
-// from scipy.signal import savgol_coeffs
-// savgol_coeffs(15,2,deriv=1,use="dot")
-//    static float savGolCoefficients[] = {
-//        -2.50000000e-02, -2.14285714e-02, -1.78571429e-02, -1.42857143e-02,
-//        -1.07142857e-02, -7.14285714e-03, -3.57142857e-03,  2.95770353e-16,
-//        3.57142857e-03,  7.14285714e-03,  1.07142857e-02,  1.42857143e-02,
-//        1.78571429e-02,  2.14285714e-02,  2.50000000e-02};
+       -1.58646219e-03, -1.53358012e-03, -1.48069804e-03, -1.42781597e-03,
+       -1.37493390e-03, -1.32205182e-03, -1.26916975e-03, -1.21628768e-03,
+       -1.16340561e-03, -1.11052353e-03, -1.05764146e-03, -1.00475939e-03,
+       -9.51877314e-04, -8.98995241e-04, -8.46113168e-04, -7.93231095e-04,
+       -7.40349022e-04, -6.87466949e-04, -6.34584876e-04, -5.81702803e-04,
+       -5.28820730e-04, -4.75938657e-04, -4.23056584e-04, -3.70174511e-04,
+       -3.17292438e-04, -2.64410365e-04, -2.11528292e-04, -1.58646219e-04,
+       -1.05764146e-04, -5.28820730e-05,  1.47215954e-16,  5.28820730e-05,
+        1.05764146e-04,  1.58646219e-04,  2.11528292e-04,  2.64410365e-04,
+        3.17292438e-04,  3.70174511e-04,  4.23056584e-04,  4.75938657e-04,
+        5.28820730e-04,  5.81702803e-04,  6.34584876e-04,  6.87466949e-04,
+        7.40349022e-04,  7.93231095e-04,  8.46113168e-04,  8.98995241e-04,
+        9.51877314e-04,  1.00475939e-03,  1.05764146e-03,  1.11052353e-03,
+        1.16340561e-03,  1.21628768e-03,  1.26916975e-03,  1.32205182e-03,
+        1.37493390e-03,  1.42781597e-03,  1.48069804e-03,  1.53358012e-03,
+        1.58646219e-03};
 
     unsigned int windowStartPosition = (currentPosition < SAVGOLHALF) ? (currentPosition + BUFFERSIZE) - SAVGOLHALF: currentPosition - SAVGOLHALF;
     float savGolResult=0;
@@ -1000,18 +1043,34 @@ static float savGolCoefficients[] = {
     return(savGolResult);
 }
 
-// This function calculates the area under the acceleration profile of the bell.  There is an effect (probably) caused by the 
+// These functions calculate the area under the acceleration profile of the bell.  There is an effect (probably) caused by the 
 // weight of the rope.  the difference (error) between a sine wave of amplitude "guess" and the
 // acceleration profile of the bell.  Used for calibration during ringing-up.
-float calculateArea(float guess){
+float calculateAreaB(float guess){
     float area = 0.0;
     float angleWidth,adjustedHeight;
     for(unsigned int i = 0; i < grabberData.calibrationDataCount-1; ++i){
         // Only calculate the rope weight effect going down at backstroke 
-        if(grabberData.calibrationData[(i*3)] < 345 && grabberData.calibrationData[(i*3)] > 320 && grabberData.calibrationData[(i*3)+1] < 0){
+        if(grabberData.calibrationData[(i*3)] < 350 && grabberData.calibrationData[(i*3)] > 330 && grabberData.calibrationData[(i*3)+1] < 0){
             angleWidth = fabs(grabberData.calibrationData[(i*3)] - grabberData.calibrationData[(i*3)+3]);
-            adjustedHeight = grabberData.calibrationData[(i*3)+2] - grabberData.gravityValue*sin(grabberData.calibrationData[(i*3)]*DEGREES_TO_RADIANS_MULTIPLIER) - (90.0-grabberData.calibrationData[(i*3)])*guess/360.0;
-            if(adjustedHeight > 0) adjustedHeight *= 100.0;
+            adjustedHeight = grabberData.calibrationData[(i*3)+2] - grabberData.gravityValue*sin(grabberData.calibrationData[(i*3)]*DEGREES_TO_RADIANS_MULTIPLIER) - (270.0-grabberData.calibrationData[(i*3)])*guess/180.0;
+            if(adjustedHeight > 0) adjustedHeight *= 20.0;
+//            printf("%d, %f, %f, %f, %f %f\n", i, angleWidth,adjustedHeight, grabberData.calibrationData[(i*3)], grabberData.calibrationData[(i*3)+3], grabberData.calibrationData[(i*3)] - grabberData.calibrationData[(i*3)+3]);
+            area += fabs(angleWidth*adjustedHeight);
+        }
+    }
+    return area;
+}
+
+float calculateAreaH(float guess){
+    float area = 0.0;
+    float angleWidth,adjustedHeight;
+    for(unsigned int i = 0; i < grabberData.calibrationDataCount-1; ++i){
+        // Only calculate the rope weight effect going down at handstroke
+        if(grabberData.calibrationData[(i*3)] > 10 && grabberData.calibrationData[(i*3)] < 30 && grabberData.calibrationData[(i*3)+1] > 0){
+            angleWidth = fabs(grabberData.calibrationData[(i*3)] - grabberData.calibrationData[(i*3)+3]);
+            adjustedHeight = grabberData.calibrationData[(i*3)+2] - grabberData.gravityValue*sin(grabberData.calibrationData[(i*3)]*DEGREES_TO_RADIANS_MULTIPLIER) - (90.0-grabberData.calibrationData[(i*3)])*guess/180.0;
+            if(adjustedHeight < 0) adjustedHeight *= 20.0;
 //            printf("%d, %f, %f, %f, %f %f\n", i, angleWidth,adjustedHeight, grabberData.calibrationData[(i*3)], grabberData.calibrationData[(i*3)+3], grabberData.calibrationData[(i*3)] - grabberData.calibrationData[(i*3)+3]);
             area += fabs(angleWidth*adjustedHeight);
         }
@@ -1027,9 +1086,9 @@ float calculateError(float guess){
     for(unsigned int i = 0; i < grabberData.calibrationDataCount; ++i){
         // Only calculate gravity effect going down at handstroke about where the rope is fully unwound because of fewer other effects.
         // such as vibration from strike and pulley/garter hole/rope weight interaction. 
-        if(grabberData.calibrationData[(i*3)] < 100 && grabberData.calibrationData[(i*3)] > 85 && grabberData.calibrationData[(i*3)+1] > 0){
+        if(grabberData.calibrationData[(i*3)] < 280 && grabberData.calibrationData[(i*3)] > 260 && grabberData.calibrationData[(i*3)+1] < 0){
             count += 1;
-            error += guess*sin(grabberData.calibrationData[(i*3)]*DEGREES_TO_RADIANS_MULTIPLIER) - grabberData.calibrationData[(i*3)+2];
+            error += -guess*sin(grabberData.calibrationData[(i*3)]*DEGREES_TO_RADIANS_MULTIPLIER) + grabberData.calibrationData[(i*3)+2];
         }
     }
     if(count != 0){
@@ -1053,6 +1112,7 @@ unsigned int dingDong(){
     static float rollingRates[5] = {0.0,0.0,0.0,0.0,0.0};
     static unsigned int rollingPosition = 0;
     static float baseSD = 0.0;
+    static unsigned int strikeCount = 0;
 
 // savgol_coeffs(5,2,deriv=2,use="dot")
     static float dingDongCoefficients[] = { 0.28571429, -0.14285714, -0.28571429, -0.14285714,  0.28571429 };
@@ -1089,18 +1149,30 @@ unsigned int dingDong(){
     // calculate base level of volatility and apply a bit of smoothing
     if(fifo.angleBuffer[fifo.tail] > 100 && fifo.angleBuffer[fifo.tail] < 260) baseSD = 0.8*baseSD + 0.2*SD;
 
-    if((grabberData.lastStrike == 1) && (SD > 1.7*baseSD) && (fifo.angleBuffer[fifo.tail] < 70) && (fifo.rateBuffer[fifo.tail] < -20)){
+    // assumption here is that the bell will always strike at the same angle
+    if((grabberData.lastStrike == 1) && (SD > 1.6*baseSD) && (fifo.angleBuffer[fifo.tail] < 70) && (fifo.rateBuffer[fifo.tail] < -20)){
+        strikeCount += 1;
+        if(strikeCount < 10){
+            grabberData.predictedBackstrokeStrikeAngle = (grabberData.predictedBackstrokeStrikeAngle + fifo.angleBuffer[fifo.tail])/2.0; // move predicted angle faster for the first few swings
+        } else {
+            grabberData.predictedBackstrokeStrikeAngle = 0.9*grabberData.predictedBackstrokeStrikeAngle + 0.1*fifo.angleBuffer[fifo.tail]; // more faith in result of prediction now so prefer predicted angle
+        }
+    } else if((grabberData.lastStrike == 2) && (SD > 1.6*baseSD) && (fifo.angleBuffer[fifo.tail] > 290) && (fifo.rateBuffer[fifo.tail] > 20)) {
+        strikeCount += 1;
+        if(strikeCount < 10){
+            grabberData.predictedHandstrokeStrikeAngle = (grabberData.predictedHandstrokeStrikeAngle + fifo.angleBuffer[fifo.tail])/2.0;
+        } else {
+            grabberData.predictedHandstrokeStrikeAngle = 0.9*grabberData.predictedHandstrokeStrikeAngle + 0.1*fifo.angleBuffer[fifo.tail];
+        }
+    }
+
+    if((grabberData.lastStrike == 1) && (fifo.angleBuffer[fifo.tail] < grabberData.predictedBackstrokeStrikeAngle)){
         grabberData.lastStrike = 2;
         return(2);
-    } else if((grabberData.lastStrike == 2) && (SD > 1.7*baseSD) && (fifo.angleBuffer[fifo.tail] > 290) && (fifo.rateBuffer[fifo.tail] > 20)) {
+    }
+    if((grabberData.lastStrike == 2) && (fifo.angleBuffer[fifo.tail] > grabberData.predictedHandstrokeStrikeAngle)){
         grabberData.lastStrike = 1;
         return(1);
-    } else if ((grabberData.lastStrike == 1) && (fifo.angleBuffer[fifo.tail] < 40) && (fifo.rateBuffer[fifo.tail] < 0)){ // strike not detected, fake one
-        grabberData.lastStrike = 2;
-        return(4);
-    } else if ((grabberData.lastStrike == 2) && (fifo.angleBuffer[fifo.tail] > 320) && (fifo.rateBuffer[fifo.tail] > 0)){ // strike not detected, fake one
-        grabberData.lastStrike = 1;
-        return(3);
     }
     return(0);
 }
@@ -1182,7 +1254,9 @@ void getSavedData(){
             char *ent = strtok(linein,","); 
             if(ent) grabberData.gravityValue = atof(ent);
             ent = strtok(NULL,",");
-            if(ent) grabberData.ropeValue = atof(ent);
+            if(ent) grabberData.ropeValueB = atof(ent);
+            ent = strtok(NULL,",");
+            if(ent) grabberData.ropeValueH = atof(ent);
             grabberData.calibrationState = 7;
         }
         fclose(fdGravity);
@@ -1204,7 +1278,7 @@ void setup(void){
         exit(1);
     }
 	
-    bcm2835_i2c_set_baudrate(100000); // change to 50000 for more reliable comms, saw occasional poweroff which was possibly caused by i2c lockup causing 0x8000 test in battery monitor to be true
+    bcm2835_i2c_set_baudrate(50000);
     bcm2835_i2c_setSlaveAddress(0x10);
 	
 	//  setup SPI
@@ -1424,18 +1498,24 @@ void setup(void){
     result = extractFloat(0);
     
     I2C_BUFFER[0]=7;
-    bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 7 (ropeValue)
+    bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 7 (ropeValueB)
     bcm2835_i2c_read(I2C_BUFFER,4); usleep(100);
     float result2 = extractFloat(0);
 
-    if(!isnan(result) && !isnan(result2) && result != -360){
+    I2C_BUFFER[0]=6;
+    bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 6 (ropeValueH)
+    bcm2835_i2c_read(I2C_BUFFER,4); usleep(100);
+    float result3 = extractFloat(0);
+
+    if(!isnan(result) && !isnan(result2) && !isnan(result3) && result != -360){
         grabberData.gravityValue = result;
-        grabberData.ropeValue = result2;
+        grabberData.ropeValueB = result2;
+        grabberData.ropeValueH = result3;
         grabberData.calibrationState = 7;
         FILE *fdGravity;
         fdGravity = fopen("/tmp/BBgravity","w");
         if(fdGravity != NULL) {
-            fprintf(fdGravity,"%+08.1f,%+08.1f\n", grabberData.gravityValue, grabberData.ropeValue);
+            fprintf(fdGravity,"%+08.1f,%+08.1f,%+08.1f\n", grabberData.gravityValue, grabberData.ropeValueB, grabberData.ropeValueH);
             fclose(fdGravity);
         }
     }

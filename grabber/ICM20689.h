@@ -72,7 +72,8 @@
 void setup(void);
 void start(uint32_t dataRate);
 void calculate(float gx, float gy, float gz, float ax, float ay, float az, float h);
-float calculateArea(float guess);
+float calculateAreaH(float guess);
+float calculateAreaB(float guess);
 float calculateError(float guess);
 void pushData(void);
 void doCalibration(void);

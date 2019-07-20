@@ -21,7 +21,7 @@
 * bell rope.  The Bell-Boy uses rotational acceleration of the bell as a proxy for force applied.  The
 * hardware is currently a Pi Zero running Arch Linux.
 
-* This program pulls calibration data from the Arduino. 
+* This program pulls calibration data from the Arduino and prints it to the command line. 
 * 
 * */
 
@@ -56,7 +56,7 @@ int main(int argc, char const *argv[]){
         printf("Unable to inititalise i2c\n");
         exit(1);
     }
-    bcm2835_i2c_set_baudrate(100000);
+    bcm2835_i2c_set_baudrate(50000);
     bcm2835_i2c_setSlaveAddress(0x10);
 
 /*
