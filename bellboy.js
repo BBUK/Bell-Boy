@@ -1359,29 +1359,20 @@ function fillDiagnosticsModal(){
     }
 
     ctxDiagnostics.stroke();
-
     for(i=0;i<sample.length;++i){
-        if(sample[i][3] == 1 || sample[i][3] == 3){
+        if(sample[i][3] == 1){
             if(!document.getElementById('diagHand').checked) continue;
             ctxDiagnostics.beginPath();
-            if(sample[i][3] == 1){
-                ctxDiagnostics.strokeStyle = "green";
-            } else {
-                ctxDiagnostics.strokeStyle = "red";
-            }
+            ctxDiagnostics.strokeStyle = "green";
             ctxDiagnostics.moveTo(40+(sample[i][0])*2,180);
             ctxDiagnostics.lineTo(35+(sample[i][0])*2,175);
             ctxDiagnostics.lineTo(45+(sample[i][0])*2,175);
             ctxDiagnostics.lineTo(40+(sample[i][0])*2,180);
             ctxDiagnostics.stroke();
-        } else if(sample[i][3] == 2 || sample[i][3] == 4){
+        } else if(sample[i][3] == 2){
             if(!document.getElementById('diagBack').checked) continue;
             ctxDiagnostics.beginPath();
-            if(sample[i][3] == 2){
-                ctxDiagnostics.strokeStyle = "green";
-            } else {
-                ctxDiagnostics.strokeStyle = "red";
-            }
+            ctxDiagnostics.strokeStyle = "green";
             ctxDiagnostics.moveTo(40+(sample[i][0])*2,120);
             ctxDiagnostics.lineTo(35+(sample[i][0])*2,125);
             ctxDiagnostics.lineTo(45+(sample[i][0])*2,125);

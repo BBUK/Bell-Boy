@@ -12,9 +12,11 @@ sudo systemctl restart dphys-swapfile
 mkdir ceres-bin
 cd ceres-bin
 ccmake ../ceres-solver-1.14.0
-# 
+# configure
 # set build testing to no
 # set build examples to no
+# configure
+# generate
 make
 #(make will take a long while)
 sudo make install
