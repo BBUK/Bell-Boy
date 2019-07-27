@@ -238,7 +238,7 @@ void sig_handler(int signum) {
 #define PUSHBATCH 80
 // must be bigger than SAVGOLHALF + PUSHBATCH
 #define BUFFERSIZE 512
-// circulat buffer used by populateBuffer() to add samples and pushData() or doCalibration() to consume them
+// circular buffer used by populateBuffer() to add samples and pushData() or doCalibration() to consume them
 struct {
     unsigned int head;
     unsigned int tail;
@@ -605,9 +605,9 @@ void doCalibration(void){
                 if(!(count % 2500)) printf("ESWI:%d\n",(5-grabberData.calibrationStrokeCount) == 0 ? 1 : (5-grabberData.calibrationStrokeCount));  // sends signal to browser to indicate that swings need to continue
                 if(fifo.available < SAVGOLLENGTH) break;
                 for(int counter = fifo.available; counter > SAVGOLHALF; --counter){
-                    if((fifo.angleBuffer[fifo.tail] < 355 && fifo.angleBuffer[fifo.tail] > 325 && fifo.rateBuffer[fifo.tail] < 0) ||
+                    if((fifo.angleBuffer[fifo.tail] < 345 && fifo.angleBuffer[fifo.tail] > 315 && fifo.rateBuffer[fifo.tail] < 0) ||
                         (fifo.angleBuffer[fifo.tail] < 280 && fifo.angleBuffer[fifo.tail] > 260 && fifo.rateBuffer[fifo.tail] < 0) ||
-                        (fifo.angleBuffer[fifo.tail] < 35 && fifo.angleBuffer[fifo.tail] > 5 && fifo.rateBuffer[fifo.tail] > 0)){
+                        (fifo.angleBuffer[fifo.tail] < 45 && fifo.angleBuffer[fifo.tail] > 15 && fifo.rateBuffer[fifo.tail] > 0)){
                         if(grabberData.calibrationDataCount < 24000){
                             grabberData.calibrationData[grabberData.calibrationDataCount*3] = fifo.angleBuffer[fifo.tail];
                             grabberData.calibrationData[(grabberData.calibrationDataCount*3)+1] = fifo.rateBuffer[fifo.tail];
@@ -1052,10 +1052,10 @@ float calculateAreaB(float guess){
     float angleWidth,adjustedHeight;
     for(unsigned int i = 0; i < grabberData.calibrationDataCount-1; ++i){
         // Only calculate the rope weight effect going down at backstroke 
-        if(grabberData.calibrationData[(i*3)] < 350 && grabberData.calibrationData[(i*3)] > 330 && grabberData.calibrationData[(i*3)+1] < 0){
+        if(grabberData.calibrationData[(i*3)] < 340 && grabberData.calibrationData[(i*3)] > 320 && grabberData.calibrationData[(i*3)+1] < 0){
             angleWidth = fabs(grabberData.calibrationData[(i*3)] - grabberData.calibrationData[(i*3)+3]);
             adjustedHeight = grabberData.calibrationData[(i*3)+2] - grabberData.gravityValue*sin(grabberData.calibrationData[(i*3)]*DEGREES_TO_RADIANS_MULTIPLIER) - (270.0-grabberData.calibrationData[(i*3)])*guess/120.0;
-            if(adjustedHeight > 0) adjustedHeight *= 20.0;
+            if(adjustedHeight > 0) adjustedHeight *= 50.0;
 //            printf("%d, %f, %f, %f, %f %f\n", i, angleWidth,adjustedHeight, grabberData.calibrationData[(i*3)], grabberData.calibrationData[(i*3)+3], grabberData.calibrationData[(i*3)] - grabberData.calibrationData[(i*3)+3]);
             area += fabs(angleWidth*adjustedHeight);
         }
@@ -1068,10 +1068,10 @@ float calculateAreaH(float guess){
     float angleWidth,adjustedHeight;
     for(unsigned int i = 0; i < grabberData.calibrationDataCount-1; ++i){
         // Only calculate the rope weight effect going down at handstroke
-        if(grabberData.calibrationData[(i*3)] > 10 && grabberData.calibrationData[(i*3)] < 30 && grabberData.calibrationData[(i*3)+1] > 0){
+        if(grabberData.calibrationData[(i*3)] > 20 && grabberData.calibrationData[(i*3)] < 40 && grabberData.calibrationData[(i*3)+1] > 0){
             angleWidth = fabs(grabberData.calibrationData[(i*3)] - grabberData.calibrationData[(i*3)+3]);
             adjustedHeight = grabberData.calibrationData[(i*3)+2] - grabberData.gravityValue*sin(grabberData.calibrationData[(i*3)]*DEGREES_TO_RADIANS_MULTIPLIER) - (90.0-grabberData.calibrationData[(i*3)])*guess/120.0;
-            if(adjustedHeight < 0) adjustedHeight *= 20.0;
+            if(adjustedHeight < 0) adjustedHeight *= 50.0;
 //            printf("%d, %f, %f, %f, %f %f\n", i, angleWidth,adjustedHeight, grabberData.calibrationData[(i*3)], grabberData.calibrationData[(i*3)+3], grabberData.calibrationData[(i*3)] - grabberData.calibrationData[(i*3)+3]);
             area += fabs(angleWidth*adjustedHeight);
         }
