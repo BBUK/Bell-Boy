@@ -50,12 +50,12 @@ gcc calibrate.c -o calibrate -lbcm2835
 # run calibrate
 # enter SAMP: to get sample period a few times - check numbers are sane and stable (on multiple entries) - near to 0.002 for sample period
 # enter CALI: to start calibration run
-# keep device stable for at least 50 secs and then move into 30-40 different positions each stable for at least 3-4 seconds(ish)
+# keep device stable for at least 50 secs and then move into 20-30 different positions each stable for at least 3-4 seconds(ish)
 # ensure that there is a full range of positions (important)
 # if EOVF: appears then ctrl-c to exit, reboot and try again
 # enter STCA:
 # (will now run imu_tk calibration)
-# ???high residuals (>4) are an indication that something is not right 
+# ???high residuals (>2) are an indication that something is not right 
 # OK for EOVF: to appear after calibration is finished
 # enter SAVE:
 # check numbers are sane:

@@ -372,7 +372,7 @@ function parseResult(dataBack) {
         }
         if (switchPoints.length == 0 || sample[switchPoints[0]][0] > 180) switchPoints.unshift(3); // a "just in case" should start at stand not be detected
         setStatus(swingStarts.length.toString() + " strokes found.");
-        getAveragePullStrengths();
+        calculatePullStrengths();
         document.getElementById("openSelect").options.length = 0;
         ws.send("FILE:");
         return;
@@ -530,21 +530,27 @@ function playbackSample(){
     }
 }
 
-function getAveragePullStrengths(){
-    averagePullStrength=[];
+function calculatePullStrengths(){
+    pullStrengths=[];
     var totalPull = 0.0;
     if(switchPoints.length == 0) return;
     var i = null, j=null, k=null,m = null;
     for (j=0; j<switchPoints.length; ++j){
+        totalPull=0.0;
         i=sample[switchPoints[j]][0]; // angle at direction change
+//        for (k=switchPoints[j]; k>0 && Math.abs(sample[k][0] - i) < 3 ;k--); // find point 5 degrees back from direction change
+//        totalPull = sample[k][1]*sample[k][1];
+//        for (m=1;(k+m)<sample.length && Math.abs(sample[k+m][0] - i) < 3; m++); // add up accns to point 5 degrees forward from direction change
+//        totalPull += sample[m][1]*sample[m][1];
+
         for (k=switchPoints[j]; k>0 && Math.abs(sample[k][0] - i) < 5 ;k--); // find point 5 degrees back from direction change
-        totalPull = 0.0;
         for (m=1;(k+m)<sample.length && Math.abs(sample[k+m][0] - i) < 5; m++){ // add up accns to point 5 degrees forward from direction change
             pull = Math.abs(sample[k+m][2]);
             if(pull < 25) continue;  // ignore stuff below noise floor
             totalPull += pull;
         }
-        averagePullStrength[averagePullStrength.length] = totalPull/m;
+        pullStrengths[pullStrengths.length] = totalPull/m;
+//        console.log((totalPull/m).toString() + " ");
     }
 }
 
@@ -634,12 +640,12 @@ function drawStroke(){
         if(currentDrawRing < 0) continue;
         if(currentDrawRing > ringTimes.length -1) break;
         if(currentDrawRing > switchPoints.length -1) break;
-        if(currentDrawRing > averagePullStrength.length -1) break;
+        if(currentDrawRing > pullStrengths.length -1) break;
         offset = (i*ATstepWidth)+ctxATt.canvas.width/2;
         if(offset > ctxATt.canvas.width) break;
         if(offset < -ATstepWidth) continue;
         time = ringTimes[currentDrawRing];
-        height = 10 + 25 * (averagePullStrength[currentDrawRing]/scaleValue);
+        height = 10 + 25 * (pullStrengths[currentDrawRing]/scaleValue);
         if(height > 30) height = 30;
         
         if(!(i%2)){
@@ -730,12 +736,12 @@ function drawStrokeT(){
         if(currentDrawRing < 0) continue;
         if(currentDrawRing > TringTimes.length -1) break;
         if(currentDrawRing > TswitchPoints.length -1) break;
-        if(currentDrawRing > TaveragePullStrength.length -1) break;
+        if(currentDrawRing > TpullStrengths.length -1) break;
         offset = (i*ATstepWidth)+ctxATt.canvas.width/2;
         if(offset > ctxATt.canvas.width) break;
         if(offset < -ATstepWidth) continue;
         time = TringTimes[currentDrawRing];
-        height = 10 + 25 * (TaveragePullStrength[currentDrawRing]/scaleValue);
+        height = 10 + 25 * (TpullStrengths[currentDrawRing]/scaleValue);
         if(height > 30) height = 30;
 
         if(!(i%2)){
@@ -1762,7 +1768,7 @@ favIcon.onclick=function(){
 
     template=[];
     TswingStarts=[];
-    TaveragePullStrength=[];
+    TpullStrengths=[];
     TringTimes=[]
     TswitchPoints=[]
     
@@ -1771,7 +1777,7 @@ favIcon.onclick=function(){
     var i = 0;
     for (i = 0; i<sample.length; ++i) template[template.length]=sample[i].slice();
     for (i = 0; i<swingStarts.length; ++i) TswingStarts[TswingStarts.length]=swingStarts[i];
-    for (i = 0; i<averagePullStrength.length; ++i) TaveragePullStrength[TaveragePullStrength.length]=averagePullStrength[i];
+    for (i = 0; i<pullStrengths.length; ++i) TpullStrengths[TpullStrengths.length]=pullStrengths[i];
     for (i = 0; i<ringTimes.length; ++i) TringTimes[TringTimes.length]=ringTimes[i];
     for (i = 0; i<switchPoints.length; ++i) TswitchPoints[TswitchPoints.length]=switchPoints[i];
 
@@ -1796,7 +1802,7 @@ unstarIcon.onclick=function(){
     template=[];
     TswingStarts=[];
     TcurrentSwingDisplayed=null;
-    TaveragePullStrength = [];
+    TpullStrengths = [];
     clearTemplates();
     currentStatus &= ~TEMPLATEDISPLAYED;
     currentStatus &= ~SKIPTEMPLATE;

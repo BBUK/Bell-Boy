@@ -93,6 +93,7 @@
 
 void save(void);
 void arduinoWriteFloat(uint8_t reg,float value);
+void fillBuffer(void);
 
 #ifndef NULL
 #define NULL 0
@@ -111,7 +112,7 @@ unsigned char I2C_BUFFER[16];
 int local_count = 0;
 char local_outbuf[4000];
 
-const unsigned int LOOPSLEEP = 50000;  // main loop processes every 0.05 sec.  Max number of samples in FIFO is 341.  Should be OK.
+const unsigned int LOOPSLEEP = 30000;  // main loop processes every 0.03 sec.  Max number of samples in FIFO is 341.  Should be OK.
 
 struct {
     float samplePeriod;
@@ -135,6 +136,20 @@ union {
     uint8_t  _bytes[sizeof(float)];
 } floatConv;
  
+#define BUFFERSIZE 512
+struct {
+    unsigned int head;
+    unsigned int tail;
+    unsigned int available;
+    float timeStamp[BUFFERSIZE];
+    float gx[BUFFERSIZE];
+    float gy[BUFFERSIZE];
+    float gz[BUFFERSIZE];
+    float ax[BUFFERSIZE];
+    float ay[BUFFERSIZE];
+    float az[BUFFERSIZE];
+} buffer = { .head =0, .tail = 0, .available = 0 };
+
 volatile sig_atomic_t sig_exit = 0;
 void sig_handler(int signum) {
     if (signum == SIGINT) fprintf(stderr, "received SIGINT\n");
@@ -186,6 +201,9 @@ int main(int argc, char const *argv[]){
                     continue;
                 }
 				CALIBRATING = 1;
+                buffer.head = 0;
+                buffer.tail = 0;
+                buffer.available = 0;
                 continue;
             }
             if(strcmp("STCA:", command) == 0) {
@@ -498,12 +516,9 @@ float timer(void){
     return (result/(200*loops));
 }
 
-void pullData(void){
+void fillBuffer(void){
     float fifoData[6];
-    char local_outbuf_line[150];
-
     int count = readFIFOcount();
-
     if (count > 4000){ // overflow (or nearly so).  If you see this then stop the calibration and start again
         printf("\nEOVF:\n");
         //clear data paths and reset FIFO (keep i2c disabled)
@@ -515,20 +530,37 @@ void pullData(void){
     }
     if(count < 96) return;
     
-    while(count >= 12){
+    while(count >= 12 && buffer.available < BUFFERSIZE){
         count -= 12;
-
         readFIFO(fifoData);
-        if(CALIBRATING){
-            sprintf(local_outbuf_line,"%+.8e %+.8e %+.8e %+.8e %+.8e %+.8e %+.8e\n", calibrationTimestamp, fifoData[3] * DEGREES_TO_RADIANS_MULTIPLIER,fifoData[4] * DEGREES_TO_RADIANS_MULTIPLIER,fifoData[5] * DEGREES_TO_RADIANS_MULTIPLIER, fifoData[0] * g0 ,fifoData[1] * g0,fifoData[2] * g0);
-            if (local_count + strlen(local_outbuf_line) > (sizeof local_outbuf -2)) {
-                fputs(local_outbuf, fdCalibrationData);
-                fflush(fdCalibrationData);
-                local_count = 0;
-            }
-            local_count += sprintf(&local_outbuf[local_count],local_outbuf_line);
-            calibrationTimestamp += calibrationData.samplePeriod;
+        buffer.timeStamp[head] = calibrationTimestamp;
+        buffer.gx[buffer.head] = fifoData[3] * DEGREES_TO_RADIANS_MULTIPLIER;
+        buffer.gy[buffer.head] = fifoData[4] * DEGREES_TO_RADIANS_MULTIPLIER;
+        buffer.gz[buffer.head] = fifoData[5] * DEGREES_TO_RADIANS_MULTIPLIER;
+        buffer.ax[buffer.head] = fifoData[0] * g0;
+        buffer.ay[buffer.head] = fifoData[1] * g0;
+        buffer.az[buffer.head] = fifoData[2] * g0;
+        buffer.head = (buffer.head + 1) % BUFFERSIZE;
+        buffer.available += 1;
+        calibrationTimestamp += calibrationData.samplePeriod;
+    }
+    if(buffer.available == BUFFERSIZE) printf("Internal buffer overflow\nEOVF:\n");
+}
+
+void pullData(void){
+    char local_outbuf_line[150];
+    fillBuffer();
+    if(CALIBRATING && buffer.available > 1){
+        sprintf(local_outbuf_line,"%+.7e %+.7e %+.7e %+.7e %+.7e %+.7e %+.7e\n", buffer.timeStamp[buffer.tail],buffer.gx[buffer.tail],buffer.gy[buffer.tail],buffer.gz[buffer.tail], buffer.ax[buffer.tail] ,buffer.ay[buffer.tail],buffer.az[buffer.tail]);
+        if (local_count + strlen(local_outbuf_line) > (sizeof local_outbuf -2)) {
+            fputs(local_outbuf, fdCalibrationData);
+            fflush(fdCalibrationData);
+            local_count = 0;
+            fillBuffer();
         }
+        local_count += sprintf(&local_outbuf[local_count],local_outbuf_line);
+        buffer.tail = (buffer.tail + 1) % BUFFERSIZE;
+        buffer.available -= 1;
     }
 }
 
