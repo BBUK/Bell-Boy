@@ -40,13 +40,22 @@
 * The main loop:
 *       *  checks the Arduino for battery life and reports this to the browser
 *       *  checks stdin for commands from the browser (see below) and processes these commands
-*       *  calls pushData() to see if any data needs processing and (if a run is being recorded), pushing samples to the browser
+*       *  calls doCalibration() if device has not yet been calibrated on the bell and pushData() otherwise
 * setup:
+*       * called pre-main loop
 *       * configures the IMU device over SPI
+*       * checks to see if device has woken from sleep and, if so, collects calibration data from Arduino
 *       * pulls calibration data from the Arduino over I2C
+* doCalibration
+*       * follows a multi-step calibration process
+*       * bell-down and stable for around 30 seconds to remove gyro biasses and to get BDC adjustment (tareValue)
+*       * bell is rung up and set
+*       * bell is then rung full circle (at least 5 full strokes 10 strikes), data is collected
+*       * data is processed to calculate calibration values (principally gravityValue)
 * pushData
-*       * calls pullData
+*       * calls populateBuffer()
 *       * pushes angle, rate and acceleration to the browser
+*       * also calls dingDong() which checks to see if a strike needs to be recorded
 * populateBuffer is called by pushData
 *       * checks to see if enough data is in the two IMUs' FIFOs to be pulled and processed
 *       * calls pullAndTransform to actually pull the data and process it into angles
@@ -54,14 +63,23 @@
 *       * acceleration is calculated using a Savitsky-Golay filter ( savGol() )
 * savgol
 *       * processes angular rate data to create angular acceleration data
+* dingDong
+*       * checks to see if we are in faked strike mode (tied clappers) and, if we are, reports strike at
+*       * the appropriate time
+*       * if not in faked strike mode, double differentiates angular velocity data (slightly smoothed)
+*       * using a Savitsky-Golay filter (a different one to that used by SavGol() )
+*       * and checks for a big increase in rate of acceleration of bell and takes that as a strike
+*       * assumes bell strikes at the same angle (appears to be true) and averages results of detected
+*       * strikes using a complementary filter (averaging not really necessary but guards against
+*       * possible non-detection)
 * pullAndTransform
-*       * called by pullData and by doCalibration(), takes data from the IMUs (over SPI) averages the data 
-*       * from each of them and then adjusts for bias, scale and misalignment, checks to see if the bell 
-*       * has been stationary for a while and if it has it takes the opportunity to recalculate the gyro biasses
+*       * called by pullData and by doCalibration(), takes data from the IMU (over SPI) and then 
+*       * adjusts for bias, scale and misalignment, checks to see if the bell has been stationary 
+*       * for a while and if it has it takes the opportunity to recalculate the gyro biasses
 *       * calls calculate() function to update rotation quaternion and Euler angles
 * calculate
 *       * called by pullAndTransform()
-*       * straightforward Mahony complementary filter as wriiten in quaternion form by Madgwick
+*       * uses the well-known Mahony complementary filter as written in quaternion form by Madgwick
 * startRun
 *       * called when the user has indicated that a recording should be started
 *       * works out which way the bell went up (the device can be mounted either side of the headstock)
@@ -1055,7 +1073,7 @@ float calculateAreaB(float guess){
         if(grabberData.calibrationData[(i*3)] < 340 && grabberData.calibrationData[(i*3)] > 320 && grabberData.calibrationData[(i*3)+1] < 0){
             angleWidth = fabs(grabberData.calibrationData[(i*3)] - grabberData.calibrationData[(i*3)+3]);
             adjustedHeight = grabberData.calibrationData[(i*3)+2] - grabberData.gravityValue*sin(grabberData.calibrationData[(i*3)]*DEGREES_TO_RADIANS_MULTIPLIER) - (270.0-grabberData.calibrationData[(i*3)])*guess/120.0;
-            if(adjustedHeight > 0) adjustedHeight *= 50.0;
+            if(adjustedHeight > 0) adjustedHeight *= 30.0;
 //            printf("%d, %f, %f, %f, %f %f\n", i, angleWidth,adjustedHeight, grabberData.calibrationData[(i*3)], grabberData.calibrationData[(i*3)+3], grabberData.calibrationData[(i*3)] - grabberData.calibrationData[(i*3)+3]);
             area += fabs(angleWidth*adjustedHeight);
         }
@@ -1071,7 +1089,7 @@ float calculateAreaH(float guess){
         if(grabberData.calibrationData[(i*3)] > 20 && grabberData.calibrationData[(i*3)] < 40 && grabberData.calibrationData[(i*3)+1] > 0){
             angleWidth = fabs(grabberData.calibrationData[(i*3)] - grabberData.calibrationData[(i*3)+3]);
             adjustedHeight = grabberData.calibrationData[(i*3)+2] - grabberData.gravityValue*sin(grabberData.calibrationData[(i*3)]*DEGREES_TO_RADIANS_MULTIPLIER) - (90.0-grabberData.calibrationData[(i*3)])*guess/120.0;
-            if(adjustedHeight < 0) adjustedHeight *= 50.0;
+            if(adjustedHeight < 0) adjustedHeight *= 30.0;
 //            printf("%d, %f, %f, %f, %f %f\n", i, angleWidth,adjustedHeight, grabberData.calibrationData[(i*3)], grabberData.calibrationData[(i*3)+3], grabberData.calibrationData[(i*3)] - grabberData.calibrationData[(i*3)+3]);
             area += fabs(angleWidth*adjustedHeight);
         }

@@ -58,7 +58,7 @@ pacman-key --populate archlinuxarm
 pacman-key --refresh
 pacman -Syu --noconfirm || { echo "Failed pacman -Syu.  Exiting"; exit 1; }
 sync
-pacman -S --noconfirm --needed wget samba bzip2 screen tmux hostapd crda samba base-devel i2c-tools unzip dhcp git || { echo "Failed downloading packages.  Exiting"; exit 1; }
+pacman -S --noconfirm --needed wget samba bzip2 screen hostapd crda base-devel i2c-tools unzip dhcp git || { echo "Failed downloading packages.  Exiting"; exit 1; }
 
 echo -e '\nWIRELESS_REGDOM="GB"\n' >> /etc/conf.d/wireless-regdom
 
@@ -83,9 +83,10 @@ ssid=Bell-Boy
 country_code=GB
 channel=11
 hw_mode=g
-wmm_enabled=1
-ieee80211d=1
-ieee80211n=1
+wmm_enabled=0
+macaddr_acl=0
+auth_algs=1
+ignore_broadcast_ssid=0
 HDHD
 
 tee /etc/systemd/system/ap0.service <<HDHD || { echo "Unable to write dhcpd4 service file - exiting"; exit 1; }
@@ -108,6 +109,8 @@ ExecStart=/usr/bin/dhcpd -4 -q -cf /etc/dhcpd.conf -pf /run/ap.pid wlan0
 ExecStopPost=/usr/bin/systemctl stop hostapd
 ExecStopPost=-/usr/bin/ip link set dev wlan0 down
 KillSignal=SIGINT
+Restart=on-failure
+RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
@@ -147,6 +150,8 @@ ExecStart=/usr/bin/dhcpd -4 -q -cf /etc/dhcpd.conf -pf /run/ap.pid wlan1
 ExecStopPost=/usr/bin/systemctl stop hostapd
 ExecStopPost=-/usr/bin/ip link set dev wlan1 down
 KillSignal=SIGINT
+Restart=on-failure
+RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
@@ -227,9 +232,9 @@ chmod -R 777 /data
 
 # setup bcm2835
 cd ~
-wget http://www.airspayce.com/mikem/bcm2835/bcm2835-1.57.tar.gz || { echo "Unable to download BCM2835 library. Exiting"; exit 1; }
-tar xzvf bcm2835-1.57.tar.gz
-cd bcm2835-1.57
+wget http://www.airspayce.com/mikem/bcm2835/bcm2835-1.59.tar.gz || { echo "Unable to download BCM2835 library. Exiting"; exit 1; }
+tar xzvf bcm2835-1.59.tar.gz
+cd bcm2835-1.59
 ./configure
 make
 make check
