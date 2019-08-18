@@ -110,6 +110,7 @@
 * (l)   PLRD: play and record operation.
 * (m)   BELS: bell data. Format: numberofbells(int),CPM(float),openHandstroke(float), manualtimefromBDC(float)
 * (o)   SLEP:[number] go to sleep for [number] of half hour units.
+* (p)   MAXF: requests maximum amount of samples held on on-chip FIFO buffer - for testing higer sample rates
 *
 * There are the following responses back to the user's browser:
 * (i)    STPD: tells the browser that the device has sucessfully stopped sampling
@@ -140,6 +141,7 @@
 * (xxi)  ESET: Ask user to set bell
 * (xxii) EFIL: end sending of FILE: data
 * (xxiii)EDEF: Some problem with loading calibration data. Default (uncalibrated) valued used.
+* (xxiv) MAXF: result of MAXF command
 */
 
 #include <math.h>
@@ -230,6 +232,7 @@ struct {
     unsigned int lastStrikePushCounter;
     unsigned int lastStrike; // 2 = last chime was at backstroke, 1= last chime at handstroke
     unsigned int bellNumber;
+    unsigned int maxFIFO;
     float CPM;
     float openHandstroke;
 } grabberData = {.samplePeriod = 0.002, .accBiasX=0, .accBiasY=0, .accBiasZ = 0,
@@ -241,7 +244,7 @@ struct {
                     .tareValue = 0.0 , .torn = 0, .gravityValue = 0.0, .ropeValueH = 0, .ropeValueB = 0, .direction = 0, .calibrationState = 0, 
                     .calibrationDataCount = 0, .calibrationStrokeCount = 0, .stable = 0, .bellNumber = 6, .CPM = 31.0, 
                     .openHandstroke = 1.0, .manualStrike = 0, .manualTimefromBDC = 300, .lastStrike = 2, .predictedHandstrokeStrikeAngle=300.0,
-                    .predictedBackstrokeStrikeAngle=60.0};
+                    .predictedBackstrokeStrikeAngle=60.0, .maxFIFO = 0};
 
 // only really important when run from command line
 volatile sig_atomic_t sig_exit = 0;
@@ -380,6 +383,11 @@ int main(int argc, char const *argv[]){
                 if(RUNNING) continue;
                 EYECANDY = 1;
                 continue;
+            }
+            if(strcmp("MAXF:", command) == 0) {
+                printf("MAXF:%f\n",grabberData.maxFIFO);
+                grabberData.maxFIFO = 0;
+                continue;            
             }
             if(strcmp("STEC:", command) == 0) {
                 EYECANDY = 0;
@@ -565,13 +573,7 @@ void doCalibration(void){
     static unsigned int count = 0;
 
     int FIFOcount = readFIFOcount();
-    if (FIFOcount > 4000){
-        printf("\nEOVF:\n");
-        writeRegister(ICM20689_USER_CTRL,0x15); // reset FIFO
-        usleep(1000);
-        writeRegister(ICM20689_USER_CTRL,0x50);
-        return;
-    }
+    if (FIFOcount > 4000){ resetFIFO(); return; }
 
     if(FIFOcount < 48) return;
    
@@ -746,7 +748,7 @@ void pushData(void){
     int remote_count = 0;
     int strike;
     float accn, taccn;
-    static float nudgeAngle= 0;  // delete this and code below if not needed
+    static float nudgeAngle= 0.0;  // delete this and code below if not needed
     static int nudgeCount = 0;
     static int switchCount = 0;
     static char detailsString[32];
@@ -755,16 +757,7 @@ void pushData(void){
 
     int count = readFIFOcount();
 
-    if (count > 4000){ // overflow (or nearly so)
-        printf("\nEOVF:\n"); //shouldn't happen
-        //clear data paths and reset FIFO (keep i2c disabled)
-        writeRegister(ICM20689_USER_CTRL,0x15);
-        usleep(1000);
- 
-        //restart FIFO - keep i2c disabled
-        writeRegister(ICM20689_USER_CTRL,0x50);
-        return;
-    }
+    if (count > 4000) { resetFIFO(); return; }
 
     if(count < 12) return;
 
@@ -795,9 +788,11 @@ void pushData(void){
         taccn = fifo.accelBuffer[fifo.tail];
         accn = fifo.accelBuffer[lastTail];
         if(taccn * accn <= 0.0 && fifo.angleBuffer[fifo.tail] > 170.0 && fifo.angleBuffer[fifo.tail] < 190.0  && nudgeCount == 0) {
-            float nudgeFactor = accn /(accn - taccn);
-            nudgeAngle = (fifo.angleBuffer[lastTail] + nudgeFactor*(fifo.angleBuffer[fifo.tail]-fifo.angleBuffer[lastTail])) - 180.0;
+            float nudgeFactor = 0.0;
+            if (accn - taccn != 0.0) nudgeFactor = accn /(accn - taccn); // wise to do DIV0 check but can only happen with two zero acceleration readings
+            nudgeAngle = 180-(fifo.angleBuffer[lastTail] + nudgeFactor*(fifo.angleBuffer[fifo.tail]-fifo.angleBuffer[lastTail]));  // difference from 180 at which BDC occurs (i.e error)
             nudgeCount = 10;
+            if
             grabberData.lastBDC = grabberData.pushCounter;
             value = nudgeAngle; // report BDC point
             data = 8;
@@ -1125,7 +1120,7 @@ float calculateError(float guess){
 // this jumps suddenly (by 1.5x), a strike is recorded.
 // Tested on heavy and light bells and produces sane and consistent results +- 10ms or so.
 // Need to test on plain bearing bells
-// returns 0 = nothing, 1=handstroke, 2=backstroke, 3=fake handstroke, 4=fake backstroke
+// returns 0 = nothing, 1=handstroke, 2=backstroke
 unsigned int dingDong(){
     static float rollingValues[5] = {8,8,8,8,8};
     static float rollingRates[5] = {0.0,0.0,0.0,0.0,0.0};
@@ -1571,33 +1566,36 @@ float extractFloat(uint8_t index){
 }
 
 uint16_t readFIFOcount(){
-    return ((uint16_t)readRegister(ICM20689_FIFO_COUNTH) << 8) + readRegister(ICM20689_FIFO_COUNTL); 
+    uint16_t result;
+    result = (uint16_t)readRegister(ICM20689_FIFO_COUNTH) << 8) + readRegister(ICM20689_FIFO_COUNTL;
+    if(result > grabberData.maxFIFO) grabber.maxFIFO = result;
+    return(result); 
+}
+
+void resetFIFO(void){
+    printf("\nEOVF:\n");
+    //clear data paths and reset FIFO (keep i2c disabled)
+    writeRegister(ICM20689_USER_CTRL,0x15);
+    usleep(1000);
+
+    //restart FIFO - keep i2c disabled
+    writeRegister(ICM20689_USER_CTRL,0x50);
+    return;
 }
 
 void readFIFO(float* values){
-    float temp0;
     SPI_BUFFER[0] = ICM20689_FIFO_R_W | 0x80;
     for(uint8_t i = 1; i<13; ++i){
         SPI_BUFFER[i] = 0;  
     }
     bcm2835_spi_transfern(SPI_BUFFER,13);
-    values[0]=((uint16_t)SPI_BUFFER[1] << 8) + SPI_BUFFER[2]; 
-    values[1]=((uint16_t)SPI_BUFFER[3] << 8) + SPI_BUFFER[4];
-    values[2]=((uint16_t)SPI_BUFFER[5] << 8) + SPI_BUFFER[6];
-    values[3]=((uint16_t)SPI_BUFFER[7] << 8) + SPI_BUFFER[8]; 
-    values[4]=((uint16_t)SPI_BUFFER[9] << 8) + SPI_BUFFER[10];
-    values[5]=((uint16_t)SPI_BUFFER[11] << 8) + SPI_BUFFER[12];
-
     // remapping of axes X->Z Y->X  X->Y
-    temp0=values[0];
-    values[0]=values[1];
-    values[1]=values[2];
-    values[2]=temp0;
-
-    temp0=values[3];
-    values[3]=values[4];
-    values[4]=values[5];
-    values[5]=temp0;
+    values[1]=((uint16_t)SPI_BUFFER[1] << 8) + SPI_BUFFER[2]; 
+    values[2]=((uint16_t)SPI_BUFFER[3] << 8) + SPI_BUFFER[4];
+    values[0]=((uint16_t)SPI_BUFFER[5] << 8) + SPI_BUFFER[6];
+    values[4]=((uint16_t)SPI_BUFFER[7] << 8) + SPI_BUFFER[8]; 
+    values[5]=((uint16_t)SPI_BUFFER[9] << 8) + SPI_BUFFER[10];
+    values[3]=((uint16_t)SPI_BUFFER[11] << 8) + SPI_BUFFER[12];
 
     for(int i=0; i<3; ++i){
         if(values[i] >= 0x8000) values[i] -= 0x10000;

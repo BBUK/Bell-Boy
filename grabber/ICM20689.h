@@ -85,6 +85,7 @@ void writeRegister(uint8_t reg, uint8_t value);
 uint8_t readRegister(uint8_t reg);
 void writeRegisterBits(uint8_t reg, uint8_t mask, uint8_t value);
 uint16_t readFIFOcount();
+void resetFIFO(void);
 void populateBuffer(void);
 float extractFloat(uint8_t index);
 void pullAndTransform(void);
