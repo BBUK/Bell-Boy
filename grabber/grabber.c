@@ -160,6 +160,7 @@
 #include <dirent.h>
 #include "ICM20689.h"
 #include <bcm2835.h>
+#include "kalman.h" 
 
 #ifndef NULL
 #define NULL 0
@@ -168,10 +169,9 @@
 // Manchester estimation.  Use gcalculator.xlsx to work out for your latitude.
 #define g0 9.8137   
 
-#define DEGREES_TO_RADIANS_MULTIPLIER 0.017453 
-#define RADIANS_TO_DEGREES_MULTIPLIER 57.29578 
-
 FILE *fd_write_out;
+
+#ifndef _KALMAN_H
 
 // calculated by calculate() function
 float q0 = 1;
@@ -181,6 +181,11 @@ float q3 = 0;
 float yaw = 0.0;
 float pitch = 0.0;
 float roll = 0.0;
+
+# endif
+
+#define DEGREES_TO_RADIANS_MULTIPLIER 0.017453 
+#define RADIANS_TO_DEGREES_MULTIPLIER 57.29578 
 
 int RUNNING = 0;
 int EYECANDY = 0;
@@ -299,7 +304,8 @@ int main(int argc, char const *argv[]){
             printf("Unable to allocate memory for calibration storage.");
             exit(1);
         }
-}
+    }
+    kalmanInit(grabberData.samplePeriod);
     while(!sig_exit){
         usleep(LOOPSLEEP);
 		LOOPCOUNT += 1;
@@ -385,7 +391,7 @@ int main(int argc, char const *argv[]){
                 continue;
             }
             if(strcmp("MAXF:", command) == 0) {
-                printf("MAXF:%f\n",grabberData.maxFIFO);
+                printf("MAXF:%d\n",grabberData.maxFIFO);
                 grabberData.maxFIFO = 0;
                 continue;            
             }
@@ -792,7 +798,6 @@ void pushData(void){
             if (accn - taccn != 0.0) nudgeFactor = accn /(accn - taccn); // wise to do DIV0 check but can only happen with two zero acceleration readings
             nudgeAngle = 180-(fifo.angleBuffer[lastTail] + nudgeFactor*(fifo.angleBuffer[fifo.tail]-fifo.angleBuffer[lastTail]));  // difference from 180 at which BDC occurs (i.e error)
             nudgeCount = 10;
-            if
             grabberData.lastBDC = grabberData.pushCounter;
             value = nudgeAngle; // report BDC point
             data = 8;
@@ -1021,7 +1026,9 @@ void pullAndTransform(void){
 
     // This function calculates angles and a quaternion from the gyro and accelerometer measurements. The q0, q1,q2,q3, roll, pitch and yaw globals
     // are updated by this function (hence no return value)
-    calculate(fifoData[3],fifoData[4],fifoData[5], fifoData[0],fifoData[1],fifoData[2],grabberData.samplePeriod);
+//    calculate(fifoData[3],fifoData[4],fifoData[5], fifoData[0],fifoData[1],fifoData[2],grabberData.samplePeriod);
+    kalmanRun(fifoData[3],fifoData[4],fifoData[5], fifoData[0],fifoData[1],fifoData[2]);
+
     grabberData.lastAngularVelocity = fifoData[3]; // "x" gyro rate (roll) needed elsewhere (which is either pushData() or doCalibration()).
     return;  
 }
@@ -1567,9 +1574,9 @@ float extractFloat(uint8_t index){
 
 uint16_t readFIFOcount(){
     uint16_t result;
-    result = (uint16_t)readRegister(ICM20689_FIFO_COUNTH) << 8) + readRegister(ICM20689_FIFO_COUNTL;
-    if(result > grabberData.maxFIFO) grabber.maxFIFO = result;
-    return(result); 
+    result = ((uint16_t)(readRegister(ICM20689_FIFO_COUNTH) << 8)) + readRegister(ICM20689_FIFO_COUNTL);
+    if(result > grabberData.maxFIFO) grabberData.maxFIFO = result;
+    return(result);
 }
 
 void resetFIFO(void){
@@ -1589,13 +1596,13 @@ void readFIFO(float* values){
         SPI_BUFFER[i] = 0;  
     }
     bcm2835_spi_transfern(SPI_BUFFER,13);
-    // remapping of axes X->Z Y->X  X->Y
-    values[1]=((uint16_t)SPI_BUFFER[1] << 8) + SPI_BUFFER[2]; 
-    values[2]=((uint16_t)SPI_BUFFER[3] << 8) + SPI_BUFFER[4];
-    values[0]=((uint16_t)SPI_BUFFER[5] << 8) + SPI_BUFFER[6];
-    values[4]=((uint16_t)SPI_BUFFER[7] << 8) + SPI_BUFFER[8]; 
-    values[5]=((uint16_t)SPI_BUFFER[9] << 8) + SPI_BUFFER[10];
-    values[3]=((uint16_t)SPI_BUFFER[11] << 8) + SPI_BUFFER[12];
+    // remapping of axes X->Z Y->X  Z->Y
+    values[2]=((uint16_t)SPI_BUFFER[1] << 8) + SPI_BUFFER[2]; 
+    values[0]=((uint16_t)SPI_BUFFER[3] << 8) + SPI_BUFFER[4];
+    values[1]=((uint16_t)SPI_BUFFER[5] << 8) + SPI_BUFFER[6];
+    values[5]=((uint16_t)SPI_BUFFER[7] << 8) + SPI_BUFFER[8]; 
+    values[3]=((uint16_t)SPI_BUFFER[9] << 8) + SPI_BUFFER[10];
+    values[4]=((uint16_t)SPI_BUFFER[11] << 8) + SPI_BUFFER[12];
 
     for(int i=0; i<3; ++i){
         if(values[i] >= 0x8000) values[i] -= 0x10000;

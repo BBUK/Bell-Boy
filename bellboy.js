@@ -1479,6 +1479,7 @@ playbackButton.onclick = function() {
     } else {
         this.innerText = "Playback only";
         ws.send("PLRD:");
+        ws.send("MAXF:");
     }
 };
 

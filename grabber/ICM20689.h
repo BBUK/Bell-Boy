@@ -68,7 +68,7 @@
 #define ICM20689_YA_OFFSET_L         (0x7A)
 #define ICM20689_ZA_OFFSET_H         (0x7D)
 #define ICM20689_ZA_OFFSET_L         (0x7E)
- 
+
 void setup(void);
 void start(uint32_t dataRate);
 void calculate(float gx, float gy, float gz, float ax, float ay, float az, float h);
