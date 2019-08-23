@@ -30,8 +30,10 @@
 /*  * usage:
     * include this file in your code, so #include "kalman.h"
     * From your code call kalmanInit(X) where X is the sample period (time between samples) in seconds.
-    * Then, when you have sensor data, call kalmanRun(gx,gy,gz,ax,ay,az) where gx, gy and gz are the gyro readings
-    * (in degrees/sec) and ax, ay and az are the accelerometer readings (in gravities).
+    * Then, when you have sensor data, first call kalmanSetInitialOrientation(ax,ay,az) with the initial
+    * accelerometer measurements (this sets up the initial orientation more quickly and there may be some instability
+    * without first doing this call) and then call kalmanRun(gx,gy,gz,ax,ay,az) whenever you have samples to process
+    * (gx, gy and gz are the gyro readings (in degrees/sec) and ax, ay and az are the accelerometer readings (in gravities)).
     * Results are in q0, q1, q2 and q3 (quaternion, q0 is the scalar) and roll, pitch and yaw (Euler angles in degrees).
     * There is other interesting stuff in the kalmanData structure, eg faSePl[3] has the linear accn in the sensor
     * frame. 
@@ -58,14 +60,17 @@ struct quaternion {
     float q3;	// z vector component
 };
 
-// function prototypes
+// function prototypes (shoot me)
 void kalmanInit(float samplePeriod);
+void kalmanSetInitialOrientation(float ax, float ay, float az);
 void kalmanRun(float gx, float gy, float gz, float ax, float ay, float az);
 void fAnglesDegFromRotationMatrix(float R[][3], float *roll, float *pitch, float *yaw);
 void fQuaternionFromRotationVectorDeg(struct quaternion *pq, const float rvecdeg[], float fscaling);
+void fQuaternionFromRotationMatrix(float R[][3], struct quaternion *pq);
 void fRotationMatrixFromQuaternion(float R[][3], const struct quaternion *pq);
 void fRotationVectorDegFromQuaternion(struct quaternion *pq, float rvecdeg[]);
 void fmatrixAeqInvA(float *A[], int8_t iColInd[], int8_t iRowInd[], int8_t iPivot[], int8_t isize);
+void f3DOFTiltNED(float fR[][3], float fGp[]);
 void fqAeqNormqA(struct quaternion *pqA);
 void qAeqAxB(struct quaternion *pqA, const struct quaternion *pqB);
 void qAeqBxC(struct quaternion *pqA, const struct quaternion *pqB, const struct quaternion *pqC);
@@ -115,7 +120,7 @@ struct {
     float fRMi[3][3];				// a priori rotation matrix
     struct quaternion fqMi;		// a priori orientation quaternion
     struct quaternion fDeltaq;		// delta a priori or a posteriori quaternion
-    float faSePl[3];				// linear acceleration (g, sensor frame)
+    float faSePl[3];				// linear acceleration (g, sensor frame) after error correction
     float faErrSePl[3];				// linear acceleration error (g, sensor frame)
     float fgErrSeMi[3];				// difference (g, sensor frame) of gravity vector (accel) and gravity vector (gyro)
     float fgSeGyMi[3];				// gravity vector (g, sensor frame) measurement from gyro
@@ -126,7 +131,7 @@ struct {
     float fQw9x9[9][9];				// covariance matrix Qw
     float fC3x9[3][9];				// measurement matrix C
     float fcasq;					// FCA * FCA;
-    float fdeltat;					// kalman filter sampling interval (s) = OVERSAMPLE_RATIO / SENSORFS
+    float fdeltat;					// kalman filter sampling interval (s)
     float fdeltatsq;				// fdeltat * fdeltat;
     float fQwbplusQvG;				// FQWB + FQVG;
 } kalmanData;
@@ -183,6 +188,14 @@ void kalmanInit(float samplePeriod) {
     return;
 }
 
+void kalmanSetInitialOrientation(float ax, float ay, float az){
+    float initialAccelData[3];
+    initialAccelData[0] = ax;
+    initialAccelData[1] = ay;
+    initialAccelData[2] = az;
+    f3DOFTiltNED(kalmanData.fRPl, initialAccelData);
+    fQuaternionFromRotationMatrix(kalmanData.fRPl, &(kalmanData.fqPl));
+}
 
 // 6DOF accel + gyro Kalman filter algorithm 
 void kalmanRun(float gx, float gy, float gz, float ax, float ay, float az) {	
@@ -633,6 +646,44 @@ void fRotationMatrixFromQuaternion(float R[][3], const struct quaternion *pq){
     return;
 }
 
+void fQuaternionFromRotationMatrix(float R[][3], struct quaternion *pq){
+    float fq0sq;			// q0^2
+    float recip4q0;			// 1/4q0
+#define SMALLQ0 0.01F		// limit of quaternion scalar component requiring special algorithm
+
+    // the quaternion is not explicitly normalized in this function on the assumption that it
+    // is supplied with a normalized rotation matrix. if the rotation matrix is normalized then
+    // the quaternion will also be normalized even if the case of small q0
+
+    // get q0^2 and q0
+    fq0sq = 0.25F * (1.0F + R[X][X] + R[Y][Y] + R[Z][Z]);
+    pq->q0 = sqrtf(fabs(fq0sq));
+
+    // normal case when q0 is not small meaning rotation angle not near 180 deg
+    if (pq->q0 > SMALLQ0) {
+        // calculate q1 to q3
+        recip4q0 = 0.25F / pq->q0;
+        pq->q1 = recip4q0 * (R[Y][Z] - R[Z][Y]);
+        pq->q2 = recip4q0 * (R[Z][X] - R[X][Z]);
+        pq->q3 = recip4q0 * (R[X][Y] - R[Y][X]);
+    } else {// end of general case
+        // special case of near 180 deg corresponds to nearly symmetric matrix
+        // which is not numerically well conditioned for division by small q0
+        // instead get absolute values of q1 to q3 from leading diagonal
+        pq->q1 = sqrtf(fabs(0.5F * (1.0F + R[X][X]) - fq0sq));
+        pq->q2 = sqrtf(fabs(0.5F * (1.0F + R[Y][Y]) - fq0sq));
+        pq->q3 = sqrtf(fabs(0.5F * (1.0F + R[Z][Z]) - fq0sq));
+
+        // correct the signs of q1 to q3 by examining the signs of differenced off-diagonal terms
+        if ((R[Y][Z] - R[Z][Y]) < 0.0F) pq->q1 = -pq->q1;
+        if ((R[Z][X] - R[X][Z]) < 0.0F) pq->q2 = -pq->q2;
+        if ((R[X][Y] - R[Y][X]) < 0.0F) pq->q3 = -pq->q3;
+    } // end of special case
+
+    return;
+}
+
+
 // computes normalized rotation quaternion from a rotation vector (deg)
 void fQuaternionFromRotationVectorDeg(struct quaternion *pq, const float rvecdeg[], float fscaling){
     float fetadeg;			// rotation angle (deg)
@@ -866,6 +917,81 @@ void fqAeqNormqA(struct quaternion *pqA){
     }
     return;
 }
+
+// Aerospace NED accelerometer 3DOF tilt function computing rotation matrix fR
+void f3DOFTiltNED(float fR[][3], float fGp[]){
+    // the NED self-consistency twist occurs at 90 deg pitch
+	
+    // local variables
+    uint16_t i;				// counter
+    float fmodGxyz;			// modulus of the x, y, z accelerometer readings
+    float fmodGyz;			// modulus of the y, z accelerometer readings
+    float frecipmodGxyz;	// reciprocal of modulus
+    float ftmp;				// scratch variable
+
+    // compute the accelerometer squared magnitudes
+    fmodGyz = fGp[Y] * fGp[Y] + fGp[Z] * fGp[Z];
+    fmodGxyz = fmodGyz + fGp[X] * fGp[X];
+
+    // check for freefall special case where no solution is possible
+    if (fmodGxyz == 0.0F) {
+        float *pAij;	// pointer to A[i][j]
+        uint8_t j;		// loop counter
+        for (i = 0; i < 3; i++) {
+            // set pAij to &A[i][j=0]
+            pAij = fR[i];
+            for (j = 0; j < 3; j++) *(pAij++) = 0.0F;
+            fR[i][i] = 1.0F;
+        }
+        return;
+    }
+
+    // check for vertical up or down gimbal lock case
+    if (fmodGyz == 0.0F){
+        float *pAij;	// pointer to A[i][j]
+        uint8_t j;		// counter
+        for (i = 0; i < 3; i++) {
+            // set pAij to &A[i][j=0]
+            pAij = fR[i];
+            for (j = 0; j < 3; j++) *(pAij++) = 0.0F;
+        }
+        fR[Y][Y] = 1.0F;
+        if (fGp[X] >= 0.0F) {
+            fR[X][Z] = 1.0F;
+            fR[Z][X] = -1.0F;
+        } else {
+            fR[X][Z] = -1.0F;
+            fR[Z][X] = 1.0F;
+        }
+        return;
+    }
+
+    // compute moduli for the general case
+    fmodGyz = sqrtf(fmodGyz);
+    fmodGxyz = sqrtf(fmodGxyz);
+    frecipmodGxyz = 1.0F / fmodGxyz;
+    ftmp = fmodGxyz / fmodGyz;
+
+    // normalize the accelerometer reading into the z column
+    for (i = X; i <= Z; i++) {
+        fR[i][Z] = fGp[i] * frecipmodGxyz;
+    }
+
+    // construct x column of orientation matrix
+    fR[X][X] = fmodGyz * frecipmodGxyz;
+    fR[Y][X] = -fR[X][Z] * fR[Y][Z] * ftmp;
+    fR[Z][X] = -fR[X][Z] * fR[Z][Z] * ftmp;
+
+    // // construct y column of orientation matrix
+    fR[X][Y] = 0.0F;
+    fR[Y][Y] = fR[Z][Z] * ftmp;
+    fR[Z][Y] = -fR[Y][Z] * ftmp;
+
+    return;
+}
+
+
+
 
 // computes rotation vector (deg) from rotation quaternion
 void fRotationVectorDegFromQuaternion(struct quaternion *pq, float rvecdeg[]){

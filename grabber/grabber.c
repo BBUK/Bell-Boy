@@ -305,7 +305,17 @@ int main(int argc, char const *argv[]){
             exit(1);
         }
     }
+#ifdef _KALMAN_H
     kalmanInit(grabberData.samplePeriod);
+    float fifoData[6];
+    while(readFIFOcount() < 12) {usleep(2000);} // ditch the first couple of sample sets
+    readFIFO(fifoData);
+    while(readFIFOcount() < 12) {usleep(2000);} // ditch the first couple of sample sets
+    readFIFO(fifoData);
+    while(readFIFOcount() < 12) {usleep(2000);} // use this reading
+    readFIFO(fifoData);
+    kalmanSetInitialOrientation(fifoData[0],fifoData[1],fifoData[2]);
+#endif
     while(!sig_exit){
         usleep(LOOPSLEEP);
 		LOOPCOUNT += 1;
@@ -1030,6 +1040,7 @@ void pullAndTransform(void){
     kalmanRun(fifoData[3],fifoData[4],fifoData[5], fifoData[0],fifoData[1],fifoData[2]);
 
     grabberData.lastAngularVelocity = fifoData[3]; // "x" gyro rate (roll) needed elsewhere (which is either pushData() or doCalibration()).
+    
     return;  
 }
 
