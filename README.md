@@ -39,6 +39,8 @@ The grabber communicates with the user's broswer via websocketd (https://github.
 
 The second executable "powermonitor" monitors battery level reports from the Arduino and shuts down the Pi if he battery is too low.  It only operates when the grabber is not running (the grabber only runs when there is an active websocket connection to the user's browser - if there is such a connection, the grabber takes over power monitoring).
 
+Also here is kalman.h which is a Kalman filter for 6-DOF IMUs in pure C (without using anything other than the standard libraries).  This is currently here for testing but is of more general application (usage instructions are in the file itself)
+
 ### bellboy.js
 
 The Javascript that takes the data from the Bell-Boy and presents it to the users browser.  The browser must support HTML5 and websockets.  More details for operation are in the wiki.
