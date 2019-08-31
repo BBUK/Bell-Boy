@@ -48,7 +48,7 @@
 *       * pulls calibration data from the Arduino over I2C
 * doCalibration
 *       * follows a multi-step calibration process
-*       * bell-down and stable for around 30 seconds to remove gyro biasses and to get BDC adjustment (tareValue)
+*       * bell-down and stable for around 30 seconds to remove gyro biasses and to get BDC adjustment (grabberData.tare quaternion)
 *       * bell is rung up and set
 *       * bell is then rung full circle (at least 5 full strokes 10 strikes), data is collected
 *       * data is processed to calculate calibration values (principally gravityValue)
@@ -160,7 +160,7 @@
 #include <dirent.h>
 #include "ICM20689.h"
 #include <bcm2835.h>
-#include "kalman.h" 
+
 
 #ifndef NULL
 #define NULL 0
@@ -170,19 +170,6 @@
 #define g0 9.8137   
 
 FILE *fd_write_out;
-
-#ifndef _KALMAN_H
-
-// calculated by calculate() function
-float q0 = 1;
-float q1 = 0;
-float q2 = 0;
-float q3 = 0;
-float yaw = 0.0;
-float pitch = 0.0;
-float roll = 0.0;
-
-# endif
 
 #define DEGREES_TO_RADIANS_MULTIPLIER 0.017453 
 #define RADIANS_TO_DEGREES_MULTIPLIER 57.29578 
@@ -216,10 +203,16 @@ struct {
     float gyroBiasY;
     float gyroBiasZ;
     float gyroTransformMatrix[9];
-    float tareValue;
     unsigned int torn;
     float *calibrationData;
     unsigned int calibrationDataCount;
+    struct quaternion pose;
+    struct quaternion tare;
+    struct quaternion world;
+    struct quaternion angularRates;
+    float roll;
+    float pitch;
+    float yaw;
     float gravityValue;
     float ropeValueH;
     float ropeValueB;
@@ -246,10 +239,12 @@ struct {
                     .accTransformMatrix[8]=1, .gyroBiasX=0, .gyroBiasY=0, .gyroBiasZ=0, .gyroTransformMatrix[0]=1, 
                     .gyroTransformMatrix[1]=0, .gyroTransformMatrix[2]=0, .gyroTransformMatrix[3]=0, .gyroTransformMatrix[4]=1,
                     .gyroTransformMatrix[5]=0, .gyroTransformMatrix[6]=0, .gyroTransformMatrix[7]=0, .gyroTransformMatrix[8]=1,
-                    .tareValue = 0.0 , .torn = 0, .gravityValue = 0.0, .ropeValueH = 0, .ropeValueB = 0, .direction = 0, .calibrationState = 0, 
+                    .torn = 0, .gravityValue = 0.0, .ropeValueH = 0, .ropeValueB = 0, .direction = 0, .calibrationState = 0, 
                     .calibrationDataCount = 0, .calibrationStrokeCount = 0, .stable = 0, .bellNumber = 6, .CPM = 31.0, 
                     .openHandstroke = 1.0, .manualStrike = 0, .manualTimefromBDC = 300, .lastStrike = 2, .predictedHandstrokeStrikeAngle=300.0,
-                    .predictedBackstrokeStrikeAngle=60.0, .maxFIFO = 0};
+                    .predictedBackstrokeStrikeAngle=60.0, .maxFIFO = 0, .pose.q0 = 1.0, .pose.q1 = 0.0, .pose.q2 = 0.0, .pose.q3 =0.0,
+                    .tare.q0 = 1.0, .tare.q1 = 0.0, .tare.q2 = 0.0, .tare.q3 =0.0, .roll = 0.0, .pitch = 0.0, .yaw = 0.0};
+
 
 // only really important when run from command line
 volatile sig_atomic_t sig_exit = 0;
@@ -305,8 +300,7 @@ int main(int argc, char const *argv[]){
             exit(1);
         }
     }
-#ifdef _KALMAN_H
-    kalmanInit(grabberData.samplePeriod);
+    
     float fifoData[6];
     while(readFIFOcount() < 12) {usleep(2000);} // ditch the first couple of sample sets
     readFIFO(fifoData);
@@ -314,8 +308,8 @@ int main(int argc, char const *argv[]){
     readFIFO(fifoData);
     while(readFIFOcount() < 12) {usleep(2000);} // use this reading
     readFIFO(fifoData);
-    kalmanSetInitialOrientation(fifoData[0],fifoData[1],fifoData[2]);
-#endif
+    setInitialOrientation(fifoData[0],fifoData[1],fifoData[2]);
+    
     while(!sig_exit){
         usleep(LOOPSLEEP);
 		LOOPCOUNT += 1;
@@ -363,7 +357,9 @@ int main(int argc, char const *argv[]){
             doCalibration();
         }
 
-        if(EYECANDY) printf("EYEC:%+06.1f, %+06.1f, %+06.1f, %+07.4f, %+07.4f, %+07.4f, %+07.4f\n", roll, pitch, yaw, q0, q1, q2, q3);
+        if(EYECANDY) {
+            printf("EYEC:%+06.1f, %+06.1f, %+06.1f, %+07.4f, %+07.4f, %+07.4f, %+07.4f\n", grabberData.roll, grabberData.pitch, grabberData.yaw, grabberData.world.q0, grabberData.world.q1, grabberData.world.q2, grabberData.world.q3);
+        }
 
         while(fgets(linein, sizeof(linein), stdin ) != NULL) {
             entries = sscanf(linein, "%5s%[^\n]", command, details);
@@ -525,9 +521,8 @@ int main(int argc, char const *argv[]){
                     uint8_t  _bytes[sizeof(float)];
                 } floatConv;
 
-
                 floatConv._float = grabberData.ropeValueH;
-                I2C_BUFFER[0]=6; // ropeValueH
+                I2C_BUFFER[0]=7; // ropeValueH
                 I2C_BUFFER[1] = floatConv._bytes[0];
                 I2C_BUFFER[2] = floatConv._bytes[1];
                 I2C_BUFFER[3] = floatConv._bytes[2];
@@ -536,7 +531,7 @@ int main(int argc, char const *argv[]){
                 usleep(750000);
 
                 floatConv._float = grabberData.ropeValueB;
-                I2C_BUFFER[0]=7; // ropeValueB
+                I2C_BUFFER[0]=8; // ropeValueB
                 I2C_BUFFER[1] = floatConv._bytes[0];
                 I2C_BUFFER[2] = floatConv._bytes[1];
                 I2C_BUFFER[3] = floatConv._bytes[2];
@@ -549,7 +544,7 @@ int main(int argc, char const *argv[]){
                 } else {
                     floatConv._float = -360; // nothing recorded, null value flagged
                 }
-                I2C_BUFFER[0]=8; // gravityValue
+                I2C_BUFFER[0]=9; // gravityValue
                 I2C_BUFFER[1] = floatConv._bytes[0];
                 I2C_BUFFER[2] = floatConv._bytes[1];
                 I2C_BUFFER[3] = floatConv._bytes[2];
@@ -558,11 +553,51 @@ int main(int argc, char const *argv[]){
                 usleep(750000);
 
                 if(grabberData.torn == 3){
-                    floatConv._float = grabberData.tareValue;
+                    floatConv._float = grabberData.tare.q0;
                 } else {
                     floatConv._float = -360; // nothing recorded, null value flagged
                 }
-                I2C_BUFFER[0]=9; // tareValue
+                I2C_BUFFER[0]=3; // tareW
+                I2C_BUFFER[1] = floatConv._bytes[0];
+                I2C_BUFFER[2] = floatConv._bytes[1];
+                I2C_BUFFER[3] = floatConv._bytes[2];
+                I2C_BUFFER[4] = floatConv._bytes[3];
+                bcm2835_i2c_write(I2C_BUFFER,5); 
+                usleep(750000);
+
+                if(grabberData.torn == 3){
+                    floatConv._float = grabberData.tare.q1;
+                } else {
+                    floatConv._float = 0.0; // nothing recorded, null value flagged
+                }
+                I2C_BUFFER[0]=4; // tareX
+                I2C_BUFFER[1] = floatConv._bytes[0];
+                I2C_BUFFER[2] = floatConv._bytes[1];
+                I2C_BUFFER[3] = floatConv._bytes[2];
+                I2C_BUFFER[4] = floatConv._bytes[3];
+                bcm2835_i2c_write(I2C_BUFFER,5); 
+                usleep(750000);
+
+                if(grabberData.torn == 3){
+                    floatConv._float = grabberData.tare.q2;
+                } else {
+                    floatConv._float = 0.0; // nothing recorded, null value flagged
+                }
+                I2C_BUFFER[0]=5; // tareY
+                I2C_BUFFER[1] = floatConv._bytes[0];
+                I2C_BUFFER[2] = floatConv._bytes[1];
+                I2C_BUFFER[3] = floatConv._bytes[2];
+                I2C_BUFFER[4] = floatConv._bytes[3];
+                bcm2835_i2c_write(I2C_BUFFER,5); 
+                usleep(750000);
+
+
+                if(grabberData.torn == 3){
+                    floatConv._float = grabberData.tare.q3;
+                } else {
+                    floatConv._float = 0.0; // nothing recorded, null value flagged
+                }
+                I2C_BUFFER[0]=6; // tareZ
                 I2C_BUFFER[1] = floatConv._bytes[0];
                 I2C_BUFFER[2] = floatConv._bytes[1];
                 I2C_BUFFER[3] = floatConv._bytes[2];
@@ -576,7 +611,6 @@ int main(int argc, char const *argv[]){
                 system("/usr/bin/sync && /usr/bin/shutdown -P now");
                 continue;
             }
-
             printf("ESTR:\n");
             fprintf(stderr, "Unrecognised command: %s \n", command);
         }
@@ -606,15 +640,15 @@ void doCalibration(void){
                 if(!(count % 2500)) printf("EWAI:\n");  // sends signal to browser to indicate that the sensor is still calibrating zero
                 break;
             case 1:
-                if((roll-grabberData.tareValue) < -30.0 || (roll-grabberData.tareValue) > +30.0){ // bell is ringing up, tell user to set bell normally
+                if(grabberData.roll < -30.0 || grabberData.roll > +30.0){ // bell is ringing up, tell user to set bell normally
                     grabberData.calibrationState = 2;
                 }
                 if(!(count % 2500)) printf("EPUL:\n");  // sends signal to browser to indicate that bell needs to be pulled up
                 break;
             case 2:
-                if(grabberData.stable && fabs(roll-grabberData.tareValue) > 160 && fabs(roll-grabberData.tareValue) < 178) {
+                if(grabberData.stable && fabs(grabberData.roll) > 160 && fabs(grabberData.roll) < 178) {
                     grabberData.calibrationState = 3; // bell now rung up and stable tell user to start ringing
-                    if(roll-grabberData.tareValue < 0) {
+                    if(grabberData.roll < 0) {
                         grabberData.direction = -1;
                     } else {
                         grabberData.direction = +1;
@@ -622,7 +656,7 @@ void doCalibration(void){
                     for(int i = 0; i< BUFFERSIZE; ++i){ // initialise with dummy data for savgol alignment
                         fifo.rateBuffer[i] = 0;
                         fifo.accelBuffer[i] = 0;
-                        fifo.angleBuffer[i] = grabberData.direction*(roll-grabberData.tareValue)-180.0;
+                        fifo.angleBuffer[i] = grabberData.direction*grabberData.roll-180.0;
                     }
                     fifo.head = SAVGOLHALF;
                     fifo.tail = 0;
@@ -661,7 +695,7 @@ void doCalibration(void){
                 }
                 break;
             case 5:
-                if(grabberData.stable && fabs(roll-grabberData.tareValue) > 160 && fabs(roll-grabberData.tareValue) < 178) {
+                if(grabberData.stable && fabs(grabberData.roll) > 160 && fabs(grabberData.roll) < 178) {
                     grabberData.calibrationState = 6; // bell now set again, proceed to calculations
                 }
                 if(!(count % 2500)) printf("ESET:\n");  // sends signal to browser to indicate that the bell can be set at handstroke
@@ -728,12 +762,12 @@ void doCalibration(void){
 }
 
 void startRun(void){
-    if(fabs(roll-grabberData.tareValue) < 160 || fabs(roll-grabberData.tareValue) > 178){
-        printf("ESTD:%+07.1f\n",roll-grabberData.tareValue); // bell not at stand
+    if(fabs(grabberData.roll) < 160 || fabs(grabberData.roll) > 178){
+        printf("ESTD:%+07.1f\n",grabberData.roll); // bell not at stand
         return;
     }
 
-    if((roll-grabberData.tareValue) < 0) {  // this bit works out which way the bell rose and adjusts accordingly
+    if(grabberData.roll < 0) {  // this bit works out which way the bell rose and adjusts accordingly
         grabberData.direction = -1;
     } else {
         grabberData.direction = +1;
@@ -742,7 +776,7 @@ void startRun(void){
     for(int i = 0; i< BUFFERSIZE; ++i){ // initialise with dummy data for savgol alignment
         fifo.rateBuffer[i] = 0;
         fifo.accelBuffer[i] = 0;
-        fifo.angleBuffer[i] = grabberData.direction*(roll-grabberData.tareValue)-180.0;
+        fifo.angleBuffer[i] = grabberData.direction*grabberData.roll-180.0;
     }
     fifo.head = SAVGOLHALF;
     fifo.tail = 0;
@@ -758,7 +792,7 @@ void startRun(void){
 }
 
 void pushData(void){
-    char local_outbuf_line[150];
+    char local_outbuf_line[250];
     char remote_outbuf_line[150];
     static char remote_outbuf[4000]; // not necessary to be static as this buffer is cleared before function exits
     int remote_count = 0;
@@ -767,7 +801,7 @@ void pushData(void){
     static float nudgeAngle= 0.0;  // delete this and code below if not needed
     static int nudgeCount = 0;
     static int switchCount = 0;
-    static char detailsString[32];
+    static char detailsString[80];
     static unsigned int data = 0;
     static float value = 0.0;
 
@@ -860,8 +894,8 @@ void pushData(void){
                     value = grabberData.manualTimefromBDC;
                     break;
                 case 5:
-                    strcpy(detailsString, ", #Tare value");
-                    value = grabberData.tareValue;
+                    sprintf(detailsString, ", #Tare quaternion (%+07.4f,%+07.4f,%+07.4f,%+07.4f)", grabberData.tare.q0,grabberData.tare.q1,grabberData.tare.q2,grabberData.tare.q3 ); 
+                    value = 0;
                     break;
                 case 6:
                     strcpy(detailsString, ", #Rope value back");
@@ -910,7 +944,7 @@ void populateBuffer(void){
     // 360 degrees = bell at balance at backstroke. 180 degrees = BDC. 
 
     unsigned int lastHead = (fifo.head == 0) ? BUFFERSIZE-1 : fifo.head -1;
-    float angle = grabberData.direction*(roll-grabberData.tareValue)-180.0;
+    float angle = grabberData.direction*grabberData.roll-180.0;
     angle += angleCorrection;
     if((fifo.angleBuffer[lastHead] - angle) > 270){
         if(angleCorrection < 720 ) { // should always be true
@@ -1015,17 +1049,25 @@ void pullAndTransform(void){
             // First, measure biasses.
             // Second, apply measured biasses.
             // Third, a further period to allow the readings to settle.
-            // Fourth, take "zero" tare value and save.
+            // Fourth, take "zero" tare quaternion and save.
             // The measured angles take a few seconds to settle down once the biasses are applied, hence the third stage.
 
-            if (grabberData.torn < 3 && fabs(roll) < 20.0) { // if bell is down (or within 20 degrees of vertical) take that as the tare value
+            if (grabberData.torn < 3 && fabs(grabberData.roll) < 20.0) { // if bell is down (or within 20 degrees of vertical) take that as the tare
                 grabberData.torn +=1;
                 if (grabberData.torn == 3) {
-                    grabberData.tareValue = roll;
+                    // https://math.stackexchange.com/questions/40164/how-do-you-rotate-a-vector-by-a-unit-quaternion
+                    // https://math.stackexchange.com/questions/90081/quaternion-distance
+//                    grabberData.tareValue = roll;
+                    // store conjugate
+                    grabberData.tare.q0 = grabberData.pose.q0;
+                    grabberData.tare.q1 = -grabberData.pose.q1;
+                    grabberData.tare.q2 = -grabberData.pose.q2;
+                    grabberData.tare.q3 = -grabberData.pose.q3;
                     FILE *fdTare;
                     fdTare = fopen("/tmp/BBtare","w");
                     if(fdTare != NULL) {
-                        fprintf(fdTare,"%+07.4f\n", grabberData.tareValue);
+//                        fprintf(fdTare,"%+07.4f\n", grabberData.tareValue);
+                        fprintf(fdTare,"%+07.4f,%+07.4f,%+07.4f,%+07.4f\n", grabberData.tare.q0,grabberData.tare.q1,grabberData.tare.q2,grabberData.tare.q3);
                         fclose(fdTare);
                     }
                 }
@@ -1036,10 +1078,44 @@ void pullAndTransform(void){
 
     // This function calculates angles and a quaternion from the gyro and accelerometer measurements. The q0, q1,q2,q3, roll, pitch and yaw globals
     // are updated by this function (hence no return value)
-//    calculate(fifoData[3],fifoData[4],fifoData[5], fifoData[0],fifoData[1],fifoData[2],grabberData.samplePeriod);
-    kalmanRun(fifoData[3],fifoData[4],fifoData[5], fifoData[0],fifoData[1],fifoData[2]);
+    calculate(fifoData[3],fifoData[4],fifoData[5], fifoData[0],fifoData[1],fifoData[2],grabberData.samplePeriod);
 
-    grabberData.lastAngularVelocity = fifoData[3]; // "x" gyro rate (roll) needed elsewhere (which is either pushData() or doCalibration()).
+    // https://mbientlab.com/community/discussion/2036/taring-quaternion-attitude
+    // https://forums.adafruit.com/viewtopic.php?t=131484
+    // https://www.researchgate.net/post/How_do_I_calculate_the_smallest_angle_between_two_quaternions
+    // https://math.stackexchange.com/questions/90081/quaternion-distance
+    // https://math.stackexchange.com/questions/40164/how-do-you-rotate-a-vector-by-a-unit-quaternion
+    // https://en.wikipedia.org/wiki/Quaternions_and_spatial_rotation
+    qAeqBxC(&(grabberData.world), &(grabberData.pose), &(grabberData.tare));
+
+    grabberData.roll = RADIANS_TO_DEGREES_MULTIPLIER * atan2(grabberData.world.q0*grabberData.world.q1 + grabberData.world.q2*grabberData.world.q3, 0.5 - grabberData.world.q1*grabberData.world.q1 - grabberData.world.q2*grabberData.world.q2);
+    grabberData.pitch = RADIANS_TO_DEGREES_MULTIPLIER * asin(-2.0 * (grabberData.world.q1*grabberData.world.q3 - grabberData.world.q0*grabberData.world.q2));
+    grabberData.yaw = RADIANS_TO_DEGREES_MULTIPLIER * atan2(grabberData.world.q1*grabberData.world.q2 + grabberData.world.q0*grabberData.world.q3, 0.5 - grabberData.world.q2*grabberData.world.q2 - grabberData.world.q3*grabberData.world.q3);    
+
+//    grabberData.roll = RADIANS_TO_DEGREES_MULTIPLIER * atan2(grabberData.pose.q0*grabberData.pose.q1 + grabberData.pose.q2*grabberData.pose.q3, 0.5 - grabberData.pose.q1*grabberData.pose.q1 - grabberData.pose.q2*grabberData.pose.q2);
+//    grabberData.pitch = RADIANS_TO_DEGREES_MULTIPLIER * asin(-2.0 * (grabberData.pose.q1*grabberData.pose.q3 - grabberData.pose.q0*grabberData.pose.q2));
+//    grabberData.yaw = RADIANS_TO_DEGREES_MULTIPLIER * atan2(grabberData.pose.q1*grabberData.pose.q2 + grabberData.pose.q0*grabberData.pose.q3, 0.5 - grabberData.pose.q2*grabberData.pose.q2 - grabberData.pose.q3*grabberData.pose.q3);    
+
+
+    // http://www.euclideanspace.com/physics/kinematics/angularvelocity/pqrderivation.pdf
+    // https://github.com/jrowberg/i2cdevlib/blob/7ea8b7c23f5c25de323865975b7d21e7ed401e70/Arduino/MPU6050/helper_3dmath.h
+
+    grabberData.angularRates.q0 = 0.0;
+    grabberData.angularRates.q1 = fifoData[3];
+    grabberData.angularRates.q2 = fifoData[4];
+    grabberData.angularRates.q3 = fifoData[5];
+
+    struct quaternion working;
+
+    working.q0 = grabberData.tare.q0;
+    working.q1 = -grabberData.tare.q1;
+    working.q2 = -grabberData.tare.q2;
+    working.q3 = -grabberData.tare.q3;
+ 
+    qAeqAxB(&working, &(grabberData.angularRates));
+    qAeqAxB(&working, &(grabberData.tare));
+    
+    grabberData.lastAngularVelocity = working.q1; // "x" gyro rate (roll) needed elsewhere (which is either pushData() or doCalibration()).
     
     return;  
 }
@@ -1217,7 +1293,6 @@ unsigned int dingDong(){
 // Units here are degrees per second for the gyro.  It does not matter
 // what units the accelerometers are in as the measurements are normalised.
 // h is sample interval (time in seconds since the last sample)
-// The q0, q1, q2, q3, roll, pitch and yaw outputs are globals 
 void calculate(float gx, float gy, float gz, float ax, float ay, float az, float h) {
     const float twoKp = 0.7;  // Magic number determined by experimentation
     float recipNorm;
@@ -1234,9 +1309,9 @@ void calculate(float gx, float gy, float gz, float ax, float ay, float az, float
         ax /= recipNorm;
         ay /= recipNorm;
         az /= recipNorm;
-        halfvx = q1 * q3 - q0 * q2;
-        halfvy = q0 * q1 + q2 * q3;
-        halfvz = q0 * q0 - 0.5 + q3 * q3;
+        halfvx = grabberData.pose.q1 * grabberData.pose.q3 - grabberData.pose.q0 * grabberData.pose.q2;
+        halfvy = grabberData.pose.q0 * grabberData.pose.q1 + grabberData.pose.q2 * grabberData.pose.q3;
+        halfvz = grabberData.pose.q0 * grabberData.pose.q0 - 0.5 + grabberData.pose.q3 * grabberData.pose.q3;
         halfex = (ay * halfvz - az * halfvy);
         halfey = (az * halfvx - ax * halfvz);
         halfez = (ax * halfvy - ay * halfvx);
@@ -1247,24 +1322,20 @@ void calculate(float gx, float gy, float gz, float ax, float ay, float az, float
     gx *= (0.5 * h);
     gy *= (0.5 * h);
     gz *= (0.5 * h);
-    qa = q0;
-    qb = q1;
-    qc = q2;
+    qa = grabberData.pose.q0;
+    qb = grabberData.pose.q1;
+    qc = grabberData.pose.q2;
 
-    q0 += (-qb * gx - qc * gy - q3 * gz);
-    q1 += (qa * gx + qc * gz - q3 * gy);
-    q2 += (qa * gy - qb * gz + q3 * gx);
-    q3 += (qa * gz + qb * gy - qc * gx);
+    grabberData.pose.q0 += (-qb * gx - qc * gy - grabberData.pose.q3 * gz);
+    grabberData.pose.q1 += (qa * gx + qc * gz - grabberData.pose.q3 * gy);
+    grabberData.pose.q2 += (qa * gy - qb * gz + grabberData.pose.q3 * gx);
+    grabberData.pose.q3 += (qa * gz + qb * gy - qc * gx);
 
-    recipNorm = sqrt(q0 * q0 + q1 * q1 + q2 * q2 + q3 * q3);
-    q0 /= recipNorm;
-    q1 /= recipNorm;
-    q2 /= recipNorm;
-    q3 /= recipNorm;
-
-    roll = RADIANS_TO_DEGREES_MULTIPLIER * atan2(q0*q1 + q2*q3, 0.5 - q1*q1 - q2*q2);
-    pitch = RADIANS_TO_DEGREES_MULTIPLIER * asin(-2.0 * (q1*q3 - q0*q2));
-    yaw = RADIANS_TO_DEGREES_MULTIPLIER * atan2(q1*q2 + q0*q3, 0.5 - q2*q2 - q3*q3);
+    recipNorm = sqrt(grabberData.pose.q0 * grabberData.pose.q0 + grabberData.pose.q1 * grabberData.pose.q1 + grabberData.pose.q2 * grabberData.pose.q2 + grabberData.pose.q3 * grabberData.pose.q3);
+    grabberData.pose.q0 /= recipNorm;
+    grabberData.pose.q1 /= recipNorm;
+    grabberData.pose.q2 /= recipNorm;
+    grabberData.pose.q3 /= recipNorm;
 }
 
 void getSavedData(){
@@ -1273,11 +1344,27 @@ void getSavedData(){
     fdTare = fopen("/tmp/BBtare","r");
     if(fdTare != NULL) {
         if (fgets(linein, sizeof(linein), fdTare) != NULL) {
-            grabberData.tareValue = atof(linein);
+            char *ent = strtok(linein,","); 
+            if(ent) grabberData.tare.q0 = atof(ent);
+            ent = strtok(NULL,",");
+            if(ent) grabberData.tare.q1 = atof(ent);
+            ent = strtok(NULL,",");
+            if(ent) grabberData.tare.q2 = atof(ent);
+            ent = strtok(NULL,",");
+            if(ent) grabberData.tare.q3 = atof(ent);
             grabberData.torn = 3;
         }
         fclose(fdTare);
     }
+/*    
+    if(fdTare != NULL) {
+        if (fgets(linein, sizeof(linein), fdTare) != NULL) {
+            grabberData.tareValue = atof(linein);
+            grabberData.torn = 3;
+        }
+        fclose(fdTare);
+    } */
+
 
     FILE *fdGravity;
     fdGravity = fopen("/tmp/BBgravity","r");
@@ -1295,7 +1382,8 @@ void getSavedData(){
     }
 }
 
-void setup(void){	
+void setup(void){
+    float result,result2,result3,result4;
     if (!bcm2835_init()){
         printf("Unable to inititalise bcm2835\n");
         exit(1);
@@ -1387,7 +1475,6 @@ void setup(void){
     I2C_BUFFER[0]=10;
     bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 10 (samplePeriod)
     bcm2835_i2c_read(I2C_BUFFER,4); usleep(100);
-    float result;
     int fail = 0;
     result = extractFloat(0);
     if(!isnan(result)) {
@@ -1401,11 +1488,11 @@ void setup(void){
     bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 200 (accBiasXYZ)
     bcm2835_i2c_read(I2C_BUFFER,12); usleep(100);
     result = extractFloat(0);
-    if(!isnan(result)) {grabberData.accBiasX = result/g0;} else {fail =1;}
+    if(!isnan(result)) {grabberData.accBiasX = result;} else {fail =1;}
     result = extractFloat(4);
-    if(!isnan(result)) {grabberData.accBiasY = result/g0;} else {fail =1;}
+    if(!isnan(result)) {grabberData.accBiasY = result;} else {fail =1;}
     result = extractFloat(8);
-    if(!isnan(result)) {grabberData.accBiasZ = result/g0;} else {fail =1;}
+    if(!isnan(result)) {grabberData.accBiasZ = result;} else {fail =1;}
 
     if(fail){
         fail = 0;
@@ -1463,11 +1550,11 @@ void setup(void){
     bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 204 (gyroBiasXYZ)
     bcm2835_i2c_read(I2C_BUFFER,12); usleep(100);
     result = extractFloat(0);
-    if(!isnan(result)) {grabberData.gyroBiasX = result*RADIANS_TO_DEGREES_MULTIPLIER;} else {fail =1;}
+    if(!isnan(result)) {grabberData.gyroBiasX = result;} else {fail =1;}
     result = extractFloat(4);
-    if(!isnan(result)) {grabberData.gyroBiasY = result*RADIANS_TO_DEGREES_MULTIPLIER;} else {fail =1;}
+    if(!isnan(result)) {grabberData.gyroBiasY = result;} else {fail =1;}
     result = extractFloat(8);
-    if(!isnan(result)) {grabberData.gyroBiasZ = result*RADIANS_TO_DEGREES_MULTIPLIER;} else {fail =1;}
+    if(!isnan(result)) {grabberData.gyroBiasZ = result;} else {fail =1;}
 
     if(fail){
         fail = 0;
@@ -1522,20 +1609,20 @@ void setup(void){
 
     getSavedData();
     if(grabberData.calibrationState != 7){ // no gravity/rope data received from getSavedData()
-        I2C_BUFFER[0]=8;
-        bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 8 (gravityValue)
+        I2C_BUFFER[0]=9;
+        bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 9 (gravityValue)
         bcm2835_i2c_read(I2C_BUFFER,4); usleep(100);
         result = extractFloat(0);
         
-        I2C_BUFFER[0]=7;
-        bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 7 (ropeValueB)
+        I2C_BUFFER[0]=8;
+        bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 8 (ropeValueB)
         bcm2835_i2c_read(I2C_BUFFER,4); usleep(100);
-        float result2 = extractFloat(0);
+        result2 = extractFloat(0);
 
-        I2C_BUFFER[0]=6;
-        bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 6 (ropeValueH)
+        I2C_BUFFER[0]=7;
+        bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 7 (ropeValueH)
         bcm2835_i2c_read(I2C_BUFFER,4); usleep(100);
-        float result3 = extractFloat(0);
+        result3 = extractFloat(0);
 
         if(!isnan(result) && !isnan(result2) && !isnan(result3) && result != -360){
             grabberData.gravityValue = result;
@@ -1552,17 +1639,36 @@ void setup(void){
     }
 
     if(grabberData.torn !=3){ // no zero data received from getSavedData()
-        I2C_BUFFER[0]=9;
-        bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 9 (tareValue)
+        I2C_BUFFER[0]=3;
+        bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 3 (tareW)
         bcm2835_i2c_read(I2C_BUFFER,4); usleep(100);
         result = extractFloat(0);
+        
+        I2C_BUFFER[0]=4;
+        bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 4 (tareX)
+        bcm2835_i2c_read(I2C_BUFFER,4); usleep(100);
+        result2 = extractFloat(0);
+
+        I2C_BUFFER[0]=5;
+        bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 5 (tareY)
+        bcm2835_i2c_read(I2C_BUFFER,4); usleep(100);
+        result3 = extractFloat(0);
+
+        I2C_BUFFER[0]=6;
+        bcm2835_i2c_write(I2C_BUFFER,1); usleep(100); // set register 6 (tareZ)
+        bcm2835_i2c_read(I2C_BUFFER,4); usleep(100);
+        result4 = extractFloat(0);
+
         if(!isnan(result) && result != -360) {
-            grabberData.tareValue = result;
+            grabberData.tare.q0 = result;
+            grabberData.tare.q1 = result2;
+            grabberData.tare.q2 = result3;
+            grabberData.tare.q3 = result4;
             grabberData.torn = 3;
             FILE *fdTare;
             fdTare = fopen("/tmp/BBtare","w");
             if(fdTare != NULL) {
-                fprintf(fdTare,"%+07.4f\n", grabberData.tareValue);
+                fprintf(fdTare,"%+07.4f,%+07.4f,%+07.4f,%+07.4f\n", grabberData.tare.q0,grabberData.tare.q1,grabberData.tare.q2,grabberData.tare.q3);
                 fclose(fdTare);
             }
         }
@@ -1645,4 +1751,175 @@ uint8_t readRegister(uint8_t reg){
     SPI_BUFFER[1] = 0;
     bcm2835_spi_transfern(SPI_BUFFER,2);
     return SPI_BUFFER[1];
+}
+
+void setInitialOrientation(float ax, float ay, float az){
+    float initialAccelData[3];
+    float fRPl[3][3];
+    initialAccelData[0] = ax;
+    initialAccelData[1] = ay;
+    initialAccelData[2] = az;
+    f3DOFTiltNED(fRPl, initialAccelData);
+    fQuaternionFromRotationMatrix(fRPl, &(grabberData.pose));
+}
+
+// All code below is (slightly) adapted from https://github.com/memsindustrygroup/Open-Source-Sensor-Fusion
+// and was issued under this licence.
+
+// Copyright (c) 2014, Freescale Semiconductor, Inc.
+// All rights reserved.
+// 
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the following conditions are met:
+//     * Redistributions of source code must retain the above copyright
+//       notice, this list of conditions and the following disclaimer.
+//     * Redistributions in binary form must reproduce the above copyright
+//       notice, this list of conditions and the following disclaimer in the
+//       documentation and/or other materials provided with the distribution.
+//     * Neither the name of Freescale Semiconductor, Inc. nor the
+//       names of its contributors may be used to endorse or promote products
+//       derived from this software without specific prior written permission.
+// 
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+// ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+// WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+// DISCLAIMED. IN NO EVENT SHALL FREESCALE SEMICONDUCTOR, INC. BE LIABLE FOR ANY
+// DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+// (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+// LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+// ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+// SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+// vector components
+
+#define X 0
+#define Y 1
+#define Z 2
+
+void qAeqAxB(struct quaternion *pqA, const struct quaternion *pqB) {
+    struct quaternion qProd;
+    qProd.q0 = pqA->q0 * pqB->q0 - pqA->q1 * pqB->q1 - pqA->q2 * pqB->q2 - pqA->q3 * pqB->q3;
+    qProd.q1 = pqA->q0 * pqB->q1 + pqA->q1 * pqB->q0 + pqA->q2 * pqB->q3 - pqA->q3 * pqB->q2;
+    qProd.q2 = pqA->q0 * pqB->q2 - pqA->q1 * pqB->q3 + pqA->q2 * pqB->q0 + pqA->q3 * pqB->q1;
+    qProd.q3 = pqA->q0 * pqB->q3 + pqA->q1 * pqB->q2 - pqA->q2 * pqB->q1 + pqA->q3 * pqB->q0;
+    *pqA = qProd;
+    return;
+}
+
+void qAeqBxC(struct quaternion *pqA, const struct quaternion *pqB, const struct quaternion *pqC) {
+    pqA->q0 = pqB->q0 * pqC->q0 - pqB->q1 * pqC->q1 - pqB->q2 * pqC->q2 - pqB->q3 * pqC->q3;
+    pqA->q1 = pqB->q0 * pqC->q1 + pqB->q1 * pqC->q0 + pqB->q2 * pqC->q3 - pqB->q3 * pqC->q2;
+    pqA->q2 = pqB->q0 * pqC->q2 - pqB->q1 * pqC->q3 + pqB->q2 * pqC->q0 + pqB->q3 * pqC->q1;
+    pqA->q3 = pqB->q0 * pqC->q3 + pqB->q1 * pqC->q2 - pqB->q2 * pqC->q1 + pqB->q3 * pqC->q0;
+    return;
+}
+
+// Aerospace NED accelerometer 3DOF tilt function computing rotation matrix fR
+void f3DOFTiltNED(float fR[][3], float fGp[]){
+    // the NED self-consistency twist occurs at 90 deg pitch
+	
+    // local variables
+    uint16_t i;				// counter
+    float fmodGxyz;			// modulus of the x, y, z accelerometer readings
+    float fmodGyz;			// modulus of the y, z accelerometer readings
+    float frecipmodGxyz;	// reciprocal of modulus
+    float ftmp;				// scratch variable
+
+    // compute the accelerometer squared magnitudes
+    fmodGyz = fGp[Y] * fGp[Y] + fGp[Z] * fGp[Z];
+    fmodGxyz = fmodGyz + fGp[X] * fGp[X];
+
+    // check for freefall special case where no solution is possible
+    if (fmodGxyz == 0.0F) {
+        float *pAij;	// pointer to A[i][j]
+        uint8_t j;		// loop counter
+        for (i = 0; i < 3; i++) {
+            // set pAij to &A[i][j=0]
+            pAij = fR[i];
+            for (j = 0; j < 3; j++) *(pAij++) = 0.0F;
+            fR[i][i] = 1.0F;
+        }
+        return;
+    }
+
+    // check for vertical up or down gimbal lock case
+    if (fmodGyz == 0.0F){
+        float *pAij;	// pointer to A[i][j]
+        uint8_t j;		// counter
+        for (i = 0; i < 3; i++) {
+            // set pAij to &A[i][j=0]
+            pAij = fR[i];
+            for (j = 0; j < 3; j++) *(pAij++) = 0.0F;
+        }
+        fR[Y][Y] = 1.0F;
+        if (fGp[X] >= 0.0F) {
+            fR[X][Z] = 1.0F;
+            fR[Z][X] = -1.0F;
+        } else {
+            fR[X][Z] = -1.0F;
+            fR[Z][X] = 1.0F;
+        }
+        return;
+    }
+
+    // compute moduli for the general case
+    fmodGyz = sqrtf(fmodGyz);
+    fmodGxyz = sqrtf(fmodGxyz);
+    frecipmodGxyz = 1.0F / fmodGxyz;
+    ftmp = fmodGxyz / fmodGyz;
+
+    // normalize the accelerometer reading into the z column
+    for (i = X; i <= Z; i++) {
+        fR[i][Z] = fGp[i] * frecipmodGxyz;
+    }
+
+    // construct x column of orientation matrix
+    fR[X][X] = fmodGyz * frecipmodGxyz;
+    fR[Y][X] = -fR[X][Z] * fR[Y][Z] * ftmp;
+    fR[Z][X] = -fR[X][Z] * fR[Z][Z] * ftmp;
+
+    // // construct y column of orientation matrix
+    fR[X][Y] = 0.0F;
+    fR[Y][Y] = fR[Z][Z] * ftmp;
+    fR[Z][Y] = -fR[Y][Z] * ftmp;
+
+    return;
+}
+
+void fQuaternionFromRotationMatrix(float R[][3], struct quaternion *pq){
+    float fq0sq;			// q0^2
+    float recip4q0;			// 1/4q0
+#define SMALLQ0 0.01F		// limit of quaternion scalar component requiring special algorithm
+
+    // the quaternion is not explicitly normalized in this function on the assumption that it
+    // is supplied with a normalized rotation matrix. if the rotation matrix is normalized then
+    // the quaternion will also be normalized even if the case of small q0
+
+    // get q0^2 and q0
+    fq0sq = 0.25F * (1.0F + R[X][X] + R[Y][Y] + R[Z][Z]);
+    pq->q0 = sqrtf(fabs(fq0sq));
+
+    // normal case when q0 is not small meaning rotation angle not near 180 deg
+    if (pq->q0 > SMALLQ0) {
+        // calculate q1 to q3
+        recip4q0 = 0.25F / pq->q0;
+        pq->q1 = recip4q0 * (R[Y][Z] - R[Z][Y]);
+        pq->q2 = recip4q0 * (R[Z][X] - R[X][Z]);
+        pq->q3 = recip4q0 * (R[X][Y] - R[Y][X]);
+    } else {// end of general case
+        // special case of near 180 deg corresponds to nearly symmetric matrix
+        // which is not numerically well conditioned for division by small q0
+        // instead get absolute values of q1 to q3 from leading diagonal
+        pq->q1 = sqrtf(fabs(0.5F * (1.0F + R[X][X]) - fq0sq));
+        pq->q2 = sqrtf(fabs(0.5F * (1.0F + R[Y][Y]) - fq0sq));
+        pq->q3 = sqrtf(fabs(0.5F * (1.0F + R[Z][Z]) - fq0sq));
+
+        // correct the signs of q1 to q3 by examining the signs of differenced off-diagonal terms
+        if ((R[Y][Z] - R[Z][Y]) < 0.0F) pq->q1 = -pq->q1;
+        if ((R[Z][X] - R[X][Z]) < 0.0F) pq->q2 = -pq->q2;
+        if ((R[X][Y] - R[Y][X]) < 0.0F) pq->q3 = -pq->q3;
+    } // end of special case
+
+    return;
 }

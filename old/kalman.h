@@ -34,7 +34,8 @@
     * accelerometer measurements (this sets up the initial orientation more quickly and there may be some instability
     * without first doing this call) and then call kalmanRun(gx,gy,gz,ax,ay,az) whenever you have samples to process
     * (gx, gy and gz are the gyro readings (in degrees/sec) and ax, ay and az are the accelerometer readings (in gravities)).
-    * Results are in q0, q1, q2 and q3 (quaternion, q0 is the scalar) and roll, pitch and yaw (Euler angles in degrees).
+    * Results are in kalmanData.fqPl (quaternion struct with q0,q1,q2 and q3 float members, q0 is the scalar) and in 
+    * kalmanData.roll, kalmanData.pitch and kalmanData.yaw (Euler angle floats in degrees).
     * There is other interesting stuff in the kalmanData structure, eg faSePl[3] has the linear accn in the sensor
     * frame. 
 */
@@ -43,16 +44,6 @@
 
 #define _KALMAN_H
 
-// globals for fusion results
-float q0 = 1;
-float q1 = 0;
-float q2 = 0;
-float q3 = 0;
-float yaw = 0.0;
-float pitch = 0.0;
-float roll = 0.0;
-
-// quaternion structure definition
 struct quaternion {
     float q0;	// scalar component
     float q1;	// x vector component
@@ -110,6 +101,9 @@ void fmatrixAeqI(float *A[], int16_t rc);
 
 struct {
     // orientation matrix, quaternion and rotation vector
+    float roll;
+    float pitch;
+    float yaw;
     float fRPl[3][3];				// a posteriori  rotation matrix
     struct quaternion fqPl;		// a posteriori orientation quaternion
     float fRVecPl[3];				// rotation vector
@@ -475,13 +469,8 @@ void kalmanRun(float gx, float gy, float gz, float ax, float ay, float az) {
     // *********************************************************************************
 
     // calculate the Euler angles
-    fAnglesDegFromRotationMatrix(kalmanData.fRPl, &roll, &pitch, &yaw);
-    
-    q0=kalmanData.fqPl.q0;
-    q1=kalmanData.fqPl.q1;
-    q2=kalmanData.fqPl.q2;    
-    q3=kalmanData.fqPl.q3;
-    
+    fAnglesDegFromRotationMatrix(kalmanData.fRPl, &(kalmanData.roll), &(kalmanData.pitch), &(kalmanData.yaw));
+
 //    roll = kalmanData.fPhiPl;
 //    pitch = kalmanData.fThePl;
 //    yaw = kalmanData.fPsiPl;
@@ -755,7 +744,7 @@ void qAeqAxB(struct quaternion *pqA, const struct quaternion *pqB) {
     return;
 }
 
-// function compute the quaternion product qA * qB
+// function compute the quaternion product qA = qB * qC
 void qAeqBxC(struct quaternion *pqA, const struct quaternion *pqB, const struct quaternion *pqC) {
     pqA->q0 = pqB->q0 * pqC->q0 - pqB->q1 * pqC->q1 - pqB->q2 * pqC->q2 - pqB->q3 * pqC->q3;
     pqA->q1 = pqB->q0 * pqC->q1 + pqB->q1 * pqC->q0 + pqB->q2 * pqC->q3 - pqB->q3 * pqC->q2;
@@ -989,9 +978,6 @@ void f3DOFTiltNED(float fR[][3], float fGp[]){
 
     return;
 }
-
-
-
 
 // computes rotation vector (deg) from rotation quaternion
 void fRotationVectorDegFromQuaternion(struct quaternion *pq, float rvecdeg[]){

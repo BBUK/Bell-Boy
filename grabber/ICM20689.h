@@ -69,6 +69,13 @@
 #define ICM20689_ZA_OFFSET_H         (0x7D)
 #define ICM20689_ZA_OFFSET_L         (0x7E)
 
+struct quaternion {
+    float q0;	// scalar component
+    float q1;	// x vector component
+    float q2;	// y vector component
+    float q3;	// z vector component
+};
+
 void setup(void);
 void start(uint32_t dataRate);
 void calculate(float gx, float gy, float gz, float ax, float ay, float az, float h);
@@ -90,3 +97,9 @@ void populateBuffer(void);
 float extractFloat(uint8_t index);
 void pullAndTransform(void);
 unsigned int dingDong(void);
+void qAeqAxB(struct quaternion *pqA, const struct quaternion *pqB);
+void qAeqBxC(struct quaternion *pqA, const struct quaternion *pqB, const struct quaternion *pqC);
+void f3DOFTiltNED(float fR[][3], float fGp[]);
+void fQuaternionFromRotationMatrix(float R[][3], struct quaternion *pq);
+void setInitialOrientation(float ax, float ay, float az);
+

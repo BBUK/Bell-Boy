@@ -18,10 +18,15 @@ uint8_t promData[5];
 
 volatile uint8_t sleepTime = 0;
 
-volatile float gravityValue = -360;
-volatile float tareValue  = -360;
-volatile float ropeValueB  = 0;
-volatile float ropeValueH = 0;
+volatile float gravityValue = -360.0;
+volatile float ropeValueB  = 0.0;
+volatile float ropeValueH = 0.0;
+volatile float floatW  = -360.0;
+volatile float floatX = 0.0;
+volatile float floatY = 0.0;
+volatile float floatZ = 0.0;
+
+volatile uint8_t LEDcontrol = 0;
 
 union {
   float    _float;
@@ -185,7 +190,6 @@ void loop() {
         flags &= ~GOTOSLEEP;
         flags &= ~RECEIVEDBOOTUP;
       }
-
       if (volts < 395) { // power plugged in -> go into order shutdown mode
         flags |= SENDLOWBATT;
         count = 0;
@@ -196,12 +200,20 @@ void loop() {
         count = 0;
         STATE = 7;
       }
-      if (!(loopCount % 8)) {
-        if (volts < 528) {
-          ledGreenChirrup();
-        } else {
-          ledRedChirrup();
+      if(LEDcontrol == 0){
+        if (!(loopCount % 8)) {
+          if (volts < 528) {
+            ledGreenChirrup();
+          } else {
+            ledRedChirrup();
+          }
         }
+      } else {
+        if(LEDcontrol == 1 && (loopCount % 2)) ledRedOn();
+        if(LEDcontrol == 1 && !(loopCount % 2)) ledGreenOn();
+        if(LEDcontrol == 2) ledRedOn();
+        if(LEDcontrol == 3) ledGreenOn();
+        if(LEDcontrol == 4) ledOff();
       }
       break;
     case 7: // ordered shutdown
@@ -259,10 +271,13 @@ void loop() {
             STATE = 99;
         }
         if (volts < 395 && volts > 200){ // plugged in - give up on sleep and start charging
-            gravityValue = -360;
-            tareValue  = -360;
-            ropeValueH = 0;
-            ropeValueB = 0;
+            gravityValue = -360.0;
+            ropeValueH = 0.0;
+            ropeValueB = 0.0;
+            floatW  = -360.0;
+            floatX = 0.0;
+            floatY = 0.0;
+            floatZ = 0.0;
             STATE = 0;
         }
         if(STATE !=9) break;
@@ -331,12 +346,36 @@ void i2cReceive(int number) {
     flags |= GOTOSLEEP;
   }
 
-  if (i2cRegister == 6 && number == 5) { // read rope value
+  if (i2cRegister == 3 && number == 5) { // read floatW
     floatConv._bytes[0] = Wire.read();
     floatConv._bytes[1] = Wire.read();
     floatConv._bytes[2] = Wire.read();
     floatConv._bytes[3] = Wire.read();
-    ropeValueH = floatConv._float;
+    floatW = floatConv._float;
+  }
+
+  if (i2cRegister == 4 && number == 5) { // read floatX
+    floatConv._bytes[0] = Wire.read();
+    floatConv._bytes[1] = Wire.read();
+    floatConv._bytes[2] = Wire.read();
+    floatConv._bytes[3] = Wire.read();
+    floatX = floatConv._float;
+  }
+
+  if (i2cRegister == 5 && number == 5) { // read floatY
+    floatConv._bytes[0] = Wire.read();
+    floatConv._bytes[1] = Wire.read();
+    floatConv._bytes[2] = Wire.read();
+    floatConv._bytes[3] = Wire.read();
+    floatY = floatConv._float;
+  }
+
+  if (i2cRegister == 6 && number == 5) { // read floatZ
+    floatConv._bytes[0] = Wire.read();
+    floatConv._bytes[1] = Wire.read();
+    floatConv._bytes[2] = Wire.read();
+    floatConv._bytes[3] = Wire.read();
+    floatZ = floatConv._float;
   }
 
   if (i2cRegister == 7 && number == 5) { // read rope value
@@ -344,22 +383,26 @@ void i2cReceive(int number) {
     floatConv._bytes[1] = Wire.read();
     floatConv._bytes[2] = Wire.read();
     floatConv._bytes[3] = Wire.read();
+    ropeValueH = floatConv._float;
+  }
+
+  if (i2cRegister == 8 && number == 5) { // read rope value
+    floatConv._bytes[0] = Wire.read();
+    floatConv._bytes[1] = Wire.read();
+    floatConv._bytes[2] = Wire.read();
+    floatConv._bytes[3] = Wire.read();
     ropeValueB = floatConv._float;
   }
 
-  if (i2cRegister == 8 && number == 5) { // read gravity value
+  if (i2cRegister == 9 && number == 5) { // read gravity value
     floatConv._bytes[0] = Wire.read();
     floatConv._bytes[1] = Wire.read();
     floatConv._bytes[2] = Wire.read();
     floatConv._bytes[3] = Wire.read();
     gravityValue = floatConv._float;
   }
-  if (i2cRegister == 9 && number == 5) { // read tare value
-    floatConv._bytes[0] = Wire.read();
-    floatConv._bytes[1] = Wire.read();
-    floatConv._bytes[2] = Wire.read();
-    floatConv._bytes[3] = Wire.read();
-    tareValue = floatConv._float;
+  if (i2cRegister == 50 && number == 2) { // got manual LED command
+    LEDcontrol = Wire.read();
   }
 }
 
@@ -388,17 +431,26 @@ void i2cPushData() {
     i2cbuffer[0] = iVolts >> 8;
     i2cbuffer[1] = iVolts & 0x00FF;
     Wire.write((char *)i2cbuffer, 2);
-  } else if (i2cRegister == 6) { // send rope data
-    floatConv._float = ropeValueH;
+  } else if (i2cRegister == 3) { // send floatW
+    floatConv._float = floatW;
+    Wire.write((char *)floatConv._bytes, 4);
+  } else if (i2cRegister == 4) {
+    floatConv._float = floatX;
+    Wire.write((char *)floatConv._bytes, 4);
+  } else if (i2cRegister == 5) {
+    floatConv._float = floatY;
+    Wire.write((char *)floatConv._bytes, 4);
+  } else if (i2cRegister == 6) {
+    floatConv._float = floatZ;
     Wire.write((char *)floatConv._bytes, 4);
   } else if (i2cRegister == 7) { // send rope data
+    floatConv._float = ropeValueH;
+    Wire.write((char *)floatConv._bytes, 4);
+  } else if (i2cRegister == 8) { // send rope data
     floatConv._float = ropeValueB;
     Wire.write((char *)floatConv._bytes, 4);
-  } else if (i2cRegister == 8) { // send gravity data
+  } else if (i2cRegister == 9) { // send gravity data
     floatConv._float = gravityValue;
-    Wire.write((char *)floatConv._bytes, 4);
-  } else if (i2cRegister == 9) { // send tare data
-    floatConv._float = tareValue;
     Wire.write((char *)floatConv._bytes, 4);
   } else if (i2cRegister >= 10 && i2cRegister <= 34) { // send EEPROM data
     i2cbuffer[0] = EEPROM.read(i2cRegister << 2);

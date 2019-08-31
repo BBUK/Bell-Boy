@@ -290,6 +290,10 @@ void save(void){
     sscanf(linein, "%f", &calibrationData.accBiasZ);
 
     fclose(fdCalib);
+    
+    calibrationData.accBiasX /= g0;
+    calibrationData.accBiasY /= g0;
+    calibrationData.accBiasZ /= g0;
 
     fdCalib = fopen("BBgyro.calib","r");
 
@@ -326,6 +330,10 @@ void save(void){
     sscanf(linein, "%f", &calibrationData.gyroBiasZ);
 
     fclose(fdCalib);
+
+    calibrationData.gyroBiasX *= RADIANS_TO_DEGREES_MULTIPLIER;
+    calibrationData.gyroBiasY *= RADIANS_TO_DEGREES_MULTIPLIER;
+    calibrationData.gyroBiasZ *= RADIANS_TO_DEGREES_MULTIPLIER;
     
     printf("SamplePeriod: %f\n", calibrationData.samplePeriod);
 
